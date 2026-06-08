@@ -16,8 +16,8 @@ func TestLoadModelLoadsRealLabFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadModel returned error: %v", err)
 	}
-	if model.LabID != "real" {
-		t.Fatalf("LabID = %q, want real", model.LabID)
+	if model.ID != "real" {
+		t.Fatalf("ID = %q, want real", model.ID)
 	}
 }
 
@@ -32,8 +32,8 @@ func TestLoadModelMockIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadModel returned error: %v", err)
 	}
-	if model.LabID != "mock" {
-		t.Fatalf("LabID = %q, want mock", model.LabID)
+	if model.ID != "mock" {
+		t.Fatalf("ID = %q, want mock", model.ID)
 	}
 }
 

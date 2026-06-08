@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 
 	"foxlab-cli/internal/lab"
-	"foxlab-cli/internal/topologytui"
+	"foxlab-cli/internal/topology"
+	"foxlab-cli/internal/topologyui"
 	"foxlab-cli/internal/virt"
 )
 
@@ -41,20 +42,21 @@ func main() {
 		os.Exit(1)
 	}
 	if *noRaw {
-		if err := topologytui.OneFrame(os.Stdout, model, *width, *height); err != nil {
+		if err := topologyui.OneFrame(os.Stdout, model, *width, *height); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout)
 		return
 	}
-	app := topologytui.App{
+	app := topologyui.App{
 		Model:      model,
 		Lab:        loadedLab,
 		LabPath:    *labPath,
+		Service:    topology.NewService(loadedLab, *labPath),
 		LibvirtURI: *uri,
-		State: topologytui.ViewState{
-			Focus: topologytui.FocusGraph,
+		State: topologyui.ViewState{
+			Focus: topologyui.FocusGraph,
 		},
 	}
 	if err := app.Run(); err != nil {
@@ -63,23 +65,23 @@ func main() {
 	}
 }
 
-func loadModel(path string, mock bool) (topologytui.Model, error) {
+func loadModel(path string, mock bool) (topologyui.Model, error) {
 	model, _, err := loadModelAndLab(path, mock)
 	return model, err
 }
 
-func loadModelAndLab(path string, mock bool) (topologytui.Model, *lab.Lab, error) {
+func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error) {
 	if mock {
-		return topologytui.MockModel(), nil, nil
+		return topologyui.MockModel(), nil, nil
 	}
 	if path == "" {
-		return topologytui.Model{}, nil, fmt.Errorf("missing .lab file; pass a path or use --mock")
+		return topologyui.Model{}, nil, fmt.Errorf("missing .lab file; pass a path or use --mock")
 	}
 	loaded, err := lab.LoadFile(path)
 	if err != nil {
-		return topologytui.Model{}, nil, err
+		return topologyui.Model{}, nil, err
 	}
-	return topologytui.ModelFromLab(loaded), loaded, nil
+	return topologyui.ModelFromLab(loaded), loaded, nil
 }
 
 func defaultLabPath() (string, bool) {
