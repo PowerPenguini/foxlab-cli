@@ -1,0 +1,94 @@
+id: topology-tui
+vms:
+    - id: vm2
+      name: vm2
+      memoryMB: 2048
+      cpus: 1
+      disk: labs/topology-tui/disks/vm2.qcow2
+      iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
+      vnc: true
+      networks:
+        - switch: sw1
+    - id: vm3
+      name: vm3
+      memoryMB: 2048
+      cpus: 2
+      disk: labs/topology-tui/disks/vm3.qcow2
+      iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
+      networks:
+        - switch: sw1
+    - id: vm4
+      name: vm4
+      memoryMB: 4096
+      cpus: 2
+      disk: labs/topology-tui/disks/vm4.qcow2
+      iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
+      vnc: true
+      networks:
+        - switch: sw1
+    - id: hello
+      name: hello
+      memoryMB: 2048
+      cpus: 2
+      disk: labs/topology-tui/disks/hello.qcow2
+      networks:
+        - switch: sw1
+switches:
+    - id: sw1
+      name: sw1
+      mode: macnat-bridge
+      externalLink: link1
+externalLinks:
+    - id: link1
+      name: in2
+      interface: wlp0s20f3
+disks:
+    - id: vm2
+      path: labs/topology-tui/disks/vm2.qcow2
+      sizeGB: 20
+      format: qcow2
+layout:
+    nodes:
+        hello:
+            x: 1136
+            "y": 168
+        link1:
+            x: 640
+            "y": 168
+        sw1:
+            x: 848
+            "y": 336
+        vm2:
+            x: 64
+            "y": 72
+        vm3:
+            x: 64
+            "y": 288
+        vm4:
+            x: 64
+            "y": 552
+    links:
+        - from:
+            type: switch
+            id: sw1
+          to:
+            type: vm
+            id: vm2
+        - from:
+            type: external
+            id: link1
+          to:
+            type: switch
+            id: sw1
+        - from:
+            type: vm
+            id: vm3
+          to:
+            type: switch
+            id: sw1
+        - from:
+            type: switch
+            id: sw1
+          to:
+            type: vm
+            id: vm4
