@@ -7,13 +7,16 @@ import (
 
 	libvirt "github.com/libvirt/libvirt-go"
 
+	"foxlab-cli/internal/hostnet"
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 const DefaultURI = "qemu:///system"
 
 type LibvirtRuntime struct {
-	conn *libvirt.Connect
+	conn   *libvirt.Connect
+	Bridge *hostnet.Bridge
 }
 
 func NewLibvirtRuntime(uri string) (*LibvirtRuntime, error) {
@@ -24,7 +27,7 @@ func NewLibvirtRuntime(uri string) (*LibvirtRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LibvirtRuntime{conn: conn}, nil
+	return &LibvirtRuntime{conn: conn, Bridge: hostnet.NewBridge()}, nil
 }
 
 func (r *LibvirtRuntime) Close() error {
@@ -63,6 +66,32 @@ func (r *LibvirtRuntime) VMStates(ctx context.Context, l *lab.Lab) (map[string]s
 	return states, nil
 }
 
+func (r *LibvirtRuntime) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
+	vmStates, err := r.VMStates(ctx, l)
+	if err != nil {
+		return nil, err
+	}
+	states := map[string]string{}
+	for id, state := range vmStates {
+		states[workload.Key(workload.Ref{Type: workload.TypeVM, ID: id})] = state
+	}
+	return states, nil
+}
+
+func (r *LibvirtRuntime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+	if ref.Type != workload.TypeVM {
+		return fmt.Errorf("libvirt cannot start workload type %q", ref.Type)
+	}
+	return r.StartVM(ctx, l, ref.ID)
+}
+
+func (r *LibvirtRuntime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+	if ref.Type != workload.TypeVM {
+		return fmt.Errorf("libvirt cannot stop workload type %q", ref.Type)
+	}
+	return r.StopVM(ctx, l, ref.ID)
+}
+
 func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -74,8 +103,12 @@ func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) err
 	dom, err := r.conn.LookupDomainByName(l.ManagedDomainName(vm))
 	if err != nil {
 		if isNotFound(err) {
+			if err := r.attachVMNICs(ctx, l, vm); err != nil {
+				return err
+			}
 			defined, defineErr := r.defineVM(l, vm)
 			if defineErr != nil {
+				r.detachVMNICs(ctx, l, vm)
 				return defineErr
 			}
 			dom = defined
@@ -84,6 +117,20 @@ func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) err
 			return err
 		}
 	} else {
+		state, _, stateErr := dom.GetState()
+		_ = dom.Free()
+		if stateErr == nil && state == libvirt.DOMAIN_RUNNING {
+			return nil
+		}
+		if err := r.attachVMNICs(ctx, l, vm); err != nil {
+			return err
+		}
+		defined, defineErr := r.defineVM(l, vm)
+		if defineErr != nil {
+			r.detachVMNICs(ctx, l, vm)
+			return defineErr
+		}
+		dom = defined
 		defer dom.Free()
 	}
 	state, _, err := dom.GetState()
@@ -91,6 +138,7 @@ func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) err
 		return nil
 	}
 	if err := dom.Create(); err != nil {
+		r.detachVMNICs(ctx, l, vm)
 		return fmt.Errorf("start domain %q: %w", id, err)
 	}
 	return nil
@@ -101,12 +149,9 @@ func (r *LibvirtRuntime) defineVM(l *lab.Lab, vm lab.VM) (*libvirt.Domain, error
 		if nic.Switch == "" {
 			continue
 		}
-		sw, ok := findSwitch(l, nic.Switch)
+		_, ok := findSwitch(l, nic.Switch)
 		if !ok {
 			return nil, fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
-		}
-		if err := r.ensureNetwork(l, sw); err != nil {
-			return nil, err
 		}
 	}
 	xmlText, err := domainXML(l, vm)
@@ -118,42 +163,6 @@ func (r *LibvirtRuntime) defineVM(l *lab.Lab, vm lab.VM) (*libvirt.Domain, error
 		return nil, fmt.Errorf("define domain %q: %w", vm.ID, err)
 	}
 	return dom, nil
-}
-
-func (r *LibvirtRuntime) ensureNetwork(l *lab.Lab, sw lab.Switch) error {
-	name := l.ManagedNetworkName(sw)
-	net, err := r.conn.LookupNetworkByName(name)
-	if err == nil {
-		defer net.Free()
-		active, activeErr := net.IsActive()
-		if activeErr != nil {
-			return activeErr
-		}
-		if active {
-			return nil
-		}
-		if startErr := net.Create(); startErr != nil {
-			return fmt.Errorf("start network %q: %w", sw.ID, startErr)
-		}
-		return nil
-	}
-	if !isNotFound(err) {
-		return err
-	}
-	xmlText, err := networkXML(l, sw)
-	if err != nil {
-		return err
-	}
-	net, err = r.conn.NetworkDefineXML(xmlText)
-	if err != nil {
-		return fmt.Errorf("define network %q: %w", sw.ID, err)
-	}
-	defer net.Free()
-	if err := net.Create(); err != nil {
-		_ = net.Undefine()
-		return fmt.Errorf("start network %q: %w", sw.ID, err)
-	}
-	return nil
 }
 
 func (r *LibvirtRuntime) StopVM(ctx context.Context, l *lab.Lab, id string) error {
@@ -174,12 +183,28 @@ func (r *LibvirtRuntime) StopVM(ctx context.Context, l *lab.Lab, id string) erro
 	defer dom.Free()
 	state, _, err := dom.GetState()
 	if err == nil && state == libvirt.DOMAIN_SHUTOFF {
+		r.detachVMNICs(ctx, l, vm)
 		return nil
 	}
 	if err := dom.Shutdown(); err != nil && !isNotFound(err) {
 		return fmt.Errorf("stop domain %q: %w", id, err)
 	}
+	r.detachVMNICs(ctx, l, vm)
 	return nil
+}
+
+func (r *LibvirtRuntime) attachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) error {
+	if r.Bridge == nil {
+		r.Bridge = hostnet.NewBridge()
+	}
+	return r.Bridge.AttachVMNICs(ctx, l, vm)
+}
+
+func (r *LibvirtRuntime) detachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) {
+	if r.Bridge == nil {
+		r.Bridge = hostnet.NewBridge()
+	}
+	r.Bridge.DetachVMNICs(ctx, l, vm)
 }
 
 func labVM(l *lab.Lab, id string) (lab.VM, bool) {

@@ -26,6 +26,8 @@ func (a *App) executeCommand(command string) bool {
 		a.State.Message = ""
 	case "vm":
 		a.executeVMCommand(fields)
+	case "container", "ct":
+		a.executeContainerCommand(fields)
 	case "switch", "sw":
 		a.executeSwitchCommand(fields)
 	case "external", "ext":
@@ -34,6 +36,41 @@ func (a *App) executeCommand(command string) bool {
 		a.State.Message = "unknown command: " + fields[0]
 	}
 	return false
+}
+
+func (a *App) executeContainerCommand(fields []string) {
+	if len(fields) < 2 {
+		a.State.Message = "usage: container <create|set|delete> ..."
+		return
+	}
+	switch fields[1] {
+	case "create", "new":
+		if len(fields) < 3 {
+			a.State.Message = "usage: container create <id> image=REF [command=CMD] [switch=ID]"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerCreate(fields[2], args)
+	case "set", "config", "configure":
+		if len(fields) < 4 {
+			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerSet(fields[2], args)
+	case "delete", "rm":
+		a.containerDelete(commandArg(fields, 2))
+	default:
+		a.State.Message = "unknown container command: " + fields[1]
+	}
 }
 
 func (a *App) executeSwitchCommand(fields []string) {
@@ -302,7 +339,7 @@ func helpLines(topic string) []string {
 	case "", "general", "all":
 		return []string{
 			"help: Space opens menu; : opens console; Enter selects; :q quits",
-			"topics: :help vm  :help switch  :help external",
+			"topics: :help vm  :help container  :help switch  :help external",
 			"history: Up/Down recall console commands; Escape closes console/menu",
 			"ids: use vm/switch/external ids or node labels",
 		}
@@ -311,6 +348,12 @@ func helpLines(topic string) []string {
 			"vm create: :vm create <id> cpus=N memory=N [switch=ID] [external=ID]",
 			"vm set: :vm set <id> name=.. cpus=N memory=N disk=<path> iso=<path> vnc=true/false",
 			"vm delete: :vm delete <id>",
+		}
+	case "container", "containers", "ct":
+		return []string{
+			"container create: :container create <id> image=REF [command=CMD] [switch=ID]",
+			"container set: :container set <id> name=.. image=REF command=CMD switch=ID",
+			"container delete: :container delete <id>",
 		}
 	case "switch", "switches":
 		return []string{
@@ -327,7 +370,7 @@ func helpLines(topic string) []string {
 	default:
 		return []string{
 			"unknown help topic: " + topic,
-			"topics: :help vm  :help switch  :help external",
+			"topics: :help vm  :help container  :help switch  :help external",
 		}
 	}
 }

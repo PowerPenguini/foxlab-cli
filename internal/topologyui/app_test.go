@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 type fakeVMRuntime struct {
@@ -18,25 +19,25 @@ type fakeVMRuntime struct {
 	stopped string
 }
 
-func (f *fakeVMRuntime) VMStates(context.Context, *lab.Lab) (map[string]string, error) {
+func (f *fakeVMRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
 	return f.states, nil
 }
 
-func (f *fakeVMRuntime) StartVM(_ context.Context, _ *lab.Lab, id string) error {
-	f.started = id
+func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.started = workload.Key(ref)
 	if f.states == nil {
 		f.states = map[string]string{}
 	}
-	f.states[id] = "running"
+	f.states[workload.Key(ref)] = "running"
 	return nil
 }
 
-func (f *fakeVMRuntime) StopVM(_ context.Context, _ *lab.Lab, id string) error {
-	f.stopped = id
+func (f *fakeVMRuntime) Stop(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.stopped = workload.Key(ref)
 	if f.states == nil {
 		f.states = map[string]string{}
 	}
-	f.states[id] = "shutoff"
+	f.states[workload.Key(ref)] = "shutoff"
 	return nil
 }
 
@@ -387,7 +388,7 @@ func TestRunStopActionsUseVMRuntime(t *testing.T) {
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
 	}
 	loaded.Normalize()
-	runtime := &fakeVMRuntime{states: map[string]string{"vm1": "shutoff"}}
+	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "shutoff"}}
 	app := App{
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
@@ -396,16 +397,48 @@ func TestRunStopActionsUseVMRuntime(t *testing.T) {
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "run")
-	if runtime.started != "vm1" {
-		t.Fatalf("started vm = %q, want vm1", runtime.started)
+	if runtime.started != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("started vm = %q, want vm:vm1", runtime.started)
 	}
 	if app.Model.Nodes[0].State != "running" {
 		t.Fatalf("model state after run = %q, want running", app.Model.Nodes[0].State)
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "stop")
-	if runtime.stopped != "vm1" {
-		t.Fatalf("stopped vm = %q, want vm1", runtime.stopped)
+	if runtime.stopped != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("stopped vm = %q, want vm:vm1", runtime.stopped)
+	}
+	if app.Model.Nodes[0].State != "shutoff" {
+		t.Fatalf("model state after stop = %q, want shutoff", app.Model.Nodes[0].State)
+	}
+}
+
+func TestRunStopActionsUseContainerRuntime(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Switches:   []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+	}
+	loaded.Normalize()
+	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "stopped"}}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		Runtime: runtime,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "run")
+	if runtime.started != NodeKey(NodeContainer, "web") {
+		t.Fatalf("started container = %q, want container:web", runtime.started)
+	}
+	if app.Model.Nodes[0].State != "running" {
+		t.Fatalf("model state after run = %q, want running", app.Model.Nodes[0].State)
+	}
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "stop")
+	if runtime.stopped != NodeKey(NodeContainer, "web") {
+		t.Fatalf("stopped container = %q, want container:web", runtime.stopped)
 	}
 	if app.Model.Nodes[0].State != "shutoff" {
 		t.Fatalf("model state after stop = %q, want shutoff", app.Model.Nodes[0].State)
@@ -729,6 +762,47 @@ func TestCommandVMCreateSavesLab(t *testing.T) {
 	}
 	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].ID != "vm1" {
 		t.Fatalf("model not refreshed: %#v", app.Model.Nodes)
+	}
+}
+
+func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.executeCommand(`container create web image=docker.io/library/nginx:latest command="nginx -g daemon" switch=lan`)
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Containers) != 1 {
+		t.Fatalf("container count = %d, want 1", len(reloaded.Containers))
+	}
+	ct := reloaded.Containers[0]
+	if ct.ID != "web" || ct.Image != "docker.io/library/nginx:latest" || len(ct.Networks) != 1 || ct.Networks[0].Switch != "lan" {
+		t.Fatalf("saved container = %#v", ct)
+	}
+	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].Type != NodeContainer || app.Model.Nodes[0].Badge != "CT" {
+		t.Fatalf("container model not refreshed: %#v", app.Model.Nodes)
+	}
+	if len(app.Model.Edges) != 1 || app.Model.Edges[0].From != NodeKey(NodeContainer, "web") || app.Model.Edges[0].To != NodeKey(NodeSwitch, "lan") {
+		t.Fatalf("container edges = %#v", app.Model.Edges)
 	}
 }
 

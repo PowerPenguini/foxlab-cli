@@ -1,0 +1,79 @@
+package workload
+
+import (
+	"context"
+	"fmt"
+
+	"foxlab-cli/internal/lab"
+)
+
+type Composite struct {
+	VM        Runtime
+	Container Runtime
+}
+
+func (c *Composite) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
+	out := map[string]string{}
+	if c.VM != nil && l != nil && len(l.VMs) > 0 {
+		states, err := c.VM.States(ctx, l)
+		if err != nil {
+			return nil, err
+		}
+		for key, state := range states {
+			out[key] = state
+		}
+	}
+	if c.Container != nil && l != nil && len(l.Containers) > 0 {
+		states, err := c.Container.States(ctx, l)
+		if err != nil {
+			return nil, err
+		}
+		for key, state := range states {
+			out[key] = state
+		}
+	}
+	return out, nil
+}
+
+func (c *Composite) Start(ctx context.Context, l *lab.Lab, ref Ref) error {
+	runtime, err := c.runtimeFor(ref)
+	if err != nil {
+		return err
+	}
+	return runtime.Start(ctx, l, ref)
+}
+
+func (c *Composite) Stop(ctx context.Context, l *lab.Lab, ref Ref) error {
+	runtime, err := c.runtimeFor(ref)
+	if err != nil {
+		return err
+	}
+	return runtime.Stop(ctx, l, ref)
+}
+
+func (c *Composite) Close() error {
+	var first error
+	for _, runtime := range []Runtime{c.VM, c.Container} {
+		if runtime == nil {
+			continue
+		}
+		if err := runtime.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (c *Composite) runtimeFor(ref Ref) (Runtime, error) {
+	switch ref.Type {
+	case TypeVM:
+		if c.VM != nil {
+			return c.VM, nil
+		}
+	case TypeContainer:
+		if c.Container != nil {
+			return c.Container, nil
+		}
+	}
+	return nil, fmt.Errorf("runtime not configured for workload type %q", ref.Type)
+}

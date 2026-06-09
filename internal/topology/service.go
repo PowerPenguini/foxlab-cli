@@ -48,6 +48,23 @@ func (s *Service) HasLabVM(id string) bool {
 	return ok
 }
 
+func (s *Service) HasLabContainer(id string) bool {
+	_, ok := s.LabContainer(id)
+	return ok
+}
+
+func (s *Service) LabContainer(id string) (lab.Container, bool) {
+	if s.Lab == nil {
+		return lab.Container{}, false
+	}
+	for _, ct := range s.Lab.Containers {
+		if ct.ID == id {
+			return ct, true
+		}
+	}
+	return lab.Container{}, false
+}
+
 func (s *Service) LabVM(id string) (lab.VM, bool) {
 	if s.Lab == nil {
 		return lab.VM{}, false
@@ -121,6 +138,15 @@ func (s *Service) NextExternalID() string {
 	}
 }
 
+func (s *Service) NextContainerID() string {
+	for i := s.nodeCount() + 1; ; i++ {
+		id := fmt.Sprintf("ct%d", i)
+		if !s.HasLabContainer(id) {
+			return id
+		}
+	}
+}
+
 func (s *Service) FirstExternalID() string {
 	if s.Lab == nil || len(s.Lab.ExternalLinks) == 0 {
 		return ""
@@ -151,7 +177,7 @@ func (s *Service) nodeCount() int {
 	if s.Lab == nil {
 		return 0
 	}
-	return len(s.Lab.VMs) + len(s.Lab.Switches) + len(s.Lab.ExternalLinks)
+	return len(s.Lab.VMs) + len(s.Lab.Containers) + len(s.Lab.Switches) + len(s.Lab.ExternalLinks)
 }
 
 func firstNonEmpty(values ...string) string {

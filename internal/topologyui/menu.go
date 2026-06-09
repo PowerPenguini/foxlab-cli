@@ -6,7 +6,7 @@ func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
 	switch group {
 	case "create-menu":
-		return []string{"create-vm", "create-switch", "create-external"}
+		return []string{"create-vm", "create-container", "create-switch", "create-external"}
 	default:
 		return []string{"create >"}
 	}
@@ -24,12 +24,31 @@ func contextMenuItems(node Node, groups ...string) []string {
 	switch node.Type {
 	case NodeVM:
 		return vmContextMenuItems(node, group)
+	case NodeContainer:
+		return containerContextMenuItems(node, group)
 	case NodeSwitch:
 		return switchContextMenuItems(node, group)
 	case NodeExternal:
 		return externalContextMenuItems(node, group)
 	default:
 		return []string{"Configuration >", "Move", "Delete"}
+	}
+}
+
+func containerContextMenuItems(node Node, group string) []string {
+	switch group {
+	case "config-menu":
+		return configMenuItems([]string{
+			contextPowerAction(node),
+			contextFieldItem("name", node.Label),
+			contextFieldItem("image", nodeDetailValue(node, "image", "image=?")),
+			contextFieldItem("command", nodeDetailValue(node, "command", "command=?")),
+			contextFieldItem("switch", firstNICSwitch(node)),
+		}, node.Details)
+	case "":
+		return []string{"Configuration >", "Move", "Delete"}
+	default:
+		return nil
 	}
 }
 
@@ -169,6 +188,8 @@ func contextFieldLabel(key string) string {
 		return "VNC"
 	case "iso":
 		return "ISO"
+	case "image":
+		return "Image"
 	default:
 		return strings.ToUpper(key[:1]) + key[1:]
 	}
@@ -185,6 +206,9 @@ func contextDisplayKey(item string) (string, bool) {
 		{"VNC", "vnc"},
 		{"Disk", "disk"},
 		{"ISO", "iso"},
+		{"Image", "image"},
+		{"Command", "command"},
+		{"Switch", "switch"},
 		{"Mode", "mode"},
 		{"External", "external"},
 		{"Interface", "interface"},
@@ -238,7 +262,7 @@ func contextMenuAction(label string) string {
 	switch {
 	case strings.HasPrefix(label, "name="):
 		return "rename"
-	case strings.HasPrefix(label, "cpu="), strings.HasPrefix(label, "cpus="), strings.HasPrefix(label, "mem="), strings.HasPrefix(label, "memory="), strings.HasPrefix(label, "mode="):
+	case strings.HasPrefix(label, "cpu="), strings.HasPrefix(label, "cpus="), strings.HasPrefix(label, "mem="), strings.HasPrefix(label, "memory="), strings.HasPrefix(label, "mode="), strings.HasPrefix(label, "image="), strings.HasPrefix(label, "command="), strings.HasPrefix(label, "switch="):
 		return "edit"
 	case strings.HasPrefix(label, "vnc="), label == "vnc":
 		return "edit"
@@ -253,6 +277,15 @@ func contextMenuAction(label string) string {
 	default:
 		return label
 	}
+}
+
+func firstNICSwitch(node Node) string {
+	for _, detail := range node.Details {
+		if strings.HasPrefix(detail, "nic0 → ") {
+			return "switch=" + strings.TrimSpace(strings.TrimPrefix(detail, "nic0 → "))
+		}
+	}
+	return "switch=?"
 }
 
 func isContextGroup(action string) bool {

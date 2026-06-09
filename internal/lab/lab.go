@@ -21,6 +21,7 @@ var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 type Lab struct {
 	ID            string            `json:"id" yaml:"id"`
 	VMs           []VM              `json:"vms,omitempty" yaml:"vms,omitempty"`
+	Containers    []Container       `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Switches      []Switch          `json:"switches,omitempty" yaml:"switches,omitempty"`
 	ExternalLinks []ExternalLink    `json:"externalLinks,omitempty" yaml:"externalLinks,omitempty"`
 	Disks         []Disk            `json:"disks,omitempty" yaml:"disks,omitempty"`
@@ -53,6 +54,20 @@ type VMNetwork struct {
 	Switch       string `json:"switch,omitempty" yaml:"switch,omitempty"`
 	ExternalLink string `json:"externalLink,omitempty" yaml:"externalLink,omitempty"`
 	MAC          string `json:"mac,omitempty" yaml:"mac,omitempty"`
+}
+
+type Container struct {
+	ID       string             `json:"id" yaml:"id"`
+	Name     string             `json:"name,omitempty" yaml:"name,omitempty"`
+	Image    string             `json:"image" yaml:"image"`
+	Command  []string           `json:"command,omitempty" yaml:"command,omitempty"`
+	Env      map[string]string  `json:"env,omitempty" yaml:"env,omitempty"`
+	Networks []ContainerNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
+}
+
+type ContainerNetwork struct {
+	Switch string `json:"switch,omitempty" yaml:"switch,omitempty"`
+	MAC    string `json:"mac,omitempty" yaml:"mac,omitempty"`
 }
 
 type Switch struct {
@@ -179,6 +194,18 @@ func (l *Lab) Normalize() {
 			l.VMs[i].CPUs = 2
 		}
 	}
+	for i := range l.Containers {
+		l.Containers[i].ID = strings.TrimSpace(l.Containers[i].ID)
+		l.Containers[i].Name = strings.TrimSpace(l.Containers[i].Name)
+		l.Containers[i].Image = strings.TrimSpace(l.Containers[i].Image)
+		for j := range l.Containers[i].Command {
+			l.Containers[i].Command[j] = strings.TrimSpace(l.Containers[i].Command[j])
+		}
+		for j := range l.Containers[i].Networks {
+			l.Containers[i].Networks[j].Switch = strings.TrimSpace(l.Containers[i].Networks[j].Switch)
+			l.Containers[i].Networks[j].MAC = strings.TrimSpace(l.Containers[i].Networks[j].MAC)
+		}
+	}
 	for i := range l.Switches {
 		l.Switches[i].ID = strings.TrimSpace(l.Switches[i].ID)
 		l.Switches[i].Name = strings.TrimSpace(l.Switches[i].Name)
@@ -282,6 +309,29 @@ func (l *Lab) Validate() error {
 		}
 	}
 
+	containerIDs := map[string]struct{}{}
+	for _, ct := range l.Containers {
+		if !validID(ct.ID) {
+			problems = append(problems, fmt.Sprintf("container %q has invalid id", ct.ID))
+		}
+		if _, exists := containerIDs[ct.ID]; exists {
+			problems = append(problems, fmt.Sprintf("duplicate container id %q", ct.ID))
+		}
+		containerIDs[ct.ID] = struct{}{}
+		if ct.Image == "" {
+			problems = append(problems, fmt.Sprintf("container %q image is required", ct.ID))
+		}
+		for _, nic := range ct.Networks {
+			if nic.Switch == "" {
+				problems = append(problems, fmt.Sprintf("container %q network switch is required", ct.ID))
+				continue
+			}
+			if _, ok := switchIDs[nic.Switch]; !ok {
+				problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ct.ID, nic.Switch))
+			}
+		}
+	}
+
 	for id := range l.Layout.Nodes {
 		if _, ok := vmIDs[id]; ok {
 			continue
@@ -290,6 +340,9 @@ func (l *Lab) Validate() error {
 			continue
 		}
 		if _, ok := externalLinkIDs[id]; ok {
+			continue
+		}
+		if _, ok := containerIDs[id]; ok {
 			continue
 		}
 		problems = append(problems, fmt.Sprintf("layout references missing node %q", id))
@@ -308,6 +361,10 @@ func (l *Lab) Validate() error {
 			case "external":
 				if _, ok := externalLinkIDs[endpoint.ID]; !ok {
 					problems = append(problems, fmt.Sprintf("layout link references missing external link %q", endpoint.ID))
+				}
+			case "container":
+				if _, ok := containerIDs[endpoint.ID]; !ok {
+					problems = append(problems, fmt.Sprintf("layout link references missing container %q", endpoint.ID))
 				}
 			default:
 				problems = append(problems, fmt.Sprintf("layout link references unknown node type %q", endpoint.Type))
@@ -347,10 +404,27 @@ func (l *Lab) ManagedNetworkName(sw Switch) string {
 	return managedName(l.ID, sw.ID)
 }
 
+func (l *Lab) ManagedSwitchBridgeName(sw Switch) string {
+	return bridgeName(l.ManagedNetworkName(sw))
+}
+
+func (l *Lab) ManagedContainerName(ct Container) string {
+	return managedName(l.ID, ct.ID)
+}
+
 func validID(id string) bool {
 	return idPattern.MatchString(id)
 }
 
 func managedName(labID, resourceID string) string {
 	return strings.ToLower(fmt.Sprintf("%s-%s-%s", ManagedPrefix, labID, resourceID))
+}
+
+func bridgeName(managedName string) string {
+	const maxLinuxIfName = 15
+	clean := strings.NewReplacer("_", "", "-", "").Replace(managedName)
+	if len(clean) > maxLinuxIfName-2 {
+		clean = clean[:maxLinuxIfName-2]
+	}
+	return "fl" + clean
 }

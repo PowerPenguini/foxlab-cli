@@ -200,6 +200,15 @@ func (s *Service) SwitchDelete(id string) string {
 		}
 		s.Lab.VMs[i].Networks = networks
 	}
+	for i := range s.Lab.Containers {
+		networks := s.Lab.Containers[i].Networks[:0]
+		for _, nic := range s.Lab.Containers[i].Networks {
+			if nic.Switch != id {
+				networks = append(networks, nic)
+			}
+		}
+		s.Lab.Containers[i].Networks = networks
+	}
 	delete(s.Lab.Layout.Nodes, id)
 	if err := s.SaveAndRefresh(); err != nil {
 		return "switch delete failed: " + err.Error()
@@ -295,6 +304,108 @@ func (s *Service) ExternalDelete(id string) string {
 	return "deleted external:" + id
 }
 
+func (s *Service) ContainerCreate(id string, args map[string]string) string {
+	if s.Lab == nil {
+		return "container create needs a loaded .lab file"
+	}
+	if s.HasLabContainer(id) {
+		return "container already exists: " + id
+	}
+	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
+		return "unsupported container create argument: " + invalid[0]
+	}
+	image := args["image"]
+	if image == "" {
+		return "container image is required"
+	}
+	ct := lab.Container{
+		ID:      id,
+		Name:    firstNonEmpty(args["name"], id),
+		Image:   image,
+		Command: splitCommand(args["command"]),
+		Env:     parseEnv(args["env"]),
+	}
+	switchRef := args["switch"]
+	if switchRef == "" && len(s.Lab.Switches) > 0 {
+		switchRef = s.Lab.Switches[0].ID
+	}
+	if switchRef != "" {
+		ct.Networks = append(ct.Networks, lab.ContainerNetwork{Switch: switchRef, MAC: args["mac"]})
+	}
+	s.Lab.Containers = append(s.Lab.Containers, ct)
+	if s.Lab.Layout.Nodes == nil {
+		s.Lab.Layout.Nodes = map[string]lab.Position{}
+	}
+	s.Lab.Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.Lab.Containers)*96}
+	if err := s.SaveAndRefresh(); err != nil {
+		return "container create failed: " + err.Error()
+	}
+	return "created container:" + id
+}
+
+func (s *Service) ContainerSet(id string, args map[string]string) string {
+	if s.Lab == nil {
+		return "container set needs a loaded .lab file"
+	}
+	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
+		return "unsupported container set argument: " + invalid[0]
+	}
+	for i := range s.Lab.Containers {
+		if s.Lab.Containers[i].ID != id {
+			continue
+		}
+		if value := args["name"]; value != "" {
+			s.Lab.Containers[i].Name = value
+		}
+		if value := args["image"]; value != "" {
+			s.Lab.Containers[i].Image = value
+		}
+		if value := args["command"]; value != "" {
+			s.Lab.Containers[i].Command = splitCommand(value)
+		}
+		if value := args["env"]; value != "" {
+			s.Lab.Containers[i].Env = parseEnv(value)
+		}
+		if value := args["switch"]; value != "" {
+			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: value, MAC: args["mac"]}}
+		} else if value := args["mac"]; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
+			s.Lab.Containers[i].Networks[0].MAC = value
+		}
+		if err := s.SaveAndRefresh(); err != nil {
+			return "container config failed: " + err.Error()
+		}
+		return "configured container:" + id
+	}
+	return "container not found: " + id
+}
+
+func (s *Service) ContainerDelete(id string) string {
+	if s.Lab == nil {
+		return "container delete needs a loaded .lab file"
+	}
+	if id == "" {
+		return "usage: container delete <id>"
+	}
+	found := false
+	containers := s.Lab.Containers[:0]
+	for _, ct := range s.Lab.Containers {
+		if ct.ID == id {
+			found = true
+			continue
+		}
+		containers = append(containers, ct)
+	}
+	if !found {
+		return "container not found: " + id
+	}
+	s.Lab.Containers = containers
+	delete(s.Lab.Layout.Nodes, id)
+	if err := s.SaveAndRefresh(); err != nil {
+		return "container delete failed: " + err.Error()
+	}
+	return "deleted container:" + id
+}
+
 func unexpectedVMCreateArgs(args map[string]string) []string {
 	valid := map[string]struct{}{
 		"name":     {},
@@ -362,4 +473,46 @@ func boolArg(value string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func unexpectedContainerArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"name":    {},
+		"image":   {},
+		"command": {},
+		"env":     {},
+		"switch":  {},
+		"mac":     {},
+	}
+	var invalid []string
+	for key := range args {
+		if _, ok := valid[key]; !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	return invalid
+}
+
+func splitCommand(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Fields(value)
+}
+
+func parseEnv(value string) map[string]string {
+	if value == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(value, ",") {
+		key, val, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if ok && strings.TrimSpace(key) != "" {
+			out[strings.TrimSpace(key)] = strings.TrimSpace(val)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

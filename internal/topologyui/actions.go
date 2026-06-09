@@ -3,14 +3,18 @@ package topologyui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 func (a *App) runGlobalMenuAction(action string) {
 	switch action {
 	case "create-vm":
 		a.openCreateVMCommand(Node{})
+	case "create-container":
+		a.openCreateContainerCommand(Node{})
 	case "create-switch":
 		a.openCreateSwitchCommand(Node{})
 	case "create-external":
@@ -30,6 +34,8 @@ func (a *App) runMenuAction(node Node, action string) {
 			} else {
 				a.openCommand("vm set " + node.ID + " name=" + commandValue(node.Label))
 			}
+		case NodeContainer:
+			a.openCommand("container set " + node.ID + " name=" + commandValue(node.Label))
 		case NodeExternal:
 			a.openExternalNameCommand(node.ID)
 		case NodeSwitch:
@@ -58,6 +64,8 @@ func (a *App) runMenuAction(node Node, action string) {
 		}
 	case "create-vm":
 		a.openCreateVMCommand(node)
+	case "create-container":
+		a.openCreateContainerCommand(node)
 	case "create-switch":
 		a.openCreateSwitchCommand(node)
 	case "create-external":
@@ -66,6 +74,8 @@ func (a *App) runMenuAction(node Node, action string) {
 		switch node.Type {
 		case NodeVM:
 			a.vmDelete(node.ID)
+		case NodeContainer:
+			a.containerDelete(node.ID)
 		case NodeSwitch:
 			a.switchDelete(node.ID)
 		case NodeExternal:
@@ -74,52 +84,65 @@ func (a *App) runMenuAction(node Node, action string) {
 	case "move":
 		a.startMove(node)
 	case "run":
-		a.runVM(node.ID)
+		a.runWorkload(node.Type, node.ID)
 	case "stop":
-		a.stopVM(node.ID)
+		a.stopWorkload(node.Type, node.ID)
 	}
 }
 
-func (a *App) runVM(id string) {
+func (a *App) runWorkload(typ, id string) {
 	if a.Lab == nil {
 		a.State.Message = "run needs a loaded .lab file"
 		return
 	}
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
-		a.State.Message = "libvirt connection failed: " + err.Error()
+		a.State.Message = "runtime connection failed: " + err.Error()
 		return
 	}
 	defer closeRuntime()
-	if err := runtime.StartVM(context.Background(), a.Lab, id); err != nil {
+	if err := runtime.Start(context.Background(), a.Lab, workloadRef(typ, id)); err != nil {
 		a.State.Message = "run failed: " + err.Error()
 		return
 	}
-	a.State.Message = "running vm:" + id
-	a.refreshVMStates()
+	a.State.Message = "running " + typ + ":" + id
+	a.refreshWorkloadStates()
 }
 
-func (a *App) stopVM(id string) {
+func (a *App) stopWorkload(typ, id string) {
 	if a.Lab == nil {
 		a.State.Message = "stop needs a loaded .lab file"
 		return
 	}
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
-		a.State.Message = "libvirt connection failed: " + err.Error()
+		a.State.Message = "runtime connection failed: " + err.Error()
 		return
 	}
 	defer closeRuntime()
-	if err := runtime.StopVM(context.Background(), a.Lab, id); err != nil {
+	if err := runtime.Stop(context.Background(), a.Lab, workloadRef(typ, id)); err != nil {
 		a.State.Message = "stop failed: " + err.Error()
 		return
 	}
-	a.State.Message = "stopping vm:" + id
-	a.refreshVMStates()
+	a.State.Message = "stopping " + typ + ":" + id
+	a.refreshWorkloadStates()
+}
+
+func workloadRef(typ, id string) workload.Ref {
+	switch typ {
+	case NodeContainer:
+		return workload.Ref{Type: workload.TypeContainer, ID: id}
+	default:
+		return workload.Ref{Type: workload.TypeVM, ID: id}
+	}
 }
 
 func (a *App) openCreateVMCommand(node Node) {
 	a.openCommand("vm create " + a.nextVMID() + " cpus=2 memory=2048" + a.createVMHint(node))
+}
+
+func (a *App) openCreateContainerCommand(node Node) {
+	a.openCommand("container create " + a.nextContainerID() + " image= " + a.createContainerHint(node))
 }
 
 func (a *App) openCreateSwitchCommand(node Node) {
@@ -200,6 +223,19 @@ func (a *App) openConfigCommand(node Node) {
 		} else {
 			a.openCommand("switch set " + node.ID + " mode=bridge")
 		}
+	case NodeContainer:
+		if ct, ok := a.labContainer(node.ID); ok {
+			cmd := fmt.Sprintf("container set %s name=%s image=%s", node.ID, commandValue(firstNonEmpty(ct.Name, ct.ID)), commandValue(ct.Image))
+			if len(ct.Command) > 0 {
+				cmd += " command=" + commandValue(strings.Join(ct.Command, " "))
+			}
+			if len(ct.Networks) > 0 {
+				cmd += " switch=" + ct.Networks[0].Switch
+			}
+			a.openCommand(cmd)
+		} else {
+			a.openCommand("container set " + node.ID + " image=")
+		}
 	case NodeExternal:
 		if link, ok := a.labExternal(node.ID); ok {
 			a.openCommand(fmt.Sprintf("external set %s interface=%s name=%s", node.ID, commandValue(link.Interface), commandValue(firstNonEmpty(link.Name, node.ID))))
@@ -254,6 +290,21 @@ func (a *App) externalDelete(id string) {
 	a.syncAfterServiceMutation()
 }
 
+func (a *App) containerCreate(id string, args map[string]string) {
+	a.State.Message = a.ensureService().ContainerCreate(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) containerSet(id string, args map[string]string) {
+	a.State.Message = a.ensureService().ContainerSet(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) containerDelete(id string) {
+	a.State.Message = a.ensureService().ContainerDelete(id)
+	a.syncAfterServiceMutation()
+}
+
 func (a *App) syncAfterServiceMutation() {
 	a.syncFromService()
 	if a.State.Selected >= len(a.Model.Nodes) {
@@ -301,6 +352,10 @@ func (a *App) labExternal(id string) (lab.ExternalLink, bool) {
 	return a.ensureService().LabExternal(id)
 }
 
+func (a *App) labContainer(id string) (lab.Container, bool) {
+	return a.ensureService().LabContainer(id)
+}
+
 func (a *App) nextVMID() string {
 	return a.ensureService().NextVMID()
 }
@@ -311,6 +366,10 @@ func (a *App) nextSwitchID() string {
 
 func (a *App) nextExternalID() string {
 	return a.ensureService().NextExternalID()
+}
+
+func (a *App) nextContainerID() string {
+	return a.ensureService().NextContainerID()
 }
 
 func (a *App) firstExternalID() string {
@@ -334,6 +393,18 @@ func (a *App) createVMHint(node Node) string {
 	default:
 		if a.Lab != nil && len(a.Lab.Switches) > 0 {
 			return " switch=" + a.Lab.Switches[0].ID
+		}
+		return ""
+	}
+}
+
+func (a *App) createContainerHint(node Node) string {
+	switch node.Type {
+	case NodeSwitch:
+		return "switch=" + node.ID
+	default:
+		if a.Lab != nil && len(a.Lab.Switches) > 0 {
+			return "switch=" + a.Lab.Switches[0].ID
 		}
 		return ""
 	}

@@ -5,33 +5,36 @@ import (
 	"io"
 	"os"
 
+	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/virt"
+	"foxlab-cli/internal/workload"
 )
 
-type VMRuntime interface {
-	VMStates(context.Context, *lab.Lab) (map[string]string, error)
-	StartVM(context.Context, *lab.Lab, string) error
-	StopVM(context.Context, *lab.Lab, string) error
+type WorkloadRuntime interface {
+	States(context.Context, *lab.Lab) (map[string]string, error)
+	Start(context.Context, *lab.Lab, workload.Ref) error
+	Stop(context.Context, *lab.Lab, workload.Ref) error
 	Close() error
 }
 
 type App struct {
-	Model        Model
-	State        ViewState
-	Lab          *lab.Lab
-	LabPath      string
-	Service      *topology.Service
-	LibvirtURI   string
-	Runtime      VMRuntime
-	VMStates     map[string]string
-	CommandLog   []string
-	HistoryIndex int
-	In           *os.File
-	Out          *os.File
-	ViewWidth    int
-	ViewHeight   int
+	Model             Model
+	State             ViewState
+	Lab               *lab.Lab
+	LabPath           string
+	Service           *topology.Service
+	LibvirtURI        string
+	ContainerdAddress string
+	Runtime           WorkloadRuntime
+	WorkloadStates    map[string]string
+	CommandLog        []string
+	HistoryIndex      int
+	In                *os.File
+	Out               *os.File
+	ViewWidth         int
+	ViewHeight        int
 }
 
 func (a *App) Run() error {
@@ -45,7 +48,7 @@ func (a *App) Run() error {
 		a.Model = MockModel()
 	}
 	a.ensureService()
-	a.refreshVMStates()
+	a.refreshWorkloadStates()
 	return a.runInteractive(startAppTerminalSession, readAppKey, appTerminalSize)
 }
 
@@ -68,7 +71,7 @@ func (a *App) syncFromService() {
 	a.LabPath = a.Service.Path
 	if a.Lab != nil {
 		a.Model = ModelFromLab(a.Lab)
-		a.applyVMStates()
+		a.applyWorkloadStates()
 	}
 }
 
@@ -100,47 +103,55 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	}
 }
 
-func (a *App) runtime() (VMRuntime, func(), error) {
+func (a *App) runtime() (WorkloadRuntime, func(), error) {
 	if a.Runtime != nil {
 		return a.Runtime, func() {}, nil
 	}
-	runtime, err := virt.NewLibvirtRuntime(a.LibvirtURI)
+	vmRuntime, err := virt.NewLibvirtRuntime(a.LibvirtURI)
 	if err != nil {
 		return nil, func() {}, err
+	}
+	runtime := &workload.Composite{
+		VM:        vmRuntime,
+		Container: containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, a.containerdAddressFromLab())),
 	}
 	return runtime, func() { _ = runtime.Close() }, nil
 }
 
-func (a *App) refreshVMStates() {
+func (a *App) refreshWorkloadStates() {
 	a.ensureService()
 	if a.Lab == nil {
 		return
 	}
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
-		a.State.Message = "libvirt connection failed: " + err.Error()
+		a.State.Message = "runtime connection failed: " + err.Error()
 		return
 	}
 	defer closeRuntime()
-	states, err := runtime.VMStates(context.Background(), a.Lab)
+	states, err := runtime.States(context.Background(), a.Lab)
 	if err != nil {
-		a.State.Message = "libvirt status failed: " + err.Error()
+		a.State.Message = "runtime status failed: " + err.Error()
 		return
 	}
-	a.VMStates = states
+	a.WorkloadStates = states
 	a.Service.States = states
-	a.applyVMStates()
+	a.applyWorkloadStates()
 }
 
-func (a *App) applyVMStates() {
+func (a *App) applyWorkloadStates() {
 	for i := range a.Model.Nodes {
-		if a.Model.Nodes[i].Type != NodeVM {
-			continue
-		}
-		if state, ok := a.VMStates[a.Model.Nodes[i].ID]; ok {
+		if state, ok := a.WorkloadStates[NodeKey(a.Model.Nodes[i].Type, a.Model.Nodes[i].ID)]; ok {
 			a.Model.Nodes[i].State = state
 		}
 	}
+}
+
+func (a *App) containerdAddressFromLab() string {
+	if a.Lab == nil || a.Lab.Meta == nil {
+		return ""
+	}
+	return a.Lab.Meta["containerd.address"]
 }
 
 func (a *App) contextMenuRootItems(node Node, ok bool) []string {

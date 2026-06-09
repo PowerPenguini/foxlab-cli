@@ -63,7 +63,7 @@ func isEditableContextItem(item string) bool {
 		return false
 	}
 	switch key {
-	case "name", "cpu", "cpus", "mem", "memory", "vnc", "disk", "iso", "mode", "external", "uplink", "interface":
+	case "name", "cpu", "cpus", "mem", "memory", "vnc", "disk", "iso", "mode", "external", "uplink", "interface", "image", "command", "switch":
 		return true
 	default:
 		return false
@@ -133,6 +133,8 @@ func (a *App) applyContextEdit(node Node, item, value string) {
 	switch node.Type {
 	case NodeVM:
 		a.vmSet(node.ID, args)
+	case NodeContainer:
+		a.containerSet(node.ID, args)
 	case NodeSwitch:
 		a.switchSet(node.ID, args)
 	case NodeExternal:

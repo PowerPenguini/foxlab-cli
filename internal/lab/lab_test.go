@@ -169,6 +169,65 @@ func TestManagedNamesAreStable(t *testing.T) {
 	if got := l.ManagedNetworkName(Switch{ID: "SW1"}); got != "foxlab-demo_lab-sw1" {
 		t.Fatalf("unexpected network name %q", got)
 	}
+	if got := l.ManagedContainerName(Container{ID: "Web1"}); got != "foxlab-demo_lab-web1" {
+		t.Fatalf("unexpected container name %q", got)
+	}
+	if got := l.ManagedSwitchBridgeName(Switch{ID: "SW1"}); got != "flfoxlabdemolab" {
+		t.Fatalf("unexpected bridge name %q", got)
+	}
+}
+
+func TestValidateAcceptsContainers(t *testing.T) {
+	l := &Lab{
+		ID:       "demo",
+		Switches: []Switch{{ID: "lan", Mode: "bridge"}},
+		Containers: []Container{{
+			ID:      "web",
+			Image:   "docker.io/library/nginx:latest",
+			Command: []string{"nginx", "-g", "daemon off;"},
+			Env:     map[string]string{"ENV": "test"},
+			Networks: []ContainerNetwork{{
+				Switch: "lan",
+				MAC:    "02:00:00:00:00:10",
+			}},
+		}},
+		Layout: Layout{
+			Nodes: map[string]Position{"web": {X: 100, Y: 100}},
+			Links: []LayoutLink{{From: LayoutEndpoint{Type: "container", ID: "web"}, To: LayoutEndpoint{Type: "switch", ID: "lan"}}},
+		},
+	}
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected container config to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidContainers(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		Containers: []Container{
+			{ID: "web", Networks: []ContainerNetwork{{Switch: "missing"}}},
+			{ID: "web", Image: "docker.io/library/nginx:latest"},
+		},
+		Layout: Layout{
+			Links: []LayoutLink{{From: LayoutEndpoint{Type: "container", ID: "missing"}, To: LayoutEndpoint{Type: "switch", ID: "lan"}}},
+		},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil {
+		t.Fatal("expected container validation errors")
+	}
+	for _, want := range []string{
+		`container "web" image is required`,
+		`container "web" references missing switch "missing"`,
+		`duplicate container id "web"`,
+		`layout link references missing container "missing"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in validation error, got %v", want, err)
+		}
+	}
 }
 
 func TestLoadFileKnownFields(t *testing.T) {

@@ -20,6 +20,7 @@ func main() {
 	width := fs.Int("width", 100, "frame width for --no-raw")
 	height := fs.Int("height", 30, "frame height for --no-raw")
 	uri := fs.String("uri", virt.DefaultURI, "libvirt URI")
+	containerdAddress := fs.String("containerd", "", "containerd socket path")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: topology-tui [--lab demo.lab] [--mock] [--no-raw] [demo.lab]")
 		fs.PrintDefaults()
@@ -50,11 +51,12 @@ func main() {
 		return
 	}
 	app := topologyui.App{
-		Model:      model,
-		Lab:        loadedLab,
-		LabPath:    *labPath,
-		Service:    topology.NewService(loadedLab, *labPath),
-		LibvirtURI: *uri,
+		Model:             model,
+		Lab:               loadedLab,
+		LabPath:           *labPath,
+		Service:           topology.NewService(loadedLab, *labPath),
+		LibvirtURI:        *uri,
+		ContainerdAddress: *containerdAddress,
 		State: topologyui.ViewState{
 			Focus: topologyui.FocusGraph,
 		},

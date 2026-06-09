@@ -31,12 +31,17 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	for _, want := range []string{
 		"<name>foxlab-demo-vm1</name>",
 		`<source file="labs/demo/disks/vm1.qcow2"/>`,
-		`<source network="foxlab-demo-sw1"/>`,
+		`<interface type="ethernet">`,
+		`<target dev="tfoxlabdemovm10"/>`,
+		`<script path="/bin/true"/>`,
 		`<graphics type="vnc"`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
 		}
+	}
+	if strings.Contains(xmlText, `<source network="foxlab-demo-sw1"/>`) {
+		t.Fatalf("domain XML still uses libvirt network for switch NIC:\n%s", xmlText)
 	}
 }
 

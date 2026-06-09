@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	NodeVM       = "vm"
-	NodeSwitch   = "switch"
-	NodeExternal = "external"
+	NodeVM        = "vm"
+	NodeContainer = "container"
+	NodeSwitch    = "switch"
+	NodeExternal  = "external"
 )
 
 type Model = graph.Model
@@ -25,6 +26,7 @@ func MockModel() Model {
 		Nodes: []Node{
 			{ID: "router", Type: NodeVM, Badge: "VM", Label: "router", State: "running", X: 4, Y: 3, Details: []string{"cpu=2", "mem=2048M", "vnc=true", "disk=labs/mock/disks/router.img", "nic0 → edge"}},
 			{ID: "client01", Type: NodeVM, Badge: "VM", Label: "client01", State: "defined", X: 4, Y: 11, Details: []string{"cpu=2", "mem=2048M", "vnc=false", "disk=labs/mock/disks/client01.img", "nic0 → lan"}},
+			{ID: "web", Type: NodeContainer, Badge: "CT", Label: "web", State: "missing", X: 4, Y: 19, Details: []string{"image=docker.io/library/nginx:latest", "nic0 → lan"}},
 			{ID: "edge", Type: NodeSwitch, Badge: "SW", Label: "edge", State: "bridge", X: 28, Y: 5, Details: []string{"mode=macnat-bridge", "uplink=uplink0"}},
 			{ID: "lan", Type: NodeSwitch, Badge: "SW", Label: "lan", State: "nat", X: 28, Y: 13, Details: []string{"mode=nat", "dhcp=on"}},
 			{ID: "uplink0", Type: NodeExternal, Badge: "IF", Label: "wlp0s20f3", State: "link", X: 52, Y: 5, Details: []string{"interface=wlp0s20f3"}},
@@ -36,6 +38,7 @@ func MockModel() Model {
 			{From: NodeKey(NodeSwitch, "edge"), To: NodeKey(NodeExternal, "uplink0")},
 			{From: NodeKey(NodeSwitch, "lan"), To: NodeKey(NodeExternal, "hostnet")},
 			{From: NodeKey(NodeVM, "router"), To: NodeKey(NodeSwitch, "lan")},
+			{From: NodeKey(NodeContainer, "web"), To: NodeKey(NodeSwitch, "lan")},
 		},
 	}
 }
@@ -82,6 +85,31 @@ func ModelFromLab(l *lab.Lab) Model {
 			}
 		}
 	}
+	for i, ct := range l.Containers {
+		details := []string{"image=" + ct.Image}
+		if len(ct.Command) > 0 {
+			details = append(details, "command="+strings.Join(ct.Command, " "))
+		}
+		for key, value := range ct.Env {
+			details = append(details, "env."+key+"="+value)
+		}
+		for idx, nic := range ct.Networks {
+			if nic.Switch != "" {
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
+				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeSwitch, nic.Switch)})
+			}
+		}
+		m.Nodes = append(m.Nodes, Node{
+			ID:      ct.ID,
+			Type:    NodeContainer,
+			Badge:   "CT",
+			Label:   firstNonEmpty(ct.Name, ct.ID),
+			State:   "missing",
+			X:       layoutX(l, ct.ID, NodeContainer, i),
+			Y:       layoutY(l, ct.ID, i),
+			Details: details,
+		})
+	}
 	for i, sw := range l.Switches {
 		details := []string{"mode=" + firstNonEmpty(sw.Mode, "bridge")}
 		if sw.ExternalLink != "" {
@@ -123,6 +151,8 @@ func NodeKind(typ string) string {
 	switch typ {
 	case NodeVM:
 		return "VM"
+	case NodeContainer:
+		return "CT"
 	case NodeExternal:
 		return "IF"
 	default:
@@ -159,6 +189,8 @@ func layoutX(l *lab.Lab, id, typ string, index int) int {
 	switch typ {
 	case NodeVM:
 		return 4
+	case NodeContainer:
+		return 4
 	case NodeExternal:
 		return 52
 	default:
@@ -177,10 +209,12 @@ func nodeSort(n Node) string {
 	switch n.Type {
 	case NodeVM:
 		return "0:" + n.ID
-	case NodeSwitch:
+	case NodeContainer:
 		return "1:" + n.ID
-	case NodeExternal:
+	case NodeSwitch:
 		return "2:" + n.ID
+	case NodeExternal:
+		return "3:" + n.ID
 	default:
 		return "9:" + n.ID
 	}

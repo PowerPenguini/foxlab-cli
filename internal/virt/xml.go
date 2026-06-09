@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	"foxlab-cli/internal/hostnet"
 	"foxlab-cli/internal/lab"
 )
 
@@ -30,6 +31,7 @@ type domainXMLData struct {
 type domainNetworkXMLData struct {
 	Kind       string
 	SourceName string
+	TargetDev  string
 	MAC        string
 }
 
@@ -61,19 +63,19 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 		HasISO:   vm.ISO != "",
 		HasVNC:   vm.VNC,
 	}
-	for _, nic := range vm.Networks {
+	for index, nic := range vm.Networks {
 		switch {
 		case nic.Switch != "" && nic.ExternalLink != "":
 			return "", fmt.Errorf("vm %q network references both switch %q and external link %q", vm.ID, nic.Switch, nic.ExternalLink)
 		case nic.Switch != "":
-			sw, ok := findSwitch(l, nic.Switch)
+			_, ok := findSwitch(l, nic.Switch)
 			if !ok {
 				return "", fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 			}
 			data.Networks = append(data.Networks, domainNetworkXMLData{
-				Kind:       "network",
-				SourceName: l.ManagedNetworkName(sw),
-				MAC:        nic.MAC,
+				Kind:      "ethernet",
+				TargetDev: hostnet.VMTapName(l, vm, index),
+				MAC:       nic.MAC,
 			})
 		case nic.ExternalLink != "":
 			link, ok := findExternalLink(l, nic.ExternalLink)
@@ -106,7 +108,7 @@ func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 		LabID:  l.ID,
 		ID:     sw.ID,
 		Name:   name,
-		Bridge: bridgeName(name),
+		Bridge: l.ManagedSwitchBridgeName(sw),
 	}
 	if sw.Mode == "nat" {
 		address, start, end := natIPv4Range(l.ID, sw.ID)
@@ -191,15 +193,6 @@ func detectImageFormat(path string) string {
 	}
 }
 
-func bridgeName(managedName string) string {
-	const maxLinuxIfName = 15
-	clean := strings.NewReplacer("_", "", "-", "").Replace(managedName)
-	if len(clean) > maxLinuxIfName-2 {
-		clean = clean[:maxLinuxIfName-2]
-	}
-	return "fl" + clean
-}
-
 func isLinuxBridge(name string) bool {
 	if name == "" {
 		return false
@@ -267,8 +260,9 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
       <source bridge="{{ .SourceName }}"/>
       {{- else if eq .Kind "direct" }}
       <source dev="{{ .SourceName }}" mode="bridge"/>
-      {{- else }}
-      <source network="{{ .SourceName }}"/>
+      {{- else if eq .Kind "ethernet" }}
+      <target dev="{{ .TargetDev }}"/>
+      <script path="/bin/true"/>
       {{- end }}
       {{- if .MAC }}
       <mac address="{{ .MAC }}"/>
