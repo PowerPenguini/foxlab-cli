@@ -336,6 +336,86 @@ func TestRunInteractiveSkipsRenderOnEmptyKeyTimeout(t *testing.T) {
 	}
 }
 
+func TestAppRenderReusesRouteCacheAcrossViewStateChanges(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+	var out bytes.Buffer
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(app.RouteCacheRoutes) == 0 {
+		t.Fatal("route cache was not populated")
+	}
+	key := app.RouteCacheKey
+	routes := app.RouteCacheRoutes
+
+	out.Reset()
+	app.State.Selected = 2
+	app.State.ContextMenu = true
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey != key {
+		t.Fatalf("route cache key changed after view-only state update: %q -> %q", key, app.RouteCacheKey)
+	}
+	if &app.RouteCacheRoutes[0] != &routes[0] {
+		t.Fatal("route cache was recomputed for view-only state update")
+	}
+
+	out.Reset()
+	app.Model.Nodes[0].X++
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey == key {
+		t.Fatal("route cache key did not change after model layout update")
+	}
+}
+
+func TestAppRenderReusesRouteCacheWhileMovingNode(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+	var out bytes.Buffer
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	key := app.RouteCacheKey
+	routes := app.RouteCacheRoutes
+
+	app.startMove(app.Model.Nodes[0])
+	app.moveActiveNode(4, 0)
+	out.Reset()
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey != key {
+		t.Fatalf("route cache key changed while moving node: %q -> %q", key, app.RouteCacheKey)
+	}
+	if &app.RouteCacheRoutes[0] != &routes[0] {
+		t.Fatal("route cache was recomputed while moving node")
+	}
+	rects := layoutNodeRects(app.Model, rect{X: 0, Y: 0, W: 100, H: 30})
+	moved := rects[app.Model.Nodes[0].Key()]
+	g := renderGridWithRoutes(app.Model, app.State, 100, 30, app.RouteCacheRoutes)
+	followed := false
+	for y := moved.Y + 1; y < moved.Y+moved.H-1; y++ {
+		if g.Cells[y*g.Width+moved.X+moved.W].Ch != ' ' {
+			followed = true
+			break
+		}
+	}
+	if !followed {
+		t.Fatalf("moving node live route did not follow new node position:\n%s", g.String(false))
+	}
+
+	app.clearMoveMode()
+	out.Reset()
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey == key {
+		t.Fatal("route cache did not refresh after move mode ended")
+	}
+}
+
 func TestContextMenuInlineEditInsertsAtCursor(t *testing.T) {
 	app := App{
 		Model: MockModel(),

@@ -8,7 +8,7 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
-        - {}
+        - switch: sw1
     - id: vm3
       name: vm3
       memoryMB: 2048
@@ -63,8 +63,8 @@ disks:
 layout:
     nodes:
         hello:
-            x: 1136
-            "y": 96
+            x: 1296
+            "y": 192
         link1:
             x: 848
             "y": 696

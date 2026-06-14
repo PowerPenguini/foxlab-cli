@@ -172,6 +172,49 @@ func TestRenderAvoidsCrossingNearSharedTarget(t *testing.T) {
 	}
 }
 
+func TestInfrastructureRoutesDoNotDetourAroundWholeLayout(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "vm2", Type: NodeVM, Label: "vm2", State: "defined", X: 4, Y: 3},
+			{ID: "vm3", Type: NodeVM, Label: "vm3", State: "defined", X: 4, Y: 7},
+			{ID: "vm4", Type: NodeVM, Label: "vm4", State: "defined", X: 4, Y: 23},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "defined", X: 71, Y: 4},
+			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "macnat-bridge", X: 53, Y: 14},
+			{ID: "link1", Type: NodeExternal, Label: "in2", State: "link", X: 61, Y: 29},
+		},
+		Edges: []Edge{
+			{From: NodeKey(NodeVM, "vm2"), To: NodeKey(NodeSwitch, "sw1")},
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeSwitch, "sw1")},
+			{From: NodeKey(NodeVM, "vm4"), To: NodeKey(NodeSwitch, "sw1")},
+			{From: NodeKey(NodeSwitch, "sw1"), To: NodeKey(NodeExternal, "link1")},
+			{From: NodeKey(NodeVM, "hello"), To: NodeKey(NodeExternal, "link1")},
+			{From: NodeKey(NodeVM, "hello"), To: NodeKey(NodeVM, "vm3")},
+		},
+	}
+	bounds := rect{X: 0, Y: 0, W: 90, H: 40}
+	rects := layoutNodeRects(m, bounds)
+	planner := newRoutePlanner(bounds, visibleNodeRects(rects, bounds))
+	routes := planVisibleRoutes(planner, m.Edges, rects, bounds)
+
+	vm3ToSW := routeForEdge(t, routes, NodeKey(NodeVM, "vm3"), NodeKey(NodeSwitch, "sw1"))
+	vm4ToSW := routeForEdge(t, routes, NodeKey(NodeVM, "vm4"), NodeKey(NodeSwitch, "sw1"))
+	helloToVM3 := routeForEdge(t, routes, NodeKey(NodeVM, "hello"), NodeKey(NodeVM, "vm3"))
+	if len(vm3ToSW.cells) > 60 {
+		t.Fatalf("vm3 switch route detoured around layout: len=%d cells=%#v", len(vm3ToSW.cells), vm3ToSW.cells)
+	}
+	if len(vm4ToSW.cells) > 70 {
+		t.Fatalf("vm4 switch route detoured around layout: len=%d cells=%#v", len(vm4ToSW.cells), vm4ToSW.cells)
+	}
+	if routeHeight(helloToVM3.cells) > 6 {
+		t.Fatalf("direct workload route made a large box: height=%d cells=%#v", routeHeight(helloToVM3.cells), helloToVM3.cells)
+	}
+
+	out := RenderString(m, ViewState{Focus: FocusGraph}, bounds.W, bounds.H, false)
+	if strings.Contains(out, "┌───────────────────────────────────┐") || strings.Contains(out, "└───────────────────────────────────────────┘") {
+		t.Fatalf("render still contains whole-layout detour boxes:\n%s", out)
+	}
+}
+
 func TestSharedTargetKeepsUpperSourceOnUpperSidePort(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
@@ -210,6 +253,18 @@ func routeForEdge(t *testing.T, routes []visibleEdge, from, to string) edgeRoute
 	}
 	t.Fatalf("missing route %s -> %s", from, to)
 	return edgeRoute{}
+}
+
+func routeHeight(cells []routePoint) int {
+	if len(cells) == 0 {
+		return 0
+	}
+	minY, maxY := cells[0].Y, cells[0].Y
+	for _, cell := range cells {
+		minY = min(minY, cell.Y)
+		maxY = max(maxY, cell.Y)
+	}
+	return maxY - minY + 1
 }
 
 func assertRoutesDoNotShareCells(t *testing.T, routes []visibleEdge) {

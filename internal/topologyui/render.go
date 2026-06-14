@@ -4,6 +4,8 @@ import (
 	"container/heap"
 	"io"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -63,6 +65,24 @@ func RenderString(m Model, state ViewState, width, height int, ansi bool) string
 }
 
 func renderGrid(m Model, state ViewState, width, height int) *grid {
+	_, routes := planRenderRoutes(m, width, height)
+	return renderGridWithRoutes(m, state, width, height, routes)
+}
+
+func planRenderRoutes(m Model, width, height int) (map[string]rect, []visibleEdge) {
+	if width < minWidth {
+		width = minWidth
+	}
+	if height < minHeight {
+		height = minHeight
+	}
+	graph := rect{X: 0, Y: 0, W: width, H: height}
+	nodeRects := layoutNodeRects(m, graph)
+	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
+	return nodeRects, planVisibleRoutes(planner, m.Edges, nodeRects, graph)
+}
+
+func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEdges []visibleEdge) *grid {
 	if width < minWidth {
 		width = minWidth
 	}
@@ -71,11 +91,17 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 	}
 	g := newGrid(width, height)
 	graph := rect{X: 0, Y: 0, W: width, H: height}
-
 	nodeRects := layoutNodeRects(m, graph)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
-	visibleEdges := planVisibleRoutes(planner, m.Edges, nodeRects, graph)
 	for _, visible := range visibleEdges {
+		if routeTouchesMovingNode(visible.edge, state) {
+			continue
+		}
+		planner.reserve(visible.route)
+		drawRoutedEdge(g, visible.route, ansiDim)
+	}
+	moveRoutes := movingNodeRoutes(m, state, nodeRects, graph)
+	for _, visible := range moveRoutes {
 		drawRoutedEdge(g, visible.route, ansiDim)
 	}
 	drawConnectPreview(g, m, state, nodeRects, graph, planner)
@@ -86,6 +112,12 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 		}
 	}
 	for _, visible := range visibleEdges {
+		if routeTouchesMovingNode(visible.edge, state) {
+			continue
+		}
+		drawRoutedEdgePorts(g, visible.route)
+	}
+	for _, visible := range moveRoutes {
 		drawRoutedEdgePorts(g, visible.route)
 	}
 	for i, node := range m.Nodes {
@@ -98,6 +130,105 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)
 	drawConsole(g, state, width, height)
 	return g
+}
+
+func routeTouchesMovingNode(edge Edge, state ViewState) bool {
+	if !state.MoveMode {
+		return false
+	}
+	key := NodeKey(state.MoveNodeType, state.MoveNodeID)
+	return edge.From == key || edge.To == key
+}
+
+func movingNodeRoutes(m Model, state ViewState, nodeRects map[string]rect, bounds rect) []visibleEdge {
+	if !state.MoveMode {
+		return nil
+	}
+	key := NodeKey(state.MoveNodeType, state.MoveNodeID)
+	out := []visibleEdge{}
+	for _, edge := range m.Edges {
+		if edge.From != key && edge.To != key {
+			continue
+		}
+		from, fromOK := nodeRects[edge.From]
+		to, toOK := nodeRects[edge.To]
+		if !fromOK || !toOK || !rectFullyVisible(from, bounds) || !rectFullyVisible(to, bounds) {
+			continue
+		}
+		route, ok := quickMoveRoute(from, to, bounds)
+		if !ok {
+			continue
+		}
+		out = append(out, visibleEdge{edge: edge, route: route})
+	}
+	return out
+}
+
+func quickMoveRoute(from, to rect, bounds rect) (edgeRoute, bool) {
+	start := sidePort(from, to)
+	end := sidePort(to, from)
+	midX := (start.entry.X + end.entry.X) / 2
+	waypoints := []routePoint{
+		start.entry,
+		{X: midX, Y: start.entry.Y},
+		{X: midX, Y: end.entry.Y},
+		end.entry,
+	}
+	cells, ok := pathCellsFromWaypoints(waypoints)
+	if !ok {
+		return edgeRoute{}, false
+	}
+	for _, cell := range cells {
+		if !pointInRect(cell, bounds) {
+			return edgeRoute{}, false
+		}
+	}
+	return edgeRoute{cells: cells, start: start, end: end}, true
+}
+
+func sidePort(node, other rect) routePort {
+	nodeCenterX := node.X + node.W/2
+	otherCenterX := other.X + other.W/2
+	otherCenterY := other.Y + other.H/2
+	y := clamp(otherCenterY, node.Y+1, node.Y+node.H-2)
+	if otherCenterX >= nodeCenterX {
+		border := routePoint{X: node.X + node.W - 1, Y: y}
+		return routePort{border: border, entry: routePoint{X: border.X + 1, Y: border.Y}, side: routeSideRight}
+	}
+	border := routePoint{X: node.X, Y: y}
+	return routePort{border: border, entry: routePoint{X: border.X - 1, Y: border.Y}, side: routeSideLeft}
+}
+
+func renderRouteCacheKey(m Model, width, height int) string {
+	if width < minWidth {
+		width = minWidth
+	}
+	if height < minHeight {
+		height = minHeight
+	}
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(width))
+	b.WriteByte('x')
+	b.WriteString(strconv.Itoa(height))
+	b.WriteByte('|')
+	for _, node := range m.Nodes {
+		b.WriteString(node.Type)
+		b.WriteByte(':')
+		b.WriteString(node.ID)
+		b.WriteByte('@')
+		b.WriteString(strconv.Itoa(node.X))
+		b.WriteByte(',')
+		b.WriteString(strconv.Itoa(node.Y))
+		b.WriteByte(';')
+	}
+	b.WriteByte('|')
+	for _, edge := range m.Edges {
+		b.WriteString(edge.From)
+		b.WriteString("->")
+		b.WriteString(edge.To)
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 func layoutNodeRects(m Model, pane rect) map[string]rect {
@@ -404,6 +535,10 @@ type routePortPair struct {
 	index int
 }
 
+type routeOptions struct {
+	allowOccupied bool
+}
+
 const (
 	noDirection    = -1
 	directionUp    = 0
@@ -444,7 +579,13 @@ func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string
 		if !rectFullyVisible(from, bounds) || !rectFullyVisible(to, bounds) {
 			continue
 		}
+		workloadLink := workloadNodeKey(edge.From) && workloadNodeKey(edge.To)
 		route, ok := planner.planRoute(from, to)
+		if ok && workloadLink && routeHasLargeDetour(route.cells) {
+			if relaxedRoute, relaxedOK := planner.planRouteWithOptions(from, to, routeOptions{allowOccupied: true}); relaxedOK && len(relaxedRoute.cells) < len(route.cells) {
+				route = relaxedRoute
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -461,7 +602,15 @@ func edgeRoutePriority(edge Edge, nodeRects map[string]rect) int {
 	fromCenterY := from.Y + from.H/2
 	toCenterX := to.X + to.W/2
 	toCenterY := to.Y + to.H/2
-	return min(fromCenterY, toCenterY)*10000 + abs(fromCenterY-toCenterY)*100 + abs(fromCenterX-toCenterX)
+	directPenalty := 0
+	if workloadNodeKey(edge.From) && workloadNodeKey(edge.To) {
+		directPenalty = 100000000
+	}
+	return directPenalty + min(fromCenterY, toCenterY)*10000 + abs(fromCenterY-toCenterY)*100 + abs(fromCenterX-toCenterX)
+}
+
+func workloadNodeKey(key string) bool {
+	return strings.HasPrefix(key, NodeVM+":") || strings.HasPrefix(key, NodeContainer+":")
 }
 
 func drawEdge(g *grid, from, to rect, bounds rect) (edgeRoute, bool) {
@@ -475,6 +624,10 @@ func drawEdge(g *grid, from, to rect, bounds rect) (edgeRoute, bool) {
 }
 
 func (p *routePlanner) planRoute(from, to rect) (edgeRoute, bool) {
+	return p.planRouteWithOptions(from, to, routeOptions{})
+}
+
+func (p *routePlanner) planRouteWithOptions(from, to rect, options routeOptions) (edgeRoute, bool) {
 	if from.W < 2 || from.H < 2 || to.W < 2 || to.H < 2 {
 		return edgeRoute{}, false
 	}
@@ -485,7 +638,7 @@ func (p *routePlanner) planRoute(from, to rect) (edgeRoute, bool) {
 	best := edgeRoute{}
 	bestOK := false
 	for _, pair := range pairs {
-		cells, cost, ok := p.simplePath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end))
+		cells, cost, ok := p.simplePath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end), options)
 		if !ok {
 			continue
 		}
@@ -495,14 +648,14 @@ func (p *routePlanner) planRoute(from, to rect) (edgeRoute, bool) {
 			bestOK = true
 		}
 	}
-	if bestOK {
+	if bestOK && !routeHasLargeDetour(best.cells) {
 		return best, true
 	}
 	for i, pair := range pairs {
 		if i >= maxRoutePairs && bestOK {
 			break
 		}
-		cells, cost, ok := p.shortestPath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end))
+		cells, cost, ok := p.shortestPath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end), options)
 		if !ok {
 			continue
 		}
@@ -515,7 +668,27 @@ func (p *routePlanner) planRoute(from, to rect) (edgeRoute, bool) {
 	return best, bestOK
 }
 
-func (p *routePlanner) simplePath(start, goal routePoint, startDir, goalDir int) ([]routePoint, int, bool) {
+func routeHasLargeDetour(cells []routePoint) bool {
+	if len(cells) < 2 {
+		return false
+	}
+	direct := manhattan(cells[0], cells[len(cells)-1]) + 1
+	return len(cells) > direct+nodeWidth || routeSpanY(cells) > nodeHeight+2
+}
+
+func routeSpanY(cells []routePoint) int {
+	if len(cells) == 0 {
+		return 0
+	}
+	minY, maxY := cells[0].Y, cells[0].Y
+	for _, cell := range cells {
+		minY = min(minY, cell.Y)
+		maxY = max(maxY, cell.Y)
+	}
+	return maxY - minY + 1
+}
+
+func (p *routePlanner) simplePath(start, goal routePoint, startDir, goalDir int, options routeOptions) ([]routePoint, int, bool) {
 	waypointSets := [][]routePoint{
 		{start, goal},
 		{start, {X: goal.X, Y: start.Y}, goal},
@@ -533,10 +706,10 @@ func (p *routePlanner) simplePath(start, goal routePoint, startDir, goalDir int)
 	bestOK := false
 	for _, waypoints := range waypointSets {
 		cells, ok := pathCellsFromWaypoints(waypoints)
-		if !ok || !p.pathClear(cells, start, goal) {
+		if !ok || !p.pathClear(cells, start, goal, options) {
 			continue
 		}
-		cost := p.routePathCost(cells, start, goal, startDir, goalDir)
+		cost := p.routePathCost(cells, start, goal, startDir, goalDir, options)
 		if !bestOK || cost < bestCost || (cost == bestCost && len(cells) < len(bestCells)) {
 			bestCells = cells
 			bestCost = cost
@@ -638,16 +811,16 @@ func sign(value int) int {
 	}
 }
 
-func (p *routePlanner) pathClear(cells []routePoint, start, goal routePoint) bool {
+func (p *routePlanner) pathClear(cells []routePoint, start, goal routePoint, options routeOptions) bool {
 	for _, point := range cells {
-		if p.blocked(point, start, goal) {
+		if p.blocked(point, start, goal, options) {
 			return false
 		}
 	}
 	return true
 }
 
-func (p *routePlanner) routePathCost(cells []routePoint, start, goal routePoint, startDir, goalDir int) int {
+func (p *routePlanner) routePathCost(cells []routePoint, start, goal routePoint, startDir, goalDir int, options routeOptions) int {
 	if len(cells) == 0 {
 		return 0
 	}
@@ -661,6 +834,9 @@ func (p *routePlanner) routePathCost(cells []routePoint, start, goal routePoint,
 		}
 		if p.nearNode(cells[i]) {
 			stepCost += 25
+		}
+		if options.allowOccupied && p.occupied[cells[i]] != 0 {
+			stepCost += 90
 		}
 		cost += stepCost
 		previousDir = dir
@@ -821,10 +997,11 @@ func (q *routeQueue) Pop() any {
 	return item
 }
 
-func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir int) ([]routePoint, int, bool) {
-	if p.blocked(start, start, goal) || p.blocked(goal, start, goal) {
+func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir int, options routeOptions) ([]routePoint, int, bool) {
+	if p.blocked(start, start, goal, options) || p.blocked(goal, start, goal, options) {
 		return nil, 0, false
 	}
+	searchBounds := routeSearchBounds(start, goal, p.bounds)
 	startState := routeState{point: start, dir: startDir}
 	dist := map[routeState]int{startState: 0}
 	prev := map[routeState]routeState{}
@@ -850,7 +1027,10 @@ func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir in
 			break
 		}
 		for dir, next := range routeNeighbors(item.state.point) {
-			if p.blocked(next, start, goal) {
+			if !pointInRect(next, searchBounds) {
+				continue
+			}
+			if p.blocked(next, start, goal, options) {
 				continue
 			}
 			nextState := routeState{point: next, dir: dir}
@@ -860,6 +1040,9 @@ func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir in
 			}
 			if p.nearNode(next) {
 				stepCost += 25
+			}
+			if options.allowOccupied && p.occupied[next] != 0 {
+				stepCost += 90
 			}
 			nextCost := item.cost + stepCost
 			if current, ok := dist[nextState]; ok && current <= nextCost {
@@ -887,6 +1070,16 @@ func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir in
 	return cells, bestGoalCost, true
 }
 
+func routeSearchBounds(start, goal routePoint, bounds rect) rect {
+	marginX := nodeWidth * 2
+	marginY := nodeHeight * 4
+	minX := max(bounds.X, min(start.X, goal.X)-marginX)
+	maxX := min(bounds.X+bounds.W-1, max(start.X, goal.X)+marginX)
+	minY := max(bounds.Y, min(start.Y, goal.Y)-marginY)
+	maxY := min(bounds.Y+bounds.H-1, max(start.Y, goal.Y)+marginY)
+	return rect{X: minX, Y: minY, W: max(1, maxX-minX+1), H: max(1, maxY-minY+1)}
+}
+
 func routeNeighbors(p routePoint) []routePoint {
 	return []routePoint{
 		{X: p.X, Y: p.Y - 1},
@@ -896,11 +1089,11 @@ func routeNeighbors(p routePoint) []routePoint {
 	}
 }
 
-func (p *routePlanner) blocked(point, start, goal routePoint) bool {
+func (p *routePlanner) blocked(point, start, goal routePoint, options routeOptions) bool {
 	if !pointInRect(point, p.bounds) {
 		return true
 	}
-	if p.occupied[point] != 0 {
+	if p.occupied[point] != 0 && !options.allowOccupied {
 		return true
 	}
 	for _, node := range p.nodes {

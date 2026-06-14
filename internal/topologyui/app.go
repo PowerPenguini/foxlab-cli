@@ -35,6 +35,8 @@ type App struct {
 	Out               *os.File
 	ViewWidth         int
 	ViewHeight        int
+	RouteCacheKey     string
+	RouteCacheRoutes  []visibleEdge
 }
 
 func (a *App) Run() error {
@@ -98,7 +100,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		if dirty {
 			_, _ = io.WriteString(a.Out, ansiMoveHome)
-			if err := Render(a.Out, a.Model, a.State, width, height, true); err != nil {
+			if err := a.render(a.Out, width, height, true); err != nil {
 				return err
 			}
 			dirty = false
@@ -115,6 +117,18 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		dirty = true
 	}
+}
+
+func (a *App) render(w io.Writer, width, height int, ansi bool) error {
+	key := renderRouteCacheKey(a.Model, width, height)
+	reuseMovingRoutes := a.State.MoveMode && a.RouteCacheKey != "" && len(a.RouteCacheRoutes) > 0
+	if key != a.RouteCacheKey && !reuseMovingRoutes {
+		_, routes := planRenderRoutes(a.Model, width, height)
+		a.RouteCacheKey = key
+		a.RouteCacheRoutes = routes
+	}
+	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, a.State, width, height, a.RouteCacheRoutes).String(ansi))
+	return err
 }
 
 func (a *App) runtime() (WorkloadRuntime, func(), error) {
