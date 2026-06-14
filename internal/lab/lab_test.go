@@ -62,6 +62,46 @@ func TestValidateAcceptsExternalLinks(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsUnconnectedNICs(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		VMs: []VM{{
+			ID:       "vm1",
+			MemoryMB: 512,
+			CPUs:     1,
+			Disk:     "disks/vm1.qcow2",
+			Networks: []VMNetwork{{}},
+		}},
+		Containers: []Container{{
+			ID:       "web",
+			Image:    "nginx",
+			Networks: []ContainerNetwork{{}},
+		}},
+	}
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected unconnected NICs to validate, got %v", err)
+	}
+}
+
+func TestValidateAcceptsDirectNetworkLinks(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		VMs: []VM{
+			{ID: "vm1", MemoryMB: 512, CPUs: 1, Disk: "disks/vm1.qcow2", Networks: []VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 512, CPUs: 1, Disk: "disks/vm2.qcow2", Networks: []VMNetwork{{}}},
+		},
+		NetworkLinks: []NetworkLink{{
+			From: NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 0},
+			To:   NetworkEndpoint{Type: "vm", ID: "vm2", NIC: 0},
+		}},
+	}
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected direct network link to validate, got %v", err)
+	}
+}
+
 func TestValidateAcceptsNATSwitch(t *testing.T) {
 	l := &Lab{
 		ID:            "demo",
@@ -152,7 +192,7 @@ func TestValidateRejectsInvalidExternalLinkReferences(t *testing.T) {
 		`external link "uplink1" interface is required`,
 		`duplicate external link id "uplink1"`,
 		`switch "sw1" references missing external link "missing"`,
-		`vm "vm1" network must reference exactly one switch or externalLink`,
+		`vm "vm1" network must not reference both switch and externalLink`,
 		`layout link references missing external link "missing"`,
 	} {
 		if !strings.Contains(err.Error(), want) {

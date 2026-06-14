@@ -35,18 +35,14 @@ func (b *Bridge) AttachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) error 
 		b.Runner = ExecRunner{}
 	}
 	for index, nic := range vm.Networks {
-		if nic.Switch == "" {
-			continue
-		}
-		sw, ok := findSwitch(l, nic.Switch)
-		if !ok {
-			return fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
-		}
-		bridge := l.ManagedSwitchBridgeName(sw)
-		tap := VMTapName(l, vm, index)
-		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
+		bridge, err := b.vmNICBridge(ctx, l, vm, index, nic)
+		if err != nil {
 			return err
 		}
+		if bridge == "" {
+			continue
+		}
+		tap := VMTapName(l, vm, index)
 		_ = b.Runner.Run(ctx, "ip", "link", "delete", tap)
 		if err := b.Runner.Run(ctx, "ip", "tuntap", "add", tap, "mode", "tap"); err != nil {
 			return err
@@ -71,7 +67,7 @@ func (b *Bridge) DetachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) {
 		b.Runner = ExecRunner{}
 	}
 	for index, nic := range vm.Networks {
-		if nic.Switch == "" {
+		if nic.Switch == "" && !endpointHasNetworkLink(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index}) {
 			continue
 		}
 		_ = b.Runner.Run(ctx, "ip", "link", "delete", VMTapName(l, vm, index))
@@ -83,15 +79,14 @@ func (b *Bridge) AttachContainer(ctx context.Context, l *lab.Lab, ct lab.Contain
 		b.Runner = ExecRunner{}
 	}
 	for index, nic := range ct.Networks {
-		sw, ok := findSwitch(l, nic.Switch)
-		if !ok {
-			return fmt.Errorf("container %q references missing switch %q", ct.ID, nic.Switch)
-		}
-		bridge := l.ManagedSwitchBridgeName(sw)
-		hostIf, guestIf := vethNames(l, ct, index)
-		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
+		bridge, err := b.containerNICBridge(ctx, l, ct, index, nic)
+		if err != nil {
 			return err
 		}
+		if bridge == "" {
+			continue
+		}
+		hostIf, guestIf := vethNames(l, ct, index)
 		_ = b.Runner.Run(ctx, "ip", "link", "delete", hostIf)
 		if err := b.Runner.Run(ctx, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", guestIf); err != nil {
 			return err
@@ -137,6 +132,48 @@ func (b *Bridge) EnsureSwitchBridge(ctx context.Context, l *lab.Lab, sw lab.Swit
 	return b.ensureBridge(ctx, l.ManagedSwitchBridgeName(sw))
 }
 
+func (b *Bridge) vmNICBridge(ctx context.Context, l *lab.Lab, vm lab.VM, index int, nic lab.VMNetwork) (string, error) {
+	if nic.Switch != "" {
+		sw, ok := findSwitch(l, nic.Switch)
+		if !ok {
+			return "", fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
+		}
+		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
+			return "", err
+		}
+		return l.ManagedSwitchBridgeName(sw), nil
+	}
+	if link, ok := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index}); ok {
+		bridge := l.ManagedNetworkLinkBridgeName(link)
+		if err := b.ensureBridge(ctx, bridge); err != nil {
+			return "", err
+		}
+		return bridge, nil
+	}
+	return "", nil
+}
+
+func (b *Bridge) containerNICBridge(ctx context.Context, l *lab.Lab, ct lab.Container, index int, nic lab.ContainerNetwork) (string, error) {
+	if nic.Switch != "" {
+		sw, ok := findSwitch(l, nic.Switch)
+		if !ok {
+			return "", fmt.Errorf("container %q references missing switch %q", ct.ID, nic.Switch)
+		}
+		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
+			return "", err
+		}
+		return l.ManagedSwitchBridgeName(sw), nil
+	}
+	if link, ok := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "container", ID: ct.ID, NIC: index}); ok {
+		bridge := l.ManagedNetworkLinkBridgeName(link)
+		if err := b.ensureBridge(ctx, bridge); err != nil {
+			return "", err
+		}
+		return bridge, nil
+	}
+	return "", nil
+}
+
 func (b *Bridge) ensureBridge(ctx context.Context, name string) error {
 	if err := b.Runner.Run(ctx, "ip", "link", "show", name); err == nil {
 		return b.Runner.Run(ctx, "ip", "link", "set", name, "up")
@@ -157,6 +194,27 @@ func findSwitch(l *lab.Lab, id string) (lab.Switch, bool) {
 		}
 	}
 	return lab.Switch{}, false
+}
+
+func findNetworkLinkForEndpoint(l *lab.Lab, endpoint lab.NetworkEndpoint) (lab.NetworkLink, bool) {
+	if l == nil {
+		return lab.NetworkLink{}, false
+	}
+	for _, link := range l.NetworkLinks {
+		if sameNetworkEndpoint(link.From, endpoint) || sameNetworkEndpoint(link.To, endpoint) {
+			return link, true
+		}
+	}
+	return lab.NetworkLink{}, false
+}
+
+func endpointHasNetworkLink(l *lab.Lab, endpoint lab.NetworkEndpoint) bool {
+	_, ok := findNetworkLinkForEndpoint(l, endpoint)
+	return ok
+}
+
+func sameNetworkEndpoint(a, b lab.NetworkEndpoint) bool {
+	return a.Type == b.Type && a.ID == b.ID && a.NIC == b.NIC
 }
 
 func VMTapName(l *lab.Lab, vm lab.VM, index int) string {

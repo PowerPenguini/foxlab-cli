@@ -8,7 +8,7 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
-        - switch: sw1
+        - {}
     - id: vm3
       name: vm3
       memoryMB: 2048
@@ -17,6 +17,8 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       networks:
         - switch: sw1
+        - {}
+        - {}
     - id: vm4
       name: vm4
       memoryMB: 4096
@@ -26,13 +28,15 @@ vms:
       vnc: true
       networks:
         - switch: sw1
+        - {}
     - id: hello
       name: hello
       memoryMB: 2048
       cpus: 2
       disk: labs/topology-tui/disks/hello.qcow2
       networks:
-        - switch: sw1
+        - externalLink: link1
+        - {}
 switches:
     - id: sw1
       name: sw1
@@ -42,6 +46,15 @@ externalLinks:
     - id: link1
       name: in2
       interface: wlp0s20f3
+networkLinks:
+    - from:
+        type: vm
+        id: hello
+        nic: 1
+      to:
+        type: vm
+        id: vm3
+        nic: 2
 disks:
     - id: vm2
       path: labs/topology-tui/disks/vm2.qcow2
@@ -51,10 +64,10 @@ layout:
     nodes:
         hello:
             x: 1136
-            "y": 168
+            "y": 96
         link1:
-            x: 640
-            "y": 168
+            x: 848
+            "y": 696
         sw1:
             x: 848
             "y": 336
@@ -63,7 +76,7 @@ layout:
             "y": 72
         vm3:
             x: 64
-            "y": 288
+            "y": 168
         vm4:
             x: 64
             "y": 552

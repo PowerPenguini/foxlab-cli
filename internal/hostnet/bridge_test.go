@@ -78,3 +78,38 @@ func TestAttachVMNICsPlansBridgeAndTapCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestAttachVMNICsPlansDirectLinkBridgeCommands(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm2.qcow2", Networks: []lab.VMNetwork{{}}},
+		},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 0},
+			To:   lab.NetworkEndpoint{Type: "vm", ID: "vm2", NIC: 0},
+		}},
+	}
+	runner := &fakeRunner{}
+	bridge := &Bridge{Runner: runner}
+
+	if err := bridge.AttachVMNICs(context.Background(), l, l.VMs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	tap := VMTapName(l, l.VMs[0], 0)
+	linkBridge := l.ManagedNetworkLinkBridgeName(l.NetworkLinks[0])
+	joined := strings.Join(runner.commands, "\n")
+	for _, want := range []string{
+		"ip link show " + linkBridge,
+		"ip link delete " + tap,
+		"ip tuntap add " + tap + " mode tap",
+		"ip link set " + tap + " master " + linkBridge,
+		"ip link set " + tap + " up",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
+		}
+	}
+}

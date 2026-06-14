@@ -6,9 +6,9 @@ func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
 	switch group {
 	case "create-menu":
-		return []string{"create-vm", "create-container", "create-switch", "create-external"}
+		return []string{"add vm", "add cont", "add sw", "create external"}
 	default:
-		return []string{"create >"}
+		return []string{"add >"}
 	}
 }
 
@@ -43,10 +43,11 @@ func containerContextMenuItems(node Node, group string) []string {
 			contextFieldItem("name", node.Label),
 			contextFieldItem("image", nodeDetailValue(node, "image", "image=?")),
 			contextFieldItem("command", nodeDetailValue(node, "command", "command=?")),
-			contextFieldItem("switch", firstNICSwitch(node)),
 		}, node.Details)
+	case "nic-menu":
+		return nicMenuItems(node.Details)
 	case "":
-		return []string{"Configuration >", "Move", "Delete"}
+		return []string{"Configuration >", "NIC >", "Move", "Delete"}
 	default:
 		return nil
 	}
@@ -64,8 +65,10 @@ func vmContextMenuItems(node Node, group string) []string {
 			contextFieldItem("disk", nodeDetailValue(node, "disk", "disk=?")),
 			contextFieldItem("iso", nodeDetailValue(node, "iso", "iso=?")),
 		}, node.Details)
+	case "nic-menu":
+		return nicMenuItems(node.Details)
 	case "":
-		return []string{"Configuration >", "Move", "Delete"}
+		return []string{"Configuration >", "NIC >", "Move", "Delete"}
 	default:
 		return nil
 	}
@@ -103,7 +106,16 @@ func externalContextMenuItems(node Node, group string) []string {
 }
 
 func configMenuItems(prefix []string, details []string) []string {
-	return compactMenuItems(prefix, details, nil)
+	return compactMenuItems(prefix, nonNICDetails(details), nil)
+}
+
+func nicMenuItems(details []string) []string {
+	return compactMenuItems([]string{"Add NIC"}, nicDetails(details), nil)
+}
+
+func connectTargetNICMenuItems(node Node) []string {
+	items := nicDetails(node.Details)
+	return append(items, "New NIC")
 }
 
 func contextPowerAction(node Node) string {
@@ -135,6 +147,30 @@ func compactMenuItems(prefix []string, details []string, suffix []string) []stri
 		out = append(out, detail)
 	}
 	return append(out, suffix...)
+}
+
+func nonNICDetails(details []string) []string {
+	out := make([]string, 0, len(details))
+	for _, detail := range details {
+		if !isNICDetail(detail) {
+			out = append(out, detail)
+		}
+	}
+	return out
+}
+
+func nicDetails(details []string) []string {
+	out := make([]string, 0, len(details))
+	for _, detail := range details {
+		if isNICDetail(detail) {
+			out = append(out, detail)
+		}
+	}
+	return out
+}
+
+func isNICDetail(detail string) bool {
+	return strings.HasPrefix(strings.TrimSpace(detail), "nic")
 }
 
 func containsContextItemKey(items []string, key string) bool {
@@ -247,12 +283,16 @@ func contextMenuAction(label string) string {
 	switch strings.TrimSpace(label) {
 	case "Configuration >", "Configuration", "config >":
 		return "config-menu"
-	case "create >":
+	case "NIC >", "NIC", "nic >":
+		return "nic-menu"
+	case "add >", "create >":
 		return "create-menu"
 	case "Run":
 		return "run"
 	case "Stop":
 		return "stop"
+	case "Add NIC":
+		return "add-nic"
 	case "Delete", "delete":
 		return "delete"
 	case "Move", "move":
@@ -260,6 +300,11 @@ func contextMenuAction(label string) string {
 	}
 	label = strings.TrimSpace(label)
 	switch {
+	case isNICDetail(label):
+		if index, ok := nicDetailIndex(label); ok {
+			return "connect-nic:" + index
+		}
+		return label
 	case strings.HasPrefix(label, "name="):
 		return "rename"
 	case strings.HasPrefix(label, "cpu="), strings.HasPrefix(label, "cpus="), strings.HasPrefix(label, "mem="), strings.HasPrefix(label, "memory="), strings.HasPrefix(label, "mode="), strings.HasPrefix(label, "image="), strings.HasPrefix(label, "command="), strings.HasPrefix(label, "switch="):
@@ -279,13 +324,22 @@ func contextMenuAction(label string) string {
 	}
 }
 
-func firstNICSwitch(node Node) string {
-	for _, detail := range node.Details {
-		if strings.HasPrefix(detail, "nic0 → ") {
-			return "switch=" + strings.TrimSpace(strings.TrimPrefix(detail, "nic0 → "))
-		}
+func nicDetailIndex(detail string) (string, bool) {
+	detail = strings.TrimSpace(detail)
+	if !strings.HasPrefix(detail, "nic") {
+		return "", false
 	}
-	return "switch=?"
+	index := strings.Builder{}
+	for _, r := range strings.TrimPrefix(detail, "nic") {
+		if r < '0' || r > '9' {
+			break
+		}
+		index.WriteRune(r)
+	}
+	if index.Len() == 0 {
+		return "", false
+	}
+	return index.String(), true
 }
 
 func isContextGroup(action string) bool {
@@ -306,7 +360,11 @@ func activeRootContextGroup(items []string, selected int) string {
 func contextMenuWidth(items []string) int {
 	w := 0
 	for _, item := range items {
-		w = max(w, runeLen(item)+3)
+		extra := 3
+		if isNICDetail(item) {
+			extra = 6
+		}
+		w = max(w, runeLen(item)+extra)
 	}
 	return max(w, 10)
 }

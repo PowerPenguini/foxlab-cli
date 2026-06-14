@@ -85,21 +85,35 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		return err
 	}
 	defer cleanup()
+	dirty := true
+	lastWidth, lastHeight := 0, 0
 	for {
 		width, height := size(a)
 		a.ViewWidth = width
 		a.ViewHeight = height
-		_, _ = io.WriteString(a.Out, ansiMoveHome)
-		if err := Render(a.Out, a.Model, a.State, width, height, true); err != nil {
-			return err
+		if width != lastWidth || height != lastHeight {
+			dirty = true
+			lastWidth = width
+			lastHeight = height
+		}
+		if dirty {
+			_, _ = io.WriteString(a.Out, ansiMoveHome)
+			if err := Render(a.Out, a.Model, a.State, width, height, true); err != nil {
+				return err
+			}
+			dirty = false
 		}
 		key, err := read(a)
 		if err != nil {
 			return err
 		}
+		if key == "" {
+			continue
+		}
 		if a.handleKey(key) {
 			return nil
 		}
+		dirty = true
 	}
 }
 
@@ -173,6 +187,7 @@ func (a *App) openCommand(command string) {
 	a.State.ContextGroup = ""
 	a.State.ContextInSubmenu = false
 	a.State.ContextSubSelected = 0
+	a.State.ContextDeleteNIC = false
 	a.State.ContextEdit = false
 	a.State.ContextEditValue = ""
 	a.State.ContextEditCursor = 0

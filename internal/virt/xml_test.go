@@ -45,6 +45,35 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 }
 
+func TestDomainXMLIncludesDirectLinkedNIC(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm2.qcow2", Networks: []lab.VMNetwork{{}}},
+		},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 0},
+			To:   lab.NetworkEndpoint{Type: "vm", ID: "vm2", NIC: 0},
+		}},
+	}
+	l.Normalize()
+
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<interface type="ethernet">`,
+		`<target dev="tfoxlabdemovm10"/>`,
+		`<script path="/bin/true"/>`,
+	} {
+		if !strings.Contains(xmlText, want) {
+			t.Fatalf("domain XML missing direct NIC %q:\n%s", want, xmlText)
+		}
+	}
+}
+
 func TestNetworkXMLUsesManagedMetadata(t *testing.T) {
 	l := &lab.Lab{ID: "demo", Switches: []lab.Switch{{ID: "sw1", Mode: "nat"}}}
 	l.Normalize()

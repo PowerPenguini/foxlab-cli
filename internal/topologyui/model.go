@@ -48,6 +48,14 @@ func ModelFromLab(l *lab.Lab) Model {
 		return MockModel()
 	}
 	m := Model{ID: l.ID}
+	directNICDetails := map[string]string{}
+	for _, link := range l.NetworkLinks {
+		fromKey := networkEndpointKey(link.From)
+		toKey := networkEndpointKey(link.To)
+		directNICDetails[fromKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.From.NIC, link.To.ID, link.To.NIC)
+		directNICDetails[toKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.To.NIC, link.From.ID, link.From.NIC)
+		m.Edges = append(m.Edges, Edge{From: NodeKey(link.From.Type, link.From.ID), To: NodeKey(link.To.Type, link.To.ID)})
+	}
 	for i, vm := range l.VMs {
 		details := []string{
 			fmt.Sprintf("cpu=%d", vm.CPUs),
@@ -59,11 +67,17 @@ func ModelFromLab(l *lab.Lab) Model {
 			details = append(details, "iso="+vm.ISO)
 		}
 		for idx, nic := range vm.Networks {
+			if detail := directNICDetails[networkEndpointKey(lab.NetworkEndpoint{Type: NodeVM, ID: vm.ID, NIC: idx})]; detail != "" {
+				details = append(details, detail)
+				continue
+			}
 			switch {
 			case nic.Switch != "":
 				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
 			case nic.ExternalLink != "":
 				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.ExternalLink))
+			default:
+				details = append(details, fmt.Sprintf("nic%d", idx))
 			}
 		}
 		m.Nodes = append(m.Nodes, Node{
@@ -94,9 +108,15 @@ func ModelFromLab(l *lab.Lab) Model {
 			details = append(details, "env."+key+"="+value)
 		}
 		for idx, nic := range ct.Networks {
+			if detail := directNICDetails[networkEndpointKey(lab.NetworkEndpoint{Type: NodeContainer, ID: ct.ID, NIC: idx})]; detail != "" {
+				details = append(details, detail)
+				continue
+			}
 			if nic.Switch != "" {
 				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
 				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeSwitch, nic.Switch)})
+			} else {
+				details = append(details, fmt.Sprintf("nic%d", idx))
 			}
 		}
 		m.Nodes = append(m.Nodes, Node{
@@ -146,6 +166,15 @@ func ModelFromLab(l *lab.Lab) Model {
 }
 
 func NodeKey(typ, id string) string { return graph.Key(typ, id) }
+
+func nodeByKey(m Model, key string) (Node, bool) {
+	for _, node := range m.Nodes {
+		if node.Key() == key {
+			return node, true
+		}
+	}
+	return Node{}, false
+}
 
 func NodeKind(typ string) string {
 	switch typ {
@@ -218,4 +247,8 @@ func nodeSort(n Node) string {
 	default:
 		return "9:" + n.ID
 	}
+}
+
+func networkEndpointKey(endpoint lab.NetworkEndpoint) string {
+	return fmt.Sprintf("%s:%s:%d", endpoint.Type, endpoint.ID, endpoint.NIC)
 }

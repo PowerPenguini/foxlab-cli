@@ -55,191 +55,194 @@ func TestRenderEdgesDoNotCorruptNodeBoxes(t *testing.T) {
 	}
 }
 
-func TestDrawEdgeUsesVerticalPortsForStackedNodes(t *testing.T) {
-	g := newGrid(40, 20)
+func TestRoutePlannerKeepsRouteCellsOutsideNodeBoxes(t *testing.T) {
 	from := rect{X: 10, Y: 2, W: nodeWidth, H: nodeHeight}
 	to := rect{X: 10, Y: 10, W: nodeWidth, H: nodeHeight}
+	bounds := rect{X: 0, Y: 0, W: 40, H: 20}
+	planner := newRoutePlanner(bounds, []rect{from, to})
 
-	route, ok := drawEdge(g, from, to, rect{X: 0, Y: 0, W: 40, H: 20})
+	route, ok := planner.planRoute(from, to)
 	if !ok {
 		t.Fatal("stacked edge was not routed")
 	}
-	if !route.vertical {
-		t.Fatal("stacked edge used horizontal route")
+	if len(route.cells) == 0 {
+		t.Fatal("route has no path cells")
+	}
+	for _, point := range route.cells {
+		if pointInRect(point, from) || pointInRect(point, to) {
+			t.Fatalf("route entered a node box at %#v: %#v", point, route.cells)
+		}
 	}
 
-	if got := g.Cells[6*g.Width+18].Ch; got != lineVertical {
-		t.Fatalf("edge below source = %q, want vertical line", got)
-	}
-	if got := g.Cells[9*g.Width+18].Ch; got != lineVertical {
-		t.Fatalf("edge above target = %q, want vertical line", got)
-	}
-	if got := g.Cells[4*g.Width+26].Ch; got != ' ' {
-		t.Fatalf("edge used source side port = %q, want blank", got)
-	}
-	if got := g.Cells[12*g.Width+9].Ch; got != ' ' {
-		t.Fatalf("edge used target side port = %q, want blank", got)
-	}
-}
-
-func TestDrawEdgePortsAttachToNodeBorders(t *testing.T) {
 	g := newGrid(40, 20)
-	from := rect{X: 10, Y: 2, W: nodeWidth, H: nodeHeight}
-	to := rect{X: 10, Y: 10, W: nodeWidth, H: nodeHeight}
 	drawBox(g, from, "", "")
 	drawBox(g, to, "", "")
-
-	route, ok := planEdgeRoute(from, to, rect{X: 0, Y: 0, W: 40, H: 20})
-	if !ok {
-		t.Fatal("stacked edge was not routed")
+	drawRoutedEdge(g, route, ansiDim)
+	drawRoutedEdgePorts(g, route)
+	if got := g.Cells[route.start.border.Y*g.Width+route.start.border.X].Line & maskBetween(route.start.border, route.start.entry); got == 0 {
+		t.Fatalf("source border is not connected to route:\n%s", g.String(false))
 	}
-	drawEdgePorts(g, from, to, route)
-
-	if got := g.Cells[(from.Y+from.H-1)*g.Width+from.X+from.W/2].Ch; got != '┬' {
-		t.Fatalf("source bottom port = %q, want ┬", got)
-	}
-	if got := g.Cells[to.Y*g.Width+to.X+to.W/2].Ch; got != '┴' {
-		t.Fatalf("target top port = %q, want ┴", got)
+	if got := g.Cells[route.end.border.Y*g.Width+route.end.border.X].Line & maskBetween(route.end.border, route.end.entry); got == 0 {
+		t.Fatalf("target border is not connected to route:\n%s", g.String(false))
 	}
 }
 
-func TestDrawEdgeTreatsNearbyColumnsAsVertical(t *testing.T) {
-	from := rect{X: 10, Y: 2, W: nodeWidth, H: nodeHeight}
-	to := rect{X: 22, Y: 10, W: nodeWidth, H: nodeHeight}
-	route, ok := planEdgeRoute(from, to, rect{X: 0, Y: 0, W: 50, H: 20})
-	if !ok {
-		t.Fatal("nearby stacked edge was not routed")
+func TestDrawRoutePortUsesCornerWhereEdgeTurnsIntoNodeStub(t *testing.T) {
+	g := newGrid(40, 12)
+	node := rect{X: 10, Y: 4, W: nodeWidth, H: nodeHeight}
+	drawBox(g, node, "", "")
+
+	fromLeft := routePort{
+		border: routePoint{X: node.X + 3, Y: node.Y},
+		entry:  routePoint{X: node.X + 3, Y: node.Y - 1},
+		side:   routeSideTop,
 	}
-	if !route.vertical {
-		t.Fatal("nearby stacked nodes should use vertical edge routing")
+	fromRight := routePort{
+		border: routePoint{X: node.X + node.W - 4, Y: node.Y},
+		entry:  routePoint{X: node.X + node.W - 4, Y: node.Y - 1},
+		side:   routeSideTop,
+	}
+	g.SetLine(fromLeft.entry.X, fromLeft.entry.Y, lineLeft, ansiDim)
+	g.SetLine(fromRight.entry.X, fromRight.entry.Y, lineRight, ansiDim)
+
+	drawRoutePort(g, fromLeft)
+	drawRoutePort(g, fromRight)
+
+	if got := g.Cells[fromLeft.entry.Y*g.Width+fromLeft.entry.X].Ch; got != boxTopRight {
+		t.Fatalf("entry reached from left = %q, want corner %q", got, boxTopRight)
+	}
+	if got := g.Cells[fromRight.entry.Y*g.Width+fromRight.entry.X].Ch; got != boxTopLeft {
+		t.Fatalf("entry reached from right = %q, want corner %q", got, boxTopLeft)
+	}
+	if got := g.Cells[fromLeft.border.Y*g.Width+fromLeft.border.X].Ch; got != '┴' {
+		t.Fatalf("node border port = %q, want original border tee", got)
 	}
 }
 
-func TestDrawEdgeSkipsWhenNoFreeLaneExists(t *testing.T) {
-	g := newGrid(60, 20)
+func TestRenderSeparatesSharedNodeRoutes(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "vm3", Type: NodeVM, Label: "vm3", State: "defined", X: 4, Y: 7},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "defined", X: 73, Y: 7},
+			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "bridge", X: 53, Y: 14},
+		},
+		Edges: []Edge{
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeVM, "hello")},
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeSwitch, "sw1")},
+		},
+	}
+	bounds := rect{X: 0, Y: 0, W: 90, H: 22}
+	rects := layoutNodeRects(m, bounds)
+	planner := newRoutePlanner(bounds, visibleNodeRects(rects, bounds))
+	routes := planVisibleRoutes(planner, m.Edges, rects, bounds)
+	if len(routes) != len(m.Edges) {
+		t.Fatalf("planned routes = %d, want %d", len(routes), len(m.Edges))
+	}
+	assertRoutesDoNotShareCells(t, routes)
+
+	out := RenderString(m, ViewState{Focus: FocusGraph}, bounds.W, bounds.H, false)
+	if strings.Contains(out, string(lineCross)) {
+		t.Fatalf("render crossed routes:\n%s", out)
+	}
+}
+
+func TestRenderAvoidsCrossingNearSharedTarget(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "vm2", Type: NodeVM, Label: "vm2", State: "defined", X: 4, Y: 3},
+			{ID: "vm3", Type: NodeVM, Label: "vm3", State: "defined", X: 4, Y: 7},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "defined", X: 73, Y: 7},
+			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "bridge", X: 53, Y: 14},
+		},
+		Edges: []Edge{
+			{From: NodeKey(NodeVM, "vm2"), To: NodeKey(NodeVM, "hello")},
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeVM, "hello")},
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeSwitch, "sw1")},
+		},
+	}
+	out := RenderString(m, ViewState{Focus: FocusGraph}, 90, 22, false)
+	if strings.Contains(out, string(lineCross)) {
+		t.Fatalf("render crossed routes near shared target:\n%s", out)
+	}
+	g := renderGrid(m, ViewState{Focus: FocusGraph}, 90, 22)
+	rects := layoutNodeRects(m, rect{X: 0, Y: 0, W: 90, H: 22})
+	hello := rects[NodeKey(NodeVM, "hello")]
+	if got := g.Cells[hello.Y*g.Width+hello.X].Ch; got != boxTopLeft {
+		t.Fatalf("hello top-left corner was used as a connection: %q\n%s", got, g.String(false))
+	}
+}
+
+func TestSharedTargetKeepsUpperSourceOnUpperSidePort(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "vm2", Type: NodeVM, Label: "vm2", State: "defined", X: 4, Y: 3},
+			{ID: "vm3", Type: NodeVM, Label: "vm3", State: "defined", X: 4, Y: 7},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "defined", X: 73, Y: 7},
+			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "bridge", X: 53, Y: 14},
+		},
+		Edges: []Edge{
+			{From: NodeKey(NodeVM, "hello"), To: NodeKey(NodeVM, "vm3")},
+			{From: NodeKey(NodeVM, "hello"), To: NodeKey(NodeVM, "vm2")},
+			{From: NodeKey(NodeVM, "vm3"), To: NodeKey(NodeSwitch, "sw1")},
+		},
+	}
+	bounds := rect{X: 0, Y: 0, W: 90, H: 22}
+	rects := layoutNodeRects(m, bounds)
+	planner := newRoutePlanner(bounds, visibleNodeRects(rects, bounds))
+	routes := planVisibleRoutes(planner, m.Edges, rects, bounds)
+
+	helloToVM2 := routeForEdge(t, routes, NodeKey(NodeVM, "hello"), NodeKey(NodeVM, "vm2"))
+	helloToVM3 := routeForEdge(t, routes, NodeKey(NodeVM, "hello"), NodeKey(NodeVM, "vm3"))
+	if helloToVM2.start.side != routeSideLeft || helloToVM3.start.side != routeSideLeft {
+		t.Fatalf("hello routes should use left side ports: vm2=%#v vm3=%#v", helloToVM2.start, helloToVM3.start)
+	}
+	if helloToVM2.start.border.Y >= helloToVM3.start.border.Y {
+		t.Fatalf("upper source should use upper hello port: vm2=%#v vm3=%#v", helloToVM2.start, helloToVM3.start)
+	}
+}
+
+func routeForEdge(t *testing.T, routes []visibleEdge, from, to string) edgeRoute {
+	t.Helper()
+	for _, visible := range routes {
+		if visible.edge.From == from && visible.edge.To == to {
+			return visible.route
+		}
+	}
+	t.Fatalf("missing route %s -> %s", from, to)
+	return edgeRoute{}
+}
+
+func assertRoutesDoNotShareCells(t *testing.T, routes []visibleEdge) {
+	t.Helper()
+	seen := map[routePoint]int{}
+	for routeIndex, visible := range routes {
+		for _, point := range visible.route.cells {
+			if previous, ok := seen[point]; ok {
+				t.Fatalf("routes %d and %d share route cell %#v", previous, routeIndex, point)
+			}
+			seen[point] = routeIndex
+		}
+	}
+}
+
+func TestDrawEdgeAvoidsOverlappingNodeBoxes(t *testing.T) {
 	from := rect{X: 30, Y: 8, W: nodeWidth, H: nodeHeight}
 	to := rect{X: 20, Y: 10, W: nodeWidth, H: nodeHeight}
+	bounds := rect{X: 0, Y: 0, W: 60, H: 20}
+	planner := newRoutePlanner(bounds, []rect{from, to})
 
-	if _, ok := drawEdge(g, from, to, rect{X: 0, Y: 0, W: 60, H: 20}); ok {
-		t.Fatal("overlapping nearby nodes should not route through a box")
+	route, ok := planner.planRoute(from, to)
+	if !ok {
+		t.Fatal("overlapping nearby nodes should still route around boxes when a lane exists")
 	}
-	if strings.Contains(g.String(false), "─") || strings.Contains(g.String(false), "│") {
-		t.Fatalf("edge left partial lines without a valid route:\n%s", g.String(false))
+	for _, point := range route.cells {
+		if pointInRect(point, from) || pointInRect(point, to) {
+			t.Fatalf("route entered an overlapping node box at %#v: %#v", point, route.cells)
+		}
 	}
 }
 
-func TestDrawEdgeRendersAdjacentVerticalTeeAndCorner(t *testing.T) {
-	g := newGrid(90, 24)
-	from := rect{X: 64, Y: 10, W: nodeWidth, H: nodeHeight}
-	to := rect{X: 53, Y: 14, W: nodeWidth, H: nodeHeight}
-	drawBox(g, from, "", "")
-	drawBox(g, to, "", "")
-
-	route, ok := drawEdge(g, from, to, rect{X: 0, Y: 0, W: 90, H: 24})
-	if !ok {
-		t.Fatal("adjacent vertical edge was not routed")
-	}
-	if !route.overlay {
-		t.Fatal("adjacent vertical edge did not use overlay route")
-	}
-	drawEdgeRoute(g, route)
-	drawEdgePorts(g, from, to, route)
-
-	if got := g.Cells[(from.Y+from.H-1)*g.Width+from.X+from.W/2].Ch; got != '┬' {
-		t.Fatalf("source adjacent port = %q, want ┬", got)
-	}
-	if got := g.Cells[to.Y*g.Width+from.X+from.W/2].Ch; got != '┘' {
-		t.Fatalf("adjacent corner = %q, want ┘", got)
-	}
-	if got := g.Cells[to.Y*g.Width+to.X+to.W/2].Ch; got != lineHorizontal {
-		t.Fatalf("target adjacent top border = %q, want horizontal line", got)
-	}
-}
-
-func TestDrawEdgeMergesAdjacentRouteWithNodeTopBorder(t *testing.T) {
-	g := newGrid(90, 24)
-	from := rect{X: 64, Y: 10, W: nodeWidth, H: nodeHeight}
-	to := rect{X: 53, Y: 14, W: nodeWidth, H: nodeHeight}
-	drawBox(g, from, "", "")
-	drawBox(g, to, "", "")
-
-	route, ok := drawEdge(g, from, to, rect{X: 0, Y: 0, W: 90, H: 24})
-	if !ok {
-		t.Fatal("adjacent vertical edge was not routed")
-	}
-	drawEdgeRoute(g, route)
-	drawEdgePorts(g, from, to, route)
-
-	if got := g.Cells[to.Y*g.Width+to.X+to.W/2].Ch; got != lineHorizontal {
-		t.Fatalf("target top border = %q, want horizontal line", got)
-	}
-	if got := g.Cells[to.Y*g.Width+to.X+to.W-1].Ch; got != '┬' {
-		t.Fatalf("target top-right intersection = %q, want ┬", got)
-	}
-	if got := g.Cells[to.Y*g.Width+from.X+from.W/2].Ch; got != '┘' {
-		t.Fatalf("outer adjacent corner = %q, want ┘", got)
-	}
-}
-
-func TestDrawEdgeMergesCrossingRouteAboveNodePort(t *testing.T) {
-	g := newGrid(90, 24)
-	uplink := rect{X: 40, Y: 7, W: nodeWidth, H: nodeHeight}
-	vm := rect{X: 64, Y: 9, W: nodeWidth, H: nodeHeight}
-	sw := rect{X: 53, Y: 14, W: nodeWidth, H: nodeHeight}
-
-	uplinkRoute, ok := drawEdge(g, uplink, sw, rect{X: 0, Y: 0, W: 90, H: 24})
-	if !ok {
-		t.Fatal("uplink edge was not routed")
-	}
-	if uplinkRoute.overlay {
-		t.Fatal("uplink edge unexpectedly used overlay route")
-	}
-	drawBox(g, uplink, "", "")
-	drawBox(g, vm, "", "")
-	drawBox(g, sw, "", "")
-	drawEdgePorts(g, uplink, sw, uplinkRoute)
-
-	vmRoute, ok := drawEdge(g, vm, sw, rect{X: 0, Y: 0, W: 90, H: 24})
-	if !ok {
-		t.Fatal("vm edge was not routed")
-	}
-	drawEdgeRoute(g, vmRoute)
-	drawEdgePorts(g, vm, sw, vmRoute)
-
-	if got := g.Cells[(sw.Y-1)*g.Width+sw.X+sw.W/2].Ch; got != '├' {
-		t.Fatalf("crossing above target port = %q, want ├", got)
-	}
-	if got := g.Cells[(vm.Y+vm.H-1)*g.Width+vm.X+vm.W/2].Ch; got != '┬' {
-		t.Fatalf("source bottom tee = %q, want ┬", got)
-	}
-}
-
-func TestDrawEdgeMergesOverlayRouteWithNodeTopBorder(t *testing.T) {
-	g := newGrid(80, 20)
-	sw := rect{X: 12, Y: 2, W: nodeWidth, H: nodeHeight}
-	vm := rect{X: 24, Y: 6, W: nodeWidth, H: nodeHeight}
-	drawBox(g, sw, "", "")
-	drawBox(g, vm, "", "")
-
-	route, ok := drawEdge(g, sw, vm, rect{X: 0, Y: 0, W: 80, H: 20})
-	if !ok {
-		t.Fatal("overlay edge was not routed")
-	}
-	if !route.overlay {
-		t.Fatal("nearby edge did not use overlay route")
-	}
-	drawEdgeRoute(g, route)
-	drawEdgePorts(g, sw, vm, route)
-
-	if got := g.Cells[vm.Y*g.Width+vm.X+vm.W/2].Ch; got != lineHorizontal {
-		t.Fatalf("target top segment = %q, want horizontal line", got)
-	}
-	if got := g.Cells[vm.Y*g.Width+sw.X+sw.W/2].Ch; got != '└' {
-		t.Fatalf("overlay corner = %q, want └", got)
-	}
-}
-
-func TestRenderSelectedOverlayRouteMergesWithTopBorder(t *testing.T) {
+func TestRenderSelectedRouteKeepsBorderStyle(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "macnat-bridge", X: 12, Y: 2},
@@ -248,26 +251,12 @@ func TestRenderSelectedOverlayRouteMergesWithTopBorder(t *testing.T) {
 		Edges: []Edge{{From: NodeKey(NodeSwitch, "sw1"), To: NodeKey(NodeVM, "hello")}},
 	}
 
-	out := RenderString(m, ViewState{Selected: 1, Focus: FocusGraph}, 60, 16, false)
-	if !strings.Contains(out, "└───┬──────────────┐") {
-		t.Fatalf("selected top border did not merge overlay route:\n%s", out)
-	}
-	if strings.Contains(out, "────│") {
-		t.Fatalf("overlay route left a disconnected vertical tick:\n%s", out)
-	}
-	if strings.Contains(out, "───────┴──────") {
-		t.Fatalf("overlay route left a top-border tick:\n%s", out)
-	}
-
 	ansiOut := RenderString(m, ViewState{Selected: 1, Focus: FocusGraph}, 60, 16, true)
-	if !strings.Contains(ansiOut, ansiBold+ansiBrightCyan+"┬──────────────┐") {
-		t.Fatalf("selected top border was not kept cyan/bold after overlay route:\n%q", ansiOut)
+	if !strings.Contains(ansiOut, ansiBold+ansiBrightCyan) {
+		t.Fatalf("selected border was not highlighted:\n%q", ansiOut)
 	}
-	if strings.Contains(ansiOut, ansiDim+"┬──────────────┐") {
-		t.Fatalf("selected top border was overwritten by edge style:\n%q", ansiOut)
-	}
-	if strings.Contains(ansiOut, ansiBold+ansiBrightCyan+"───┬──────────────┐") {
-		t.Fatalf("selected border style leaked onto connector before box:\n%q", ansiOut)
+	if strings.Contains(ansiOut, ansiDim+"[VM] hello") {
+		t.Fatalf("selected node text was overwritten by edge style:\n%q", ansiOut)
 	}
 }
 
@@ -307,7 +296,7 @@ func assertBorderStyle(t *testing.T, g *grid, r rect, want string) {
 	}
 }
 
-func TestRenderSelectedOverlayRouteMergesWithBottomBorder(t *testing.T) {
+func TestRenderSelectedRouteDoesNotCreateCrossing(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "hello", Type: NodeVM, Label: "hello", State: "missing", X: 24, Y: 2},
@@ -317,8 +306,8 @@ func TestRenderSelectedOverlayRouteMergesWithBottomBorder(t *testing.T) {
 	}
 
 	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 60, 16, false)
-	if !strings.Contains(out, "└───────┬──────┘") {
-		t.Fatalf("selected bottom border did not merge overlay route:\n%s", out)
+	if strings.Contains(out, string(lineCross)) {
+		t.Fatalf("route crossed itself or another route:\n%s", out)
 	}
 }
 
@@ -478,12 +467,12 @@ func TestRenderContextSubmenuHidesForRootAction(t *testing.T) {
 		Selected:        1,
 		Focus:           FocusGraph,
 		ContextMenu:     true,
-		ContextSelected: 2,
+		ContextSelected: 3,
 	}, 100, 30, false)
 	if !strings.Contains(out, " Delete") {
 		t.Fatalf("expected delete root item:\n%s", out)
 	}
-	if strings.Contains(out, "create-vm") {
+	if strings.Contains(out, "add vm") || strings.Contains(out, "create-vm") {
 		t.Fatalf("render shows removed node create submenu:\n%s", out)
 	}
 	if strings.Contains(out, "Run") || strings.Contains(out, "Stop") {
@@ -499,7 +488,7 @@ func TestRenderContextSubmenuIgnoresStaleGroupForRootAction(t *testing.T) {
 		Selected:         1,
 		Focus:            FocusGraph,
 		ContextMenu:      true,
-		ContextSelected:  2,
+		ContextSelected:  3,
 		ContextGroup:     "config-menu",
 		ContextInSubmenu: true,
 	}, 100, 30, false)
@@ -528,6 +517,134 @@ func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
 	}
 	if strings.Contains(out, "State") {
 		t.Fatalf("render contains removed state field:\n%s", out)
+	}
+	if strings.Contains(out, "nic0") {
+		t.Fatalf("render kept NIC detail in config submenu:\n%s", out)
+	}
+}
+
+func TestRenderNICSubmenuShowsNICDetails(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextSelected: 1, ContextGroup: "nic-menu"}, 100, 30, false)
+	for _, want := range []string{
+		" Add NIC",
+		" nic0 → lan",
+		" X ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing NIC submenu item %q:\n%s", want, out)
+		}
+	}
+	ansiOut := RenderString(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    1,
+		ContextGroup:       "nic-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 1,
+		ContextDeleteNIC:   true,
+	}, 100, 30, true)
+	if !strings.Contains(ansiOut, ansiBgRed+ansiWhite+ansiBold+" X ") {
+		t.Fatalf("render did not mark selected nic delete X with red background and white foreground:\n%q", ansiOut)
+	}
+	if strings.Contains(ansiOut, "\x1b[91m"+ansiBold+" X ") {
+		t.Fatalf("render made selected nic delete X red instead of keeping the glyph white:\n%q", ansiOut)
+	}
+	g := renderGrid(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    1,
+		ContextGroup:       "nic-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 1,
+		ContextDeleteNIC:   true,
+	}, 100, 30)
+	node := MockModel().Nodes[1]
+	nodeRect := layoutNodeRects(MockModel(), rect{X: 0, Y: 0, W: 100, H: 30})[node.Key()]
+	rootItems := contextMenuItems(node, "")
+	rootMenuW := contextMenuWidth(rootItems)
+	rootX := nodeRect.X + nodeRect.W + 1
+	rootActive := normalizedMenuSelection(1, len(rootItems))
+	rootMenuH := min(len(rootItems), 30)
+	rootStart := contextMenuStart(rootActive, len(rootItems), rootMenuH)
+	subItems := contextMenuSubmenuItems(node, true, "nic-menu")
+	subMenuW := contextMenuWidth(subItems)
+	subX := rootX + rootMenuW
+	subY := nodeRect.Y + (rootActive - rootStart)
+	nicRowY := subY + 1
+	if got := g.Cells[nicRowY*g.Width+subX+subMenuW-4].Ch; got != ' ' {
+		t.Fatalf("nic delete button gap = %q, want one blank cell before button", got)
+	}
+	rightButton := []rune{' ', 'X', ' '}
+	for offset, want := range rightButton {
+		x := subX + subMenuW - 3 + offset
+		if got := g.Cells[nicRowY*g.Width+x].Ch; got != want {
+			t.Fatalf("nic delete button cell at offset %d = %q, want %q", offset, got, want)
+		}
+	}
+	if strings.Contains(out, "Connect NIC") {
+		t.Fatalf("render kept separate connect action in NIC submenu:\n%s", out)
+	}
+	if strings.Contains(out, " CPU") || strings.Contains(out, " Memory") {
+		t.Fatalf("render leaked configuration fields into NIC submenu:\n%s", out)
+	}
+}
+
+func TestRenderContainerConfigSubmenuDoesNotShowNICSwitch(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 2, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	if strings.Contains(out, "Switch") || strings.Contains(out, "nic0") {
+		t.Fatalf("render kept NIC config in container submenu:\n%s", out)
+	}
+}
+
+func TestRenderConnectTargetNICMenu(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Focus:             FocusGraph,
+		ConnectMode:       true,
+		ConnectNodeID:     "router",
+		ConnectNodeType:   NodeVM,
+		ConnectNICIndex:   "0",
+		ConnectTargetMenu: true,
+		ConnectTargetID:   "client01",
+		ConnectTargetType: NodeVM,
+	}, 100, 30, false)
+	for _, want := range []string{
+		" nic0 → lan",
+		" New NIC",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing connect target menu item %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderConnectModeDrawsDashedPreview(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "vm1", Type: NodeVM, Label: "vm1", State: "defined", X: 2, Y: 2},
+			{ID: "lan", Type: NodeSwitch, Label: "lan", State: "bridge", X: 30, Y: 2},
+		},
+	}
+	g := renderGrid(m, ViewState{
+		Focus:           FocusGraph,
+		Selected:        1,
+		ConnectMode:     true,
+		ConnectNodeID:   "vm1",
+		ConnectNodeType: NodeVM,
+		ConnectNICIndex: "0",
+	}, 70, 20)
+
+	source := layoutNodeRects(m, rect{X: 0, Y: 0, W: 70, H: 20})[NodeKey(NodeVM, "vm1")]
+	y := source.Y + source.H/2
+	if got := g.Cells[y*g.Width+source.X+source.W].Ch; got != previewLineHorizontal {
+		t.Fatalf("connect preview first dash = %q, want %q", got, previewLineHorizontal)
+	}
+	if got := g.Cells[y*g.Width+source.X+source.W+1].Ch; got != ' ' {
+		t.Fatalf("connect preview gap = %q, want blank", got)
+	}
+	if got := g.Cells[y*g.Width+source.X+source.W-1].Ch; got != lineVertical {
+		t.Fatalf("connect preview changed source border = %q, want vertical border", got)
 	}
 }
 
@@ -633,7 +750,7 @@ func TestRenderStatusBarAlwaysVisible(t *testing.T) {
 func TestRenderGlobalContextMenuForEmptyModel(t *testing.T) {
 	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true}, 80, 20, false)
 	for _, want := range []string{
-		"create >",
+		"add >",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing global context item %q:\n%s", want, out)
@@ -650,9 +767,10 @@ func TestRenderGlobalContextMenuForEmptyModel(t *testing.T) {
 func TestRenderGlobalCreateSubmenuForEmptyModel(t *testing.T) {
 	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "create-menu"}, 80, 20, false)
 	for _, want := range []string{
-		"create-vm",
-		"create-switch",
-		"create-external",
+		"add vm",
+		"add cont",
+		"add sw",
+		"create external",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing global create submenu item %q:\n%s", want, out)

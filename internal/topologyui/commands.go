@@ -24,6 +24,8 @@ func (a *App) executeCommand(command string) bool {
 	case "help", "h":
 		a.State.Console = helpLines(commandArg(fields, 1))
 		a.State.Message = ""
+	case "add":
+		a.executeAddCommand(fields)
 	case "vm":
 		a.executeVMCommand(fields)
 	case "container", "ct":
@@ -38,15 +40,37 @@ func (a *App) executeCommand(command string) bool {
 	return false
 }
 
+func (a *App) executeAddCommand(fields []string) {
+	if len(fields) < 3 {
+		a.State.Message = "usage: add <vm|sw|cont> <id> ..."
+		return
+	}
+	args, err := parseArgs(fields[3:])
+	if err != nil {
+		a.State.Message = err.Error()
+		return
+	}
+	switch fields[1] {
+	case "vm":
+		a.vmCreate(fields[2], args)
+	case "sw", "switch":
+		a.switchCreate(fields[2], args)
+	case "cont", "container", "ct":
+		a.containerCreate(fields[2], args)
+	default:
+		a.State.Message = "usage: add <vm|sw|cont> <id> ..."
+	}
+}
+
 func (a *App) executeContainerCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: container <create|set|delete> ..."
+		a.State.Message = "usage: container <create|set|nic|delete> ..."
 		return
 	}
 	switch fields[1] {
 	case "create", "new":
 		if len(fields) < 3 {
-			a.State.Message = "usage: container create <id> image=REF [command=CMD] [switch=ID]"
+			a.State.Message = "usage: container create <id> [image=REF] [command=CMD] [switch=ID]"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -66,6 +90,37 @@ func (a *App) executeContainerCommand(fields []string) {
 			return
 		}
 		a.containerSet(fields[2], args)
+	case "nic":
+		if len(fields) < 3 {
+			a.State.Message = "usage: container nic <add|connect> ..."
+			return
+		}
+		switch fields[2] {
+		case "add":
+			if len(fields) < 4 {
+				a.State.Message = "usage: container nic add <id> [mac=MAC]"
+				return
+			}
+			args, err := parseArgs(fields[4:])
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.containerNICAdd(fields[3], args)
+		case "connect":
+			if len(fields) < 6 {
+				a.State.Message = "usage: container nic connect <id> <index> to=ID [mac=MAC]"
+				return
+			}
+			args, err := parseArgs(fields[5:])
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.containerNICConnect(fields[3], fields[4], args)
+		default:
+			a.State.Message = "unknown container nic command: " + fields[2]
+		}
 	case "delete", "rm":
 		a.containerDelete(commandArg(fields, 2))
 	default:
@@ -145,7 +200,7 @@ func (a *App) executeExternalCommand(fields []string) {
 
 func (a *App) executeVMCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: vm <create|set|delete> ..."
+		a.State.Message = "usage: vm <create|set|nic|delete> ..."
 		return
 	}
 	switch fields[1] {
@@ -171,6 +226,37 @@ func (a *App) executeVMCommand(fields []string) {
 			return
 		}
 		a.vmSet(fields[2], args)
+	case "nic":
+		if len(fields) < 3 {
+			a.State.Message = "usage: vm nic <add|connect> ..."
+			return
+		}
+		switch fields[2] {
+		case "add":
+			if len(fields) < 4 {
+				a.State.Message = "usage: vm nic add <id> [mac=MAC]"
+				return
+			}
+			args, err := parseArgs(fields[4:])
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.vmNICAdd(fields[3], args)
+		case "connect":
+			if len(fields) < 6 {
+				a.State.Message = "usage: vm nic connect <id> <index> to=ID [mac=MAC]"
+				return
+			}
+			args, err := parseArgs(fields[5:])
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.vmNICConnect(fields[3], fields[4], args)
+		default:
+			a.State.Message = "unknown vm nic command: " + fields[2]
+		}
 	case "delete", "rm":
 		a.vmDelete(commandArg(fields, 2))
 	default:
@@ -339,25 +425,35 @@ func helpLines(topic string) []string {
 	case "", "general", "all":
 		return []string{
 			"help: Space opens menu; : opens console; Enter selects; :q quits",
-			"topics: :help vm  :help container  :help switch  :help external",
+			"topics: :help add  :help vm  :help container  :help switch  :help external",
 			"history: Up/Down recall console commands; Escape closes console/menu",
 			"ids: use vm/switch/external ids or node labels",
 		}
+	case "add":
+		return []string{
+			"add vm: :add vm <id> [cpus=N] [memory=N] [switch=ID] [external=ID]",
+			"add sw: :add sw <id> [mode=bridge|nat|macnat-bridge] [external=ID]",
+			"add cont: :add cont <id> [image=REF] [command=CMD] [switch=ID]",
+		}
 	case "vm", "vms":
 		return []string{
-			"vm create: :vm create <id> cpus=N memory=N [switch=ID] [external=ID]",
+			"add vm: :add vm <id> [cpus=N] [memory=N] [switch=ID] [external=ID]",
 			"vm set: :vm set <id> name=.. cpus=N memory=N disk=<path> iso=<path> vnc=true/false",
+			"vm nic add: :vm nic add <id> [mac=MAC]",
+			"vm nic connect: :vm nic connect <id> <index> to=ID [mac=MAC]",
 			"vm delete: :vm delete <id>",
 		}
 	case "container", "containers", "ct":
 		return []string{
-			"container create: :container create <id> image=REF [command=CMD] [switch=ID]",
+			"add cont: :add cont <id> [image=REF] [command=CMD] [switch=ID]",
 			"container set: :container set <id> name=.. image=REF command=CMD switch=ID",
+			"container nic add: :container nic add <id> [mac=MAC]",
+			"container nic connect: :container nic connect <id> <index> to=ID [mac=MAC]",
 			"container delete: :container delete <id>",
 		}
 	case "switch", "switches":
 		return []string{
-			"switch create: :switch create <id> mode=bridge|nat|macnat-bridge external=ID",
+			"add sw: :add sw <id> [mode=bridge|nat|macnat-bridge] [external=ID]",
 			"switch set: :switch set <id> mode=bridge external=ID",
 			"switch delete: :switch delete <id>",
 		}
@@ -370,7 +466,7 @@ func helpLines(topic string) []string {
 	default:
 		return []string{
 			"unknown help topic: " + topic,
-			"topics: :help vm  :help container  :help switch  :help external",
+			"topics: :help add  :help vm  :help container  :help switch  :help external",
 		}
 	}
 }

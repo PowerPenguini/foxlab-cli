@@ -93,8 +93,14 @@ func (a *App) handleKey(key string) bool {
 	if a.State.CommandMode {
 		return a.handleCommandKey(key)
 	}
+	if a.State.ConnectTargetMenu {
+		return a.handleConnectTargetMenuKey(key)
+	}
 	if a.State.ContextMenu {
 		return a.handleContextMenuKey(key)
+	}
+	if a.State.ConnectMode {
+		return a.handleConnectKey(key)
 	}
 	if a.State.MoveMode {
 		return a.handleMoveKey(key)
@@ -132,6 +138,7 @@ func (a *App) handleContextMenuKey(key string) bool {
 	}
 	switch key {
 	case "up", "down":
+		a.State.ContextDeleteNIC = false
 		if a.State.ContextInSubmenu {
 			a.State.ContextSubSelected = MoveContextSelection(a.State.ContextSubSelected, len(subItems), key)
 		} else {
@@ -150,14 +157,26 @@ func (a *App) handleContextMenuKey(key string) bool {
 		a.State.ContextEdit = false
 		a.State.ContextEditValue = ""
 		a.State.ContextEditCursor = 0
+		a.State.ContextDeleteNIC = false
 	case "enter":
 		if a.State.ContextInSubmenu {
 			selected := normalizedMenuSelection(a.State.ContextSubSelected, len(subItems))
 			if len(subItems) > 0 {
 				action := contextMenuAction(subItems[selected])
+				if ok && a.State.ContextDeleteNIC {
+					if index, deleteOK := nicDetailIndex(subItems[selected]); deleteOK {
+						a.runMenuAction(node, "delete-nic:"+index)
+						a.State.ContextMenu = false
+						a.State.ContextGroup = ""
+						a.State.ContextInSubmenu = false
+						a.State.ContextDeleteNIC = false
+						return false
+					}
+				}
 				if isContextGroup(action) {
 					a.State.ContextGroup = action
 					a.State.ContextSubSelected = 0
+					a.State.ContextDeleteNIC = false
 					return false
 				}
 				if ok && isBoolContextItem(subItems[selected]) {
@@ -178,6 +197,7 @@ func (a *App) handleContextMenuKey(key string) bool {
 				a.State.ContextMenu = false
 				a.State.ContextGroup = ""
 				a.State.ContextInSubmenu = false
+				a.State.ContextDeleteNIC = false
 				return false
 			}
 		} else {
@@ -188,6 +208,7 @@ func (a *App) handleContextMenuKey(key string) bool {
 					a.State.ContextGroup = action
 					a.State.ContextInSubmenu = true
 					a.State.ContextSubSelected = 0
+					a.State.ContextDeleteNIC = false
 					return false
 				}
 				if ok {
@@ -198,17 +219,33 @@ func (a *App) handleContextMenuKey(key string) bool {
 				a.State.ContextMenu = false
 				a.State.ContextGroup = ""
 				a.State.ContextInSubmenu = false
+				a.State.ContextDeleteNIC = false
 			} else {
 				a.State.ContextMenu = false
 				a.State.ContextGroup = ""
 				a.State.ContextInSubmenu = false
+				a.State.ContextDeleteNIC = false
 			}
 		}
 	case "left", "right":
+		if a.State.ContextInSubmenu && a.State.ContextGroup == "nic-menu" && len(subItems) > 0 {
+			selected := normalizedMenuSelection(a.State.ContextSubSelected, len(subItems))
+			if isNICDetail(subItems[selected]) {
+				if key == "right" {
+					a.State.ContextDeleteNIC = true
+					return false
+				}
+				if key == "left" && a.State.ContextDeleteNIC {
+					a.State.ContextDeleteNIC = false
+					return false
+				}
+			}
+		}
 		if key == "left" && a.State.ContextInSubmenu {
 			a.State.ContextInSubmenu = false
 			a.State.ContextGroup = ""
 			a.State.ContextSubSelected = 0
+			a.State.ContextDeleteNIC = false
 			return false
 		}
 		if key == "right" && !a.State.ContextInSubmenu {
@@ -217,6 +254,7 @@ func (a *App) handleContextMenuKey(key string) bool {
 				return false
 			}
 			a.State.ContextInSubmenu = true
+			a.State.ContextDeleteNIC = false
 			return false
 		}
 		a.State.ContextMenu = false
@@ -226,6 +264,7 @@ func (a *App) handleContextMenuKey(key string) bool {
 		a.State.ContextEdit = false
 		a.State.ContextEditValue = ""
 		a.State.ContextEditCursor = 0
+		a.State.ContextDeleteNIC = false
 		if ok {
 			a.State.Selected = MoveSelection(a.Model, a.State.Selected, key)
 		}

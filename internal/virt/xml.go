@@ -64,9 +64,18 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 		HasVNC:   vm.VNC,
 	}
 	for index, nic := range vm.Networks {
+		linked := vmNICHasNetworkLink(l, vm.ID, index)
 		switch {
 		case nic.Switch != "" && nic.ExternalLink != "":
 			return "", fmt.Errorf("vm %q network references both switch %q and external link %q", vm.ID, nic.Switch, nic.ExternalLink)
+		case linked && (nic.Switch != "" || nic.ExternalLink != ""):
+			return "", fmt.Errorf("vm %q network nic %d has both direct link and endpoint", vm.ID, index)
+		case linked:
+			data.Networks = append(data.Networks, domainNetworkXMLData{
+				Kind:      "ethernet",
+				TargetDev: hostnet.VMTapName(l, vm, index),
+				MAC:       nic.MAC,
+			})
 		case nic.Switch != "":
 			_, ok := findSwitch(l, nic.Switch)
 			if !ok {
@@ -92,7 +101,7 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 				MAC:        nic.MAC,
 			})
 		default:
-			return "", fmt.Errorf("vm %q network must reference a switch or external link", vm.ID)
+			continue
 		}
 	}
 	var buf bytes.Buffer
@@ -182,6 +191,17 @@ func findExternalLink(l *lab.Lab, id string) (lab.ExternalLink, bool) {
 		}
 	}
 	return lab.ExternalLink{}, false
+}
+
+func vmNICHasNetworkLink(l *lab.Lab, id string, index int) bool {
+	for _, link := range l.NetworkLinks {
+		for _, endpoint := range []lab.NetworkEndpoint{link.From, link.To} {
+			if endpoint.Type == "vm" && endpoint.ID == id && endpoint.NIC == index {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func detectImageFormat(path string) string {

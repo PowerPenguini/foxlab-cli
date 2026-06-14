@@ -86,6 +86,7 @@ func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
 
 	app.handleKey("space")
 	app.handleKey("down")
+	app.handleKey("down")
 	if app.State.ContextGroup != "" {
 		t.Fatalf("context group after moving to action = %q, want empty", app.State.ContextGroup)
 	}
@@ -194,6 +195,7 @@ func TestContextMenuMoveSavesLayout(t *testing.T) {
 	}
 
 	app.handleKey("space")
+	app.handleKey("down")
 	app.handleKey("down")
 	app.handleKey("enter")
 	if !app.State.MoveMode {
@@ -310,6 +312,27 @@ func TestRunInteractiveUpdatesMoveBoundsFromTerminalSize(t *testing.T) {
 	maxX, maxY := app.moveBounds()
 	if maxX != 104 || maxY != 35 {
 		t.Fatalf("move bounds = %d,%d, want 104,35", maxX, maxY)
+	}
+}
+
+func TestRunInteractiveSkipsRenderOnEmptyKeyTimeout(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	start := func(*App) (func(), error) { return func() {}, nil }
+	keys := []string{"", "", "quit"}
+	read := func(*App) (string, error) {
+		key := keys[0]
+		keys = keys[1:]
+		return key, nil
+	}
+	size := func(*App) (int, int) { return 80, 20 }
+
+	if err := app.runInteractive(start, read, size); err != nil {
+		t.Fatal(err)
+	}
+
+	got := outputFileString(t, app.Out)
+	if count := strings.Count(got, ansiMoveHome); count != 1 {
+		t.Fatalf("render count = %d, want 1; output=%q", count, got)
 	}
 }
 
@@ -543,8 +566,9 @@ func TestCommandHelpTopics(t *testing.T) {
 		command string
 		want    string
 	}{
-		{"help vm", "vm create:"},
-		{"help switch", "switch create:"},
+		{"help add", "add vm:"},
+		{"help vm", "add vm:"},
+		{"help switch", "add sw:"},
 		{"help external", "external create:"},
 		{"help wat", "unknown help topic: wat"},
 	}
@@ -625,9 +649,9 @@ func TestCommandRejectsIncrementSuffixVMArgs(t *testing.T) {
 		t.Fatalf("vm set invalid args message = %q", app.State.Message)
 	}
 
-	app.executeCommand("vm create vm2 mem-=512")
+	app.executeCommand("add vm vm2 mem-=512")
 	if !strings.Contains(app.State.Message, "unsupported increment syntax") {
-		t.Fatalf("vm create invalid args message = %q", app.State.Message)
+		t.Fatalf("add vm invalid args message = %q", app.State.Message)
 	}
 }
 
@@ -748,7 +772,7 @@ func TestCommandVMCreateSavesLab(t *testing.T) {
 		State:   ViewState{Focus: FocusGraph},
 	}
 
-	app.executeCommand("vm create vm1 cpus=4 memory=4096 switch=lan")
+	app.executeCommand("add vm vm1 cpus=4 memory=4096 switch=lan")
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -785,7 +809,7 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 		State:   ViewState{Focus: FocusGraph},
 	}
 
-	app.executeCommand(`container create web image=docker.io/library/nginx:latest command="nginx -g daemon" switch=lan`)
+	app.executeCommand(`add cont web image=docker.io/library/nginx:latest command="nginx -g daemon" switch=lan`)
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -806,6 +830,44 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 	}
 }
 
+func TestCommandAddCreatesGraphNodesWithMinimalData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	if err := lab.SaveFile(path, &lab.Lab{ID: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.executeCommand("add vm vm1")
+	app.executeCommand("add sw sw1")
+	app.executeCommand("add cont web")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.VMs) != 1 || reloaded.VMs[0].ID != "vm1" {
+		t.Fatalf("minimal vm was not saved: %#v", reloaded.VMs)
+	}
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "sw1" {
+		t.Fatalf("minimal switch was not saved: %#v", reloaded.Switches)
+	}
+	if len(reloaded.Containers) != 1 || reloaded.Containers[0].ID != "web" || reloaded.Containers[0].Image == "" {
+		t.Fatalf("minimal container was not saved with placeholder image: %#v", reloaded.Containers)
+	}
+	if len(app.Model.Nodes) != 3 {
+		t.Fatalf("minimal add did not refresh graph nodes: %#v", app.Model.Nodes)
+	}
+}
+
 func TestCommandVMCreateUsesDiskPathOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	if err := lab.SaveFile(path, &lab.Lab{ID: "demo"}); err != nil {
@@ -822,7 +884,7 @@ func TestCommandVMCreateUsesDiskPathOnly(t *testing.T) {
 		State:   ViewState{Focus: FocusGraph},
 	}
 
-	app.executeCommand("vm create vm1 disk=explicit/path/test.qcow2")
+	app.executeCommand("add vm vm1 disk=explicit/path/test.qcow2")
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -885,6 +947,79 @@ func TestCommandVMSetAcceptsQuotedValues(t *testing.T) {
 	}
 }
 
+func TestCommandVMNICAddAndConnect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		VMs:           []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{Switch: "lan"}}}},
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}, {ID: "wan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("vm nic add vm1 mac=02:00:00:00:00:22")
+	app.executeCommand("vm nic add vm1")
+	app.executeCommand("vm nic connect vm1 1 to=wan")
+	app.executeCommand("vm nic connect vm1 2 to=uplink1")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networks := reloaded.VMs[0].Networks
+	if len(networks) != 3 {
+		t.Fatalf("vm networks count = %d, want 3: %#v", len(networks), networks)
+	}
+	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:22" || networks[2].ExternalLink != "uplink1" {
+		t.Fatalf("vm networks = %#v", networks)
+	}
+	if len(app.Model.Edges) != 3 {
+		t.Fatalf("model edges = %#v, want 3", app.Model.Edges)
+	}
+}
+
+func TestCommandContainerNICAddAndConnect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+		Switches:   []lab.Switch{{ID: "lan", Mode: "bridge"}, {ID: "wan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("container nic add web mac=02:00:00:00:00:33")
+	app.executeCommand("container nic connect web 1 to=wan")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networks := reloaded.Containers[0].Networks
+	if len(networks) != 2 {
+		t.Fatalf("container networks count = %d, want 2: %#v", len(networks), networks)
+	}
+	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:33" {
+		t.Fatalf("container networks = %#v", networks)
+	}
+	if len(app.Model.Edges) != 2 {
+		t.Fatalf("model edges = %#v, want 2", app.Model.Edges)
+	}
+}
+
 func TestCommandReportsUnterminatedQuote(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 	app.executeCommand(`vm set vm1 name="unterminated`)
@@ -931,7 +1066,7 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("external create uplink1 interface=br0")
-	app.executeCommand("switch create lan mode=bridge external=uplink1")
+	app.executeCommand("add sw lan mode=bridge external=uplink1")
 	app.executeCommand("switch set lan mode=nat external=uplink1")
 
 	reloaded, err := lab.LoadFile(path)
@@ -963,39 +1098,56 @@ func TestContextMenuGlobalCreateCommands(t *testing.T) {
 		State: ViewState{Focus: FocusGraph},
 	}
 
-	app.runGlobalMenuAction("create-vm")
-	if app.State.Command != "vm create vm1 cpus=2 memory=2048" {
-		t.Fatalf("global create-vm command = %q", app.State.Command)
+	app.runGlobalMenuAction("add vm")
+	if app.State.Command != "add vm vm1" {
+		t.Fatalf("global add vm command = %q", app.State.Command)
 	}
 
-	app.runGlobalMenuAction("create-switch")
-	if !strings.Contains(app.State.Command, "switch create sw1") {
-		t.Fatalf("global create-switch command = %q", app.State.Command)
+	app.runGlobalMenuAction("add sw")
+	if app.State.Command != "add sw sw1" {
+		t.Fatalf("global add sw command = %q", app.State.Command)
 	}
 
-	app.runGlobalMenuAction("create-external")
+	app.runGlobalMenuAction("add cont")
+	if app.State.Command != "add cont ct1" {
+		t.Fatalf("global add cont command = %q", app.State.Command)
+	}
+
+	app.runGlobalMenuAction("create external")
 	if !strings.Contains(app.State.Command, "external create uplink1") {
-		t.Fatalf("global create-external command = %q", app.State.Command)
+		t.Fatalf("global create external command = %q", app.State.Command)
 	}
 }
 
 func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			Name:     "web server",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     "labs/demo/disks/web server.qcow2",
+			ISO:      "images/debian 12.iso",
+			Networks: []lab.VMNetwork{{}},
+		}},
+		Containers:    []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{}}}},
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Name: "office uplink", Interface: "enp 1s0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	app := App{
-		Model: MockModel(),
-		Lab: &lab.Lab{
-			ID: "demo",
-			VMs: []lab.VM{{
-				ID:       "vm1",
-				Name:     "web server",
-				MemoryMB: 2048,
-				CPUs:     2,
-				Disk:     "labs/demo/disks/web server.qcow2",
-				ISO:      "images/debian 12.iso",
-			}},
-			Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
-			ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Name: "office uplink", Interface: "enp 1s0"}},
-		},
-		State: ViewState{Focus: FocusGraph},
+		Model:   MockModel(),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
@@ -1023,13 +1175,298 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		t.Fatalf("name command = %q", app.State.Command)
 	}
 
-	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "create-switch")
-	if !strings.HasPrefix(app.State.Command, "switch create ") || !strings.Contains(app.State.Command, " external=uplink1") {
-		t.Fatalf("create-switch command = %q", app.State.Command)
+	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "add sw")
+	if !strings.HasPrefix(app.State.Command, "add sw ") || !strings.Contains(app.State.Command, " external=uplink1") {
+		t.Fatalf("add sw command = %q", app.State.Command)
 	}
 
-	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "create-vm")
+	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "add vm")
 	if !strings.Contains(app.State.Command, " switch=lan") {
-		t.Fatalf("switch create-vm command = %q", app.State.Command)
+		t.Fatalf("switch add vm command = %q", app.State.Command)
 	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "add-nic")
+	if app.State.Command != "vm nic add vm1" {
+		t.Fatalf("vm add-nic command = %q", app.State.Command)
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	if !app.State.ConnectMode || app.State.ConnectNodeID != "vm1" || app.State.ConnectNICIndex != "0" {
+		t.Fatalf("vm connect-nic state = %#v", app.State)
+	}
+	app.State.ConnectMode = false
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "add-nic")
+	if app.State.Command != "container nic add web" {
+		t.Fatalf("container add-nic command = %q", app.State.Command)
+	}
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
+	if !app.State.ConnectMode || app.State.ConnectNodeID != "web" || app.State.ConnectNICIndex != "0" {
+		t.Fatalf("container connect-nic state = %#v", app.State)
+	}
+}
+
+func TestConnectNICModeSelectsEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	if !app.State.ConnectMode {
+		t.Fatalf("connect mode not started: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "lan" || node.Type != NodeSwitch {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	app.handleKey("enter")
+	if app.State.ConnectMode {
+		t.Fatal("connect mode did not finish after selecting endpoint")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Networks[0].Switch != "lan" {
+		t.Fatalf("vm networks = %#v", reloaded.VMs[0].Networks)
+	}
+}
+
+func TestNICSubmenuNICDetailStartsConnectMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:              FocusGraph,
+			ContextMenu:        true,
+			ContextGroup:       "nic-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 1,
+		},
+	}
+
+	app.handleKey("enter")
+	if !app.State.ConnectMode || app.State.ConnectNodeID != "vm1" || app.State.ConnectNICIndex != "0" {
+		t.Fatalf("nic detail did not start connect mode for nic0: %#v", app.State)
+	}
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after choosing nic detail")
+	}
+}
+
+func TestNICSubmenuDeleteXRemovesNIC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     "labs/demo/disks/vm1.qcow2",
+			Networks: []lab.VMNetwork{{}, {}},
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:              FocusGraph,
+			ContextMenu:        true,
+			ContextGroup:       "nic-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 1,
+		},
+	}
+
+	app.handleKey("right")
+	if !app.State.ContextDeleteNIC {
+		t.Fatal("right on nic detail did not select delete X")
+	}
+	app.handleKey("enter")
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after deleting nic")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.VMs[0].Networks) != 1 {
+		t.Fatalf("vm networks = %#v, want one nic after delete", reloaded.VMs[0].Networks)
+	}
+}
+
+func TestConnectNICDetachThenEscapeLeavesNICEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{Switch: "lan"}}}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}, {ID: "wan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Networks[0].Switch != "" || reloaded.VMs[0].Networks[0].ExternalLink != "" {
+		t.Fatalf("source nic was not detached before endpoint selection: %#v", reloaded.VMs[0].Networks[0])
+	}
+
+	app.handleKey("escape")
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.State.ConnectMode {
+		t.Fatal("connect mode stayed active after escape")
+	}
+	if reloaded.VMs[0].Networks[0].Switch != "" || reloaded.VMs[0].Networks[0].ExternalLink != "" {
+		t.Fatalf("source nic was reconnected after cancel: %#v", reloaded.VMs[0].Networks[0])
+	}
+}
+
+func TestConnectNICModeCreatesDirectWorkloadLink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm2.qcow2", Networks: []lab.VMNetwork{{Switch: "lan"}, {}}},
+		},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	if !app.State.ConnectMode {
+		t.Fatalf("connect mode not started: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "vm2" || node.Type != NodeVM {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	app.handleKey("enter")
+	if !app.State.ConnectMode || !app.State.ConnectTargetMenu || app.State.ConnectTargetID != "vm2" {
+		t.Fatalf("target nic menu did not open after selecting workload endpoint: %#v", app.State)
+	}
+	app.State.ConnectTargetIndex = 1
+	app.handleKey("enter")
+	if app.State.ConnectMode || app.State.ConnectTargetMenu {
+		t.Fatal("connect mode did not finish after selecting target nic")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.NetworkLinks) != 1 {
+		t.Fatalf("network links = %#v", reloaded.NetworkLinks)
+	}
+	link := reloaded.NetworkLinks[0]
+	if link.From.Type != "vm" || link.From.ID != "vm1" || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 1 {
+		t.Fatalf("network link = %#v", link)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeVM, "vm1"), NodeKey(NodeVM, "vm2")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+}
+
+func TestConnectNICModeCanCreateTargetNIC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm2.qcow2"},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	app.handleKey("enter")
+	if !app.State.ConnectTargetMenu {
+		t.Fatalf("target nic menu not open: %#v", app.State)
+	}
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.VMs[1].Networks) != 1 {
+		t.Fatalf("target networks = %#v, want newly-created nic", reloaded.VMs[1].Networks)
+	}
+	if len(reloaded.NetworkLinks) != 1 {
+		t.Fatalf("network links = %#v", reloaded.NetworkLinks)
+	}
+	link := reloaded.NetworkLinks[0]
+	if link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 0 {
+		t.Fatalf("network link target = %#v", link)
+	}
+}
+
+func hasEdge(m Model, from, to string) bool {
+	for _, edge := range m.Edges {
+		if edge.From == from && edge.To == to {
+			return true
+		}
+	}
+	return false
 }

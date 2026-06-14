@@ -1,6 +1,10 @@
 package topologyui
 
-import "io"
+import (
+	"container/heap"
+	"io"
+	"sort"
+)
 
 const (
 	FocusGraph = 0
@@ -13,6 +17,11 @@ const (
 	nodeHeight = 4
 )
 
+const (
+	previewLineHorizontal = '╌'
+	previewLineVertical   = '╎'
+)
+
 type ViewState struct {
 	Selected           int
 	Focus              int
@@ -22,6 +31,7 @@ type ViewState struct {
 	ContextInSubmenu   bool
 	ContextSelected    int
 	ContextSubSelected int
+	ContextDeleteNIC   bool
 	ContextEdit        bool
 	ContextEditValue   string
 	ContextEditCursor  int
@@ -30,6 +40,14 @@ type ViewState struct {
 	MoveNodeType       string
 	MoveStartX         int
 	MoveStartY         int
+	ConnectMode        bool
+	ConnectNodeID      string
+	ConnectNodeType    string
+	ConnectNICIndex    string
+	ConnectTargetMenu  bool
+	ConnectTargetID    string
+	ConnectTargetType  string
+	ConnectTargetIndex int
 	CommandMode        bool
 	Command            string
 	Console            []string
@@ -55,27 +73,20 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 	graph := rect{X: 0, Y: 0, W: width, H: height}
 
 	nodeRects := layoutNodeRects(m, graph)
-	visibleEdges := map[Edge]edgeRoute{}
-	for _, edge := range m.Edges {
-		from := nodeRects[edge.From]
-		to := nodeRects[edge.To]
-		if rectFullyVisible(from, graph) && rectFullyVisible(to, graph) {
-			if route, ok := drawEdge(g, from, to, graph); ok {
-				visibleEdges[edge] = route
-			}
-		}
+	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
+	visibleEdges := planVisibleRoutes(planner, m.Edges, nodeRects, graph)
+	for _, visible := range visibleEdges {
+		drawRoutedEdge(g, visible.route, ansiDim)
 	}
+	drawConnectPreview(g, m, state, nodeRects, graph, planner)
 	for i, node := range m.Nodes {
 		nodeRect := nodeRects[node.Key()]
 		if rectFullyVisible(nodeRect, graph) {
 			drawNode(g, node, nodeRect, i == normalizedSelected(m, state.Selected), state.Focus == FocusGraph)
 		}
 	}
-	for edge, route := range visibleEdges {
-		if route.overlay {
-			drawEdgeRoute(g, route)
-		}
-		drawEdgePorts(g, nodeRects[edge.From], nodeRects[edge.To], route)
+	for _, visible := range visibleEdges {
+		drawRoutedEdgePorts(g, visible.route)
 	}
 	for i, node := range m.Nodes {
 		nodeRect := nodeRects[node.Key()]
@@ -84,6 +95,7 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 		}
 	}
 	drawContextMenu(g, m, state, nodeRects, graph)
+	drawConnectTargetMenu(g, m, state, nodeRects, graph)
 	drawConsole(g, state, width, height)
 	return g
 }
@@ -177,7 +189,7 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 	y = clamp(y, bounds.Y, bounds.Y+bounds.H-rootMenuH)
 	rootMenu := rect{X: x, Y: y, W: rootMenuW, H: rootMenuH}
 
-	drawContextMenuItems(g, rootMenu, items, rootActive, rootStart, state.ContextInSubmenu == false, false, "", 0)
+	drawContextMenuItems(g, rootMenu, items, rootActive, rootStart, state.ContextInSubmenu == false, false, "", 0, false)
 
 	rootContextGroup := activeRootContextGroup(items, rootActive)
 	if rootContextGroup == "" {
@@ -215,10 +227,78 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 	}
 	subY = clamp(subY, bounds.Y, bounds.Y+bounds.H-subMenuH)
 	subMenu := rect{X: subX, Y: subY, W: subMenuW, H: subMenuH}
-	drawContextMenuItems(g, subMenu, subItems, subActive, subStart, state.ContextInSubmenu, state.ContextEdit, state.ContextEditValue, state.ContextEditCursor)
+	drawContextMenuItems(g, subMenu, subItems, subActive, subStart, state.ContextInSubmenu, state.ContextEdit, state.ContextEditValue, state.ContextEditCursor, contextGroup == "nic-menu" && state.ContextDeleteNIC)
 }
 
-func drawContextMenuItems(g *grid, menu rect, items []string, active, start int, isActive bool, editing bool, editValue string, editCursor int) {
+func drawConnectTargetMenu(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect) {
+	if !state.ConnectTargetMenu {
+		return
+	}
+	node, ok := nodeByKey(m, NodeKey(state.ConnectTargetType, state.ConnectTargetID))
+	if !ok {
+		return
+	}
+	items := connectTargetNICMenuItems(node)
+	if len(items) == 0 {
+		return
+	}
+	nodeRect, ok := nodeRects[node.Key()]
+	if !ok {
+		return
+	}
+	menuH := min(len(items), max(1, bounds.H))
+	active := normalizedMenuSelection(state.ConnectTargetIndex, len(items))
+	start := contextMenuStart(active, len(items), menuH)
+	menuW := contextMenuWidth(items)
+	x := nodeRect.X + nodeRect.W + 1
+	if x+menuW > bounds.X+bounds.W {
+		x = nodeRect.X - menuW - 1
+	}
+	x = clamp(x, bounds.X, bounds.X+bounds.W-menuW)
+	y := nodeRect.Y
+	if y+menuH > bounds.Y+bounds.H {
+		y = bounds.Y + bounds.H - menuH
+	}
+	y = clamp(y, bounds.Y, bounds.Y+bounds.H-menuH)
+	drawContextMenuItems(g, rect{X: x, Y: y, W: menuW, H: menuH}, items, active, start, true, false, "", 0, false)
+}
+
+func drawConnectPreview(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect, planner *routePlanner) {
+	if !state.ConnectMode {
+		return
+	}
+	sourceKey := NodeKey(state.ConnectNodeType, state.ConnectNodeID)
+	targetKey := connectPreviewTargetKey(m, state)
+	if targetKey == "" || targetKey == sourceKey {
+		return
+	}
+	from, ok := nodeRects[sourceKey]
+	if !ok || !rectFullyVisible(from, bounds) {
+		return
+	}
+	to, ok := nodeRects[targetKey]
+	if !ok || !rectFullyVisible(to, bounds) {
+		return
+	}
+	route, ok := planner.planRoute(from, to)
+	if !ok {
+		return
+	}
+	drawDashedRoute(g, route)
+}
+
+func connectPreviewTargetKey(m Model, state ViewState) string {
+	if state.ConnectTargetMenu {
+		return NodeKey(state.ConnectTargetType, state.ConnectTargetID)
+	}
+	node, ok := selectedNode(m, state.Selected)
+	if !ok {
+		return ""
+	}
+	return node.Key()
+}
+
+func drawContextMenuItems(g *grid, menu rect, items []string, active, start int, isActive bool, editing bool, editValue string, editCursor int, deleteNICSelected bool) {
 	for row := 0; row < menu.H; row++ {
 		i := start + row
 		item := items[i]
@@ -233,7 +313,18 @@ func drawContextMenuItems(g *grid, menu rect, items []string, active, start int,
 		}
 		fillRow(g, menu.X, menu.Y+row, menu.W, rowStyle)
 		g.Set(menu.X, menu.Y+row, ' ', indicatorStyle)
-		g.Text(menu.X+2, menu.Y+row, fit(item, menu.W-3), rowStyle)
+		textWidth := menu.W - 3
+		if isNICDetail(item) {
+			textWidth = max(0, menu.W-6)
+		}
+		g.Text(menu.X+2, menu.Y+row, fit(item, textWidth), rowStyle)
+		if isNICDetail(item) {
+			xStyle := rowStyle
+			if isActive && i == active && deleteNICSelected {
+				xStyle = ansiBgRed + ansiWhite + ansiBold
+			}
+			g.Text(menu.X+menu.W-3, menu.Y+row, " X ", xStyle)
+		}
 	}
 }
 
@@ -266,190 +357,692 @@ func drawConsoleLines(g *grid, lines []string, width, height int, commandMode bo
 	}
 }
 
+type routePoint struct {
+	X int
+	Y int
+}
+
+type routeSide int
+
+const (
+	routeSideLeft routeSide = iota
+	routeSideRight
+	routeSideTop
+	routeSideBottom
+)
+
+type routePort struct {
+	border routePoint
+	entry  routePoint
+	side   routeSide
+	rank   int
+}
+
 type edgeRoute struct {
-	vertical    bool
-	overlay     bool
-	x1          int
-	y1          int
-	x2          int
-	y2          int
-	startAttach lineMask
-	endAttach   lineMask
+	cells     []routePoint
+	start     routePort
+	end       routePort
+	cost      int
+	pairScore int
+}
+
+type visibleEdge struct {
+	edge  Edge
+	route edgeRoute
+}
+
+type routePlanner struct {
+	bounds   rect
+	nodes    []rect
+	occupied map[routePoint]lineMask
+}
+
+type routePortPair struct {
+	start routePort
+	end   routePort
+	score int
+	index int
+}
+
+const (
+	noDirection    = -1
+	directionUp    = 0
+	directionRight = 1
+	directionDown  = 2
+	directionLeft  = 3
+	maxRoutePairs  = 10
+	maxRoutePorts  = 12
+)
+
+func visibleNodeRects(nodeRects map[string]rect, bounds rect) []rect {
+	out := make([]rect, 0, len(nodeRects))
+	for _, r := range nodeRects {
+		if rectFullyVisible(r, bounds) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func newRoutePlanner(bounds rect, nodes []rect) *routePlanner {
+	return &routePlanner{
+		bounds:   bounds,
+		nodes:    nodes,
+		occupied: map[routePoint]lineMask{},
+	}
+}
+
+func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string]rect, bounds rect) []visibleEdge {
+	visible := []visibleEdge{}
+	orderedEdges := append([]Edge(nil), edges...)
+	sort.SliceStable(orderedEdges, func(i, j int) bool {
+		return edgeRoutePriority(orderedEdges[i], nodeRects) < edgeRoutePriority(orderedEdges[j], nodeRects)
+	})
+	for _, edge := range orderedEdges {
+		from := nodeRects[edge.From]
+		to := nodeRects[edge.To]
+		if !rectFullyVisible(from, bounds) || !rectFullyVisible(to, bounds) {
+			continue
+		}
+		route, ok := planner.planRoute(from, to)
+		if !ok {
+			continue
+		}
+		planner.reserve(route)
+		visible = append(visible, visibleEdge{edge: edge, route: route})
+	}
+	return visible
+}
+
+func edgeRoutePriority(edge Edge, nodeRects map[string]rect) int {
+	from := nodeRects[edge.From]
+	to := nodeRects[edge.To]
+	fromCenterX := from.X + from.W/2
+	fromCenterY := from.Y + from.H/2
+	toCenterX := to.X + to.W/2
+	toCenterY := to.Y + to.H/2
+	return min(fromCenterY, toCenterY)*10000 + abs(fromCenterY-toCenterY)*100 + abs(fromCenterX-toCenterX)
 }
 
 func drawEdge(g *grid, from, to rect, bounds rect) (edgeRoute, bool) {
-	route, ok := planEdgeRoute(from, to, bounds)
+	planner := newRoutePlanner(bounds, []rect{from, to})
+	route, ok := planner.planRoute(from, to)
 	if !ok {
 		return edgeRoute{}, false
 	}
-	if route.overlay {
-		return route, true
-	}
-	drawEdgeRoute(g, route)
+	drawRoutedEdge(g, route, ansiDim)
 	return route, true
 }
 
-func drawEdgeRoute(g *grid, route edgeRoute) {
-	if route.overlay && route.vertical {
-		lineV(g, route.x1, route.y1, route.y2)
-		lineHAttached(g, route.x1, route.x2, route.y2, 0, route.endAttach, ansiDim)
-		return
-	}
-	if route.vertical {
-		if route.x1 == route.x2 {
-			lineVAttached(g, route.x1, route.y1, route.y2, route.startAttach, route.endAttach, ansiDim)
-			return
-		}
-		mid := (route.y1 + route.y2) / 2
-		lineVAttached(g, route.x1, route.y1, mid, route.startAttach, 0, ansiDim)
-		lineH(g, route.x1, route.x2, mid)
-		lineVAttached(g, route.x2, mid, route.y2, 0, route.endAttach, ansiDim)
-		return
-	}
-	if route.y1 == route.y2 {
-		lineHAttached(g, route.x1, route.x2, route.y1, route.startAttach, route.endAttach, ansiDim)
-		return
-	}
-	mid := (route.x1 + route.x2) / 2
-	lineHAttached(g, route.x1, mid, route.y1, route.startAttach, 0, ansiDim)
-	lineV(g, mid, route.y1, route.y2)
-	lineHAttached(g, mid, route.x2, route.y2, 0, route.endAttach, ansiDim)
-}
-
-func planEdgeRoute(from, to rect, bounds rect) (edgeRoute, bool) {
-	if from.W == 0 || to.W == 0 {
+func (p *routePlanner) planRoute(from, to rect) (edgeRoute, bool) {
+	if from.W < 2 || from.H < 2 || to.W < 2 || to.H < 2 {
 		return edgeRoute{}, false
 	}
-	fromCenterX := from.X + from.W/2
-	fromCenterY := from.Y + from.H/2
-	toCenterX := to.X + to.W/2
-	toCenterY := to.Y + to.H/2
-
-	vertical := edgeRoute{vertical: true, x1: fromCenterX, x2: toCenterX}
-	if toCenterY > fromCenterY {
-		vertical.y1 = from.Y + from.H
-		vertical.y2 = to.Y - 1
-		vertical.startAttach = lineUp
-		vertical.endAttach = lineDown
-	} else {
-		vertical.y1 = from.Y - 1
-		vertical.y2 = to.Y + to.H
-		vertical.startAttach = lineDown
-		vertical.endAttach = lineUp
+	pairs := rankedPortPairs(portCandidates(from, to, p.bounds), portCandidates(to, from, p.bounds))
+	if len(pairs) == 0 {
+		return edgeRoute{}, false
 	}
-	verticalOK := routeInside(vertical, bounds) && ((toCenterY > fromCenterY && vertical.y1 <= vertical.y2) || (toCenterY < fromCenterY && vertical.y1 >= vertical.y2))
-	if !verticalOK {
-		if route, ok := adjacentVerticalRoute(from, to, bounds); ok {
-			return route, true
+	best := edgeRoute{}
+	bestOK := false
+	for _, pair := range pairs {
+		cells, cost, ok := p.simplePath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end))
+		if !ok {
+			continue
+		}
+		cost += pair.score
+		if !bestOK || cost < best.cost || (cost == best.cost && routeTieBreak(cells, pair, best)) {
+			best = edgeRoute{cells: cells, start: pair.start, end: pair.end, cost: cost, pairScore: pair.score}
+			bestOK = true
 		}
 	}
-
-	horizontal := edgeRoute{y1: fromCenterY, y2: toCenterY}
-	if toCenterX < fromCenterX {
-		horizontal.x1 = from.X - 1
-		horizontal.x2 = to.X + to.W
-		horizontal.startAttach = lineRight
-		horizontal.endAttach = lineLeft
-	} else {
-		horizontal.x1 = from.X + from.W
-		horizontal.x2 = to.X - 1
-		horizontal.startAttach = lineLeft
-		horizontal.endAttach = lineRight
+	if bestOK {
+		return best, true
 	}
-	horizontalOK := routeInside(horizontal, bounds) && ((toCenterX > fromCenterX && horizontal.x1 <= horizontal.x2) || (toCenterX < fromCenterX && horizontal.x1 >= horizontal.x2))
+	for i, pair := range pairs {
+		if i >= maxRoutePairs && bestOK {
+			break
+		}
+		cells, cost, ok := p.shortestPath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end))
+		if !ok {
+			continue
+		}
+		cost += pair.score
+		if !bestOK || cost < best.cost || (cost == best.cost && routeTieBreak(cells, pair, best)) {
+			best = edgeRoute{cells: cells, start: pair.start, end: pair.end, cost: cost, pairScore: pair.score}
+			bestOK = true
+		}
+	}
+	return best, bestOK
+}
 
-	verticalPreferred := horizontalOverlap(from, to) || abs(toCenterY-fromCenterY) >= abs(toCenterX-fromCenterX)
-	switch {
-	case verticalOK && (verticalPreferred || !horizontalOK):
-		return vertical, true
-	case horizontalOK:
-		return horizontal, true
-	case verticalOK:
-		return vertical, true
+func (p *routePlanner) simplePath(start, goal routePoint, startDir, goalDir int) ([]routePoint, int, bool) {
+	waypointSets := [][]routePoint{
+		{start, goal},
+		{start, {X: goal.X, Y: start.Y}, goal},
+		{start, {X: start.X, Y: goal.Y}, goal},
+	}
+	for _, x := range routeXLanes(start, goal, startDir, goalDir) {
+		waypointSets = append(waypointSets, []routePoint{{X: start.X, Y: start.Y}, {X: x, Y: start.Y}, {X: x, Y: goal.Y}, {X: goal.X, Y: goal.Y}})
+	}
+	for _, y := range routeYLanes(start, goal, startDir, goalDir) {
+		waypointSets = append(waypointSets, []routePoint{{X: start.X, Y: start.Y}, {X: start.X, Y: y}, {X: goal.X, Y: y}, {X: goal.X, Y: goal.Y}})
+	}
+
+	bestCells := []routePoint{}
+	bestCost := 0
+	bestOK := false
+	for _, waypoints := range waypointSets {
+		cells, ok := pathCellsFromWaypoints(waypoints)
+		if !ok || !p.pathClear(cells, start, goal) {
+			continue
+		}
+		cost := p.routePathCost(cells, start, goal, startDir, goalDir)
+		if !bestOK || cost < bestCost || (cost == bestCost && len(cells) < len(bestCells)) {
+			bestCells = cells
+			bestCost = cost
+			bestOK = true
+		}
+	}
+	return bestCells, bestCost, bestOK
+}
+
+func routeXLanes(start, goal routePoint, startDir, goalDir int) []int {
+	out := []int{(start.X + goal.X) / 2}
+	if dx := directionDX(startDir); dx != 0 {
+		out = append(out, start.X+dx*nodeWidth)
+	}
+	if dx := directionDX(goalDir); dx != 0 {
+		out = append(out, goal.X-dx*nodeWidth)
+	}
+	return uniqueInts(out)
+}
+
+func routeYLanes(start, goal routePoint, startDir, goalDir int) []int {
+	out := []int{(start.Y + goal.Y) / 2}
+	if dy := directionDY(startDir); dy != 0 {
+		out = append(out, start.Y+dy*nodeHeight)
+	}
+	if dy := directionDY(goalDir); dy != 0 {
+		out = append(out, goal.Y-dy*nodeHeight)
+	}
+	return uniqueInts(out)
+}
+
+func uniqueInts(values []int) []int {
+	out := []int{}
+	seen := map[int]bool{}
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func directionDX(dir int) int {
+	switch dir {
+	case directionRight:
+		return 1
+	case directionLeft:
+		return -1
 	default:
-		return edgeRoute{}, false
+		return 0
 	}
 }
 
-func adjacentVerticalRoute(from, to rect, bounds rect) (edgeRoute, bool) {
-	fromCenterX := from.X + from.W/2
-	fromCenterY := from.Y + from.H/2
-	toCenterX := to.X + to.W/2
-	toCenterY := to.Y + to.H/2
-	if abs(toCenterY-fromCenterY) > nodeHeight || abs(toCenterX-fromCenterX) > nodeWidth {
-		return edgeRoute{}, false
+func directionDY(dir int) int {
+	switch dir {
+	case directionDown:
+		return 1
+	case directionUp:
+		return -1
+	default:
+		return 0
 	}
-	upper := from
-	lower := to
-	if toCenterY < fromCenterY {
-		upper = to
-		lower = from
-	}
-	if gap := lower.Y - (upper.Y + upper.H); gap < 0 || gap > 1 {
-		return edgeRoute{}, false
-	}
-	route := edgeRoute{
-		vertical: true,
-		overlay:  true,
-		x1:       upper.X + upper.W/2,
-		y1:       upper.Y + upper.H - 1,
-		x2:       lower.X + lower.W/2,
-		y2:       lower.Y,
-	}
-	if !routeInside(route, bounds) {
-		return edgeRoute{}, false
-	}
-	return route, true
 }
 
-func routeInside(route edgeRoute, bounds rect) bool {
-	return route.x1 >= bounds.X && route.x1 < bounds.X+bounds.W &&
-		route.x2 >= bounds.X && route.x2 < bounds.X+bounds.W &&
-		route.y1 >= bounds.Y && route.y1 < bounds.Y+bounds.H &&
-		route.y2 >= bounds.Y && route.y2 < bounds.Y+bounds.H
-}
-
-func horizontalOverlap(a, b rect) bool {
-	return max(a.X, b.X) <= min(a.X+a.W-1, b.X+b.W-1)
-}
-
-func drawEdgePorts(g *grid, from, to rect, route edgeRoute) {
-	if route.overlay && route.vertical {
-		drawOverlayEdgePorts(g, from, to)
-		return
+func pathCellsFromWaypoints(waypoints []routePoint) ([]routePoint, bool) {
+	if len(waypoints) == 0 {
+		return nil, false
 	}
-	drawEdgePort(g, from, to, route.vertical)
-	drawEdgePort(g, to, from, route.vertical)
-}
-
-func drawOverlayEdgePorts(g *grid, from, to rect) {
-	if from.Y+from.H/2 < to.Y+to.H/2 {
-		drawEdgePort(g, from, to, true)
-		return
+	cells := []routePoint{waypoints[0]}
+	for i := 1; i < len(waypoints); i++ {
+		from := waypoints[i-1]
+		to := waypoints[i]
+		dx := sign(to.X - from.X)
+		dy := sign(to.Y - from.Y)
+		if dx != 0 && dy != 0 {
+			return nil, false
+		}
+		for point := from; point != to; {
+			point.X += dx
+			point.Y += dy
+			if point != cells[len(cells)-1] {
+				cells = append(cells, point)
+			}
+		}
 	}
-	drawEdgePort(g, to, from, true)
+	return cells, true
 }
 
-func drawEdgePort(g *grid, node, other rect, vertical bool) {
-	nodeCenterX := node.X + node.W/2
-	nodeCenterY := node.Y + node.H/2
-	otherCenterY := other.Y + other.H/2
-	if vertical {
-		x := nodeCenterX
-		if otherCenterY > nodeCenterY {
-			g.SetLine(x, node.Y+node.H-1, lineLeft|lineRight|lineDown, ansiDim)
+func sign(value int) int {
+	switch {
+	case value < 0:
+		return -1
+	case value > 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (p *routePlanner) pathClear(cells []routePoint, start, goal routePoint) bool {
+	for _, point := range cells {
+		if p.blocked(point, start, goal) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *routePlanner) routePathCost(cells []routePoint, start, goal routePoint, startDir, goalDir int) int {
+	if len(cells) == 0 {
+		return 0
+	}
+	cost := 0
+	previousDir := startDir
+	for i := 1; i < len(cells); i++ {
+		dir := directionBetween(cells[i-1], cells[i])
+		stepCost := 10
+		if previousDir != noDirection && previousDir != dir {
+			stepCost += routeTurnPenalty(cells[i-1], start, goal)
+		}
+		if p.nearNode(cells[i]) {
+			stepCost += 25
+		}
+		cost += stepCost
+		previousDir = dir
+	}
+	if goalDir != noDirection && previousDir != goalDir {
+		cost += 18
+	}
+	return cost
+}
+
+func routeTurnPenalty(point, start, goal routePoint) int {
+	penalty := 18
+	if manhattan(point, start) < nodeWidth {
+		penalty += 160
+	}
+	if manhattan(point, goal) < nodeWidth {
+		penalty += 160
+	}
+	return penalty
+}
+
+func routeTieBreak(cells []routePoint, pair routePortPair, best edgeRoute) bool {
+	if len(cells) != len(best.cells) {
+		return len(cells) < len(best.cells)
+	}
+	if pair.score != best.pairScore {
+		return pair.score < best.pairScore
+	}
+	if len(cells) == 0 || len(best.cells) == 0 {
+		return false
+	}
+	first := cells[0]
+	bestFirst := best.cells[0]
+	if first.Y != bestFirst.Y {
+		return first.Y < bestFirst.Y
+	}
+	return first.X < bestFirst.X
+}
+
+func rankedPortPairs(starts, ends []routePort) []routePortPair {
+	pairs := make([]routePortPair, 0, len(starts)*len(ends))
+	index := 0
+	for _, start := range starts {
+		for _, end := range ends {
+			score := start.rank + end.rank + manhattan(start.entry, end.entry)
+			pairs = append(pairs, routePortPair{start: start, end: end, score: score, index: index})
+			index++
+		}
+	}
+	sort.SliceStable(pairs, func(i, j int) bool {
+		if pairs[i].score != pairs[j].score {
+			return pairs[i].score < pairs[j].score
+		}
+		return pairs[i].index < pairs[j].index
+	})
+	return pairs
+}
+
+func portCandidates(node, other rect, bounds rect) []routePort {
+	out := []routePort{}
+	add := func(border, entry routePoint, side routeSide, order int) {
+		if !pointInRect(entry, bounds) {
 			return
 		}
-		g.SetLine(x, node.Y, lineLeft|lineRight|lineUp, ansiDim)
-		return
+		rank := sidePreferencePenalty(node, other, side)
+		switch side {
+		case routeSideLeft, routeSideRight:
+			rank += abs(border.Y-(other.Y+other.H/2)) * 3
+		case routeSideTop, routeSideBottom:
+			rank += abs(border.X - (other.X + other.W/2))
+		}
+		rank = rank*10 + order
+		out = append(out, routePort{border: border, entry: entry, side: side, rank: rank})
 	}
-	y := nodeCenterY
-	otherCenterX := other.X + other.W/2
-	if otherCenterX > nodeCenterX {
-		g.SetLine(node.X+node.W-1, y, lineUp|lineRight|lineDown, ansiDim)
-		return
+	order := 0
+	for y := node.Y + 1; y < node.Y+node.H-1; y++ {
+		add(routePoint{X: node.X, Y: y}, routePoint{X: node.X - 1, Y: y}, routeSideLeft, order)
+		order++
+		add(routePoint{X: node.X + node.W - 1, Y: y}, routePoint{X: node.X + node.W, Y: y}, routeSideRight, order)
+		order++
 	}
-	g.SetLine(node.X, y, lineUp|lineLeft|lineDown, ansiDim)
+	for x := node.X + 1; x < node.X+node.W-1; x++ {
+		add(routePoint{X: x, Y: node.Y}, routePoint{X: x, Y: node.Y - 1}, routeSideTop, order)
+		order++
+		add(routePoint{X: x, Y: node.Y + node.H - 1}, routePoint{X: x, Y: node.Y + node.H}, routeSideBottom, order)
+		order++
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].rank != out[j].rank {
+			return out[i].rank < out[j].rank
+		}
+		if out[i].border.Y != out[j].border.Y {
+			return out[i].border.Y < out[j].border.Y
+		}
+		return out[i].border.X < out[j].border.X
+	})
+	if len(out) > maxRoutePorts {
+		out = out[:maxRoutePorts]
+	}
+	return out
+}
+
+func sidePreferencePenalty(node, other rect, side routeSide) int {
+	dx := other.X + other.W/2 - (node.X + node.W/2)
+	dy := other.Y + other.H/2 - (node.Y + node.H/2)
+	horizontal := abs(dx) >= abs(dy)
+	if horizontal {
+		if dx >= 0 && side == routeSideRight {
+			return 0
+		}
+		if dx < 0 && side == routeSideLeft {
+			return 0
+		}
+		if side == routeSideTop || side == routeSideBottom {
+			return 35
+		}
+		return 75
+	}
+	if dy >= 0 && side == routeSideBottom {
+		return 0
+	}
+	if dy < 0 && side == routeSideTop {
+		return 0
+	}
+	if side == routeSideLeft || side == routeSideRight {
+		return 28
+	}
+	return 75
+}
+
+type routeState struct {
+	point routePoint
+	dir   int
+}
+
+type routeStep struct {
+	state routeState
+	cost  int
+	index int
+}
+
+type routeQueue []routeStep
+
+func (q routeQueue) Len() int { return len(q) }
+func (q routeQueue) Less(i, j int) bool {
+	if q[i].cost != q[j].cost {
+		return q[i].cost < q[j].cost
+	}
+	return q[i].index < q[j].index
+}
+func (q routeQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
+func (q *routeQueue) Push(x any)   { *q = append(*q, x.(routeStep)) }
+func (q *routeQueue) Pop() any {
+	old := *q
+	n := len(old)
+	item := old[n-1]
+	*q = old[:n-1]
+	return item
+}
+
+func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir int) ([]routePoint, int, bool) {
+	if p.blocked(start, start, goal) || p.blocked(goal, start, goal) {
+		return nil, 0, false
+	}
+	startState := routeState{point: start, dir: startDir}
+	dist := map[routeState]int{startState: 0}
+	prev := map[routeState]routeState{}
+	q := &routeQueue{}
+	heap.Init(q)
+	heap.Push(q, routeStep{state: startState})
+	pushIndex := 1
+	bestGoal := routeState{}
+	bestGoalCost := 0
+	found := false
+	for q.Len() > 0 {
+		item := heap.Pop(q).(routeStep)
+		if item.cost != dist[item.state] {
+			continue
+		}
+		if item.state.point == goal {
+			bestGoal = item.state
+			bestGoalCost = item.cost
+			if goalDir != noDirection && item.state.dir != goalDir {
+				bestGoalCost += 18
+			}
+			found = true
+			break
+		}
+		for dir, next := range routeNeighbors(item.state.point) {
+			if p.blocked(next, start, goal) {
+				continue
+			}
+			nextState := routeState{point: next, dir: dir}
+			stepCost := 10
+			if item.state.dir != noDirection && item.state.dir != dir {
+				stepCost += routeTurnPenalty(item.state.point, start, goal)
+			}
+			if p.nearNode(next) {
+				stepCost += 25
+			}
+			nextCost := item.cost + stepCost
+			if current, ok := dist[nextState]; ok && current <= nextCost {
+				continue
+			}
+			dist[nextState] = nextCost
+			prev[nextState] = item.state
+			heap.Push(q, routeStep{state: nextState, cost: nextCost, index: pushIndex})
+			pushIndex++
+		}
+	}
+	if !found {
+		return nil, 0, false
+	}
+	cells := []routePoint{}
+	for state := bestGoal; ; state = prev[state] {
+		cells = append(cells, state.point)
+		if state == startState {
+			break
+		}
+	}
+	for i, j := 0, len(cells)-1; i < j; i, j = i+1, j-1 {
+		cells[i], cells[j] = cells[j], cells[i]
+	}
+	return cells, bestGoalCost, true
+}
+
+func routeNeighbors(p routePoint) []routePoint {
+	return []routePoint{
+		{X: p.X, Y: p.Y - 1},
+		{X: p.X + 1, Y: p.Y},
+		{X: p.X, Y: p.Y + 1},
+		{X: p.X - 1, Y: p.Y},
+	}
+}
+
+func (p *routePlanner) blocked(point, start, goal routePoint) bool {
+	if !pointInRect(point, p.bounds) {
+		return true
+	}
+	if p.occupied[point] != 0 {
+		return true
+	}
+	for _, node := range p.nodes {
+		if pointInRect(point, node) {
+			return true
+		}
+	}
+	if point == start || point == goal {
+		return false
+	}
+	return false
+}
+
+func (p *routePlanner) nearNode(point routePoint) bool {
+	for _, node := range p.nodes {
+		expanded := rect{X: node.X - 1, Y: node.Y - 1, W: node.W + 2, H: node.H + 2}
+		if pointInRect(point, expanded) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *routePlanner) reserve(route edgeRoute) {
+	for i := 1; i < len(route.cells); i++ {
+		a := route.cells[i-1]
+		b := route.cells[i]
+		p.occupied[a] |= maskBetween(a, b)
+		p.occupied[b] |= maskBetween(b, a)
+	}
+}
+
+func drawRoutedEdge(g *grid, route edgeRoute, style string) {
+	for i := 1; i < len(route.cells); i++ {
+		a := route.cells[i-1]
+		b := route.cells[i]
+		g.SetLine(a.X, a.Y, maskBetween(a, b), style)
+		g.SetLine(b.X, b.Y, maskBetween(b, a), style)
+	}
+}
+
+func drawRoutedEdgePorts(g *grid, route edgeRoute) {
+	drawRoutePort(g, route.start)
+	drawRoutePort(g, route.end)
+}
+
+func drawRoutePort(g *grid, port routePort) {
+	g.SetLine(port.border.X, port.border.Y, maskBetween(port.border, port.entry), ansiDim)
+	g.SetLine(port.entry.X, port.entry.Y, maskBetween(port.entry, port.border), ansiDim)
+}
+
+func drawDashedRoute(g *grid, route edgeRoute) {
+	for i, point := range route.cells {
+		if i%2 != 0 {
+			continue
+		}
+		mask := routeCellMask(route.cells, i)
+		ch := previewLineHorizontal
+		if mask&(lineUp|lineDown) != 0 && mask&(lineLeft|lineRight) == 0 {
+			ch = previewLineVertical
+		}
+		g.Set(point.X, point.Y, ch, ansiDim+ansiBrightCyan)
+	}
+}
+
+func routeCellMask(cells []routePoint, index int) lineMask {
+	mask := lineMask(0)
+	if index > 0 {
+		mask |= maskBetween(cells[index], cells[index-1])
+	}
+	if index+1 < len(cells) {
+		mask |= maskBetween(cells[index], cells[index+1])
+	}
+	return mask
+}
+
+func maskBetween(from, to routePoint) lineMask {
+	switch {
+	case to.X == from.X && to.Y == from.Y-1:
+		return lineUp
+	case to.X == from.X+1 && to.Y == from.Y:
+		return lineRight
+	case to.X == from.X && to.Y == from.Y+1:
+		return lineDown
+	case to.X == from.X-1 && to.Y == from.Y:
+		return lineLeft
+	default:
+		return 0
+	}
+}
+
+func directionBetween(from, to routePoint) int {
+	switch {
+	case to.X == from.X && to.Y == from.Y-1:
+		return directionUp
+	case to.X == from.X+1 && to.Y == from.Y:
+		return directionRight
+	case to.X == from.X && to.Y == from.Y+1:
+		return directionDown
+	case to.X == from.X-1 && to.Y == from.Y:
+		return directionLeft
+	default:
+		return noDirection
+	}
+}
+
+func portExitDirection(port routePort) int {
+	switch maskBetween(port.border, port.entry) {
+	case lineUp:
+		return directionUp
+	case lineRight:
+		return directionRight
+	case lineDown:
+		return directionDown
+	case lineLeft:
+		return directionLeft
+	default:
+		return noDirection
+	}
+}
+
+func portApproachDirection(port routePort) int {
+	switch portExitDirection(port) {
+	case directionUp:
+		return directionDown
+	case directionRight:
+		return directionLeft
+	case directionDown:
+		return directionUp
+	case directionLeft:
+		return directionRight
+	default:
+		return noDirection
+	}
+}
+
+func pointInRect(point routePoint, r rect) bool {
+	return point.X >= r.X && point.X < r.X+r.W && point.Y >= r.Y && point.Y < r.Y+r.H
+}
+
+func manhattan(a, b routePoint) int {
+	return abs(a.X-b.X) + abs(a.Y-b.Y)
 }
 
 func MoveSelection(m Model, current int, key string) int {

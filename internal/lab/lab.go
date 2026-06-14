@@ -3,6 +3,7 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,6 +25,7 @@ type Lab struct {
 	Containers    []Container       `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Switches      []Switch          `json:"switches,omitempty" yaml:"switches,omitempty"`
 	ExternalLinks []ExternalLink    `json:"externalLinks,omitempty" yaml:"externalLinks,omitempty"`
+	NetworkLinks  []NetworkLink     `json:"networkLinks,omitempty" yaml:"networkLinks,omitempty"`
 	Disks         []Disk            `json:"disks,omitempty" yaml:"disks,omitempty"`
 	Layout        Layout            `json:"layout,omitempty" yaml:"layout,omitempty"`
 	Meta          map[string]string `json:"meta,omitempty" yaml:"meta,omitempty"`
@@ -81,6 +83,17 @@ type ExternalLink struct {
 	ID        string `json:"id" yaml:"id"`
 	Name      string `json:"name,omitempty" yaml:"name,omitempty"`
 	Interface string `json:"interface" yaml:"interface"`
+}
+
+type NetworkLink struct {
+	From NetworkEndpoint `json:"from" yaml:"from"`
+	To   NetworkEndpoint `json:"to" yaml:"to"`
+}
+
+type NetworkEndpoint struct {
+	Type string `json:"type" yaml:"type"`
+	ID   string `json:"id" yaml:"id"`
+	NIC  int    `json:"nic" yaml:"nic"`
 }
 
 type Layout struct {
@@ -223,6 +236,12 @@ func (l *Lab) Normalize() {
 		l.ExternalLinks[i].Name = strings.TrimSpace(l.ExternalLinks[i].Name)
 		l.ExternalLinks[i].Interface = strings.TrimSpace(l.ExternalLinks[i].Interface)
 	}
+	for i := range l.NetworkLinks {
+		l.NetworkLinks[i].From.Type = strings.ToLower(strings.TrimSpace(l.NetworkLinks[i].From.Type))
+		l.NetworkLinks[i].From.ID = strings.TrimSpace(l.NetworkLinks[i].From.ID)
+		l.NetworkLinks[i].To.Type = strings.ToLower(strings.TrimSpace(l.NetworkLinks[i].To.Type))
+		l.NetworkLinks[i].To.ID = strings.TrimSpace(l.NetworkLinks[i].To.ID)
+	}
 }
 
 func (l *Lab) Validate() error {
@@ -292,8 +311,8 @@ func (l *Lab) Validate() error {
 		for _, nic := range vm.Networks {
 			switchRef := nic.Switch != ""
 			externalRef := nic.ExternalLink != ""
-			if switchRef == externalRef {
-				problems = append(problems, fmt.Sprintf("vm %q network must reference exactly one switch or externalLink", vm.ID))
+			if switchRef && externalRef {
+				problems = append(problems, fmt.Sprintf("vm %q network must not reference both switch and externalLink", vm.ID))
 				continue
 			}
 			if switchRef {
@@ -323,12 +342,61 @@ func (l *Lab) Validate() error {
 		}
 		for _, nic := range ct.Networks {
 			if nic.Switch == "" {
-				problems = append(problems, fmt.Sprintf("container %q network switch is required", ct.ID))
 				continue
 			}
 			if _, ok := switchIDs[nic.Switch]; !ok {
 				problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ct.ID, nic.Switch))
 			}
+		}
+	}
+
+	linkedNICs := map[string]struct{}{}
+	for _, link := range l.NetworkLinks {
+		endpoints := []NetworkEndpoint{link.From, link.To}
+		if networkEndpointKey(link.From) == networkEndpointKey(link.To) {
+			problems = append(problems, "network link endpoints must be different")
+			continue
+		}
+		for _, endpoint := range endpoints {
+			key := networkEndpointKey(endpoint)
+			if _, exists := linkedNICs[key]; exists {
+				problems = append(problems, fmt.Sprintf("network endpoint %s is linked more than once", key))
+			}
+			switch endpoint.Type {
+			case "vm":
+				vm, ok := findVMByID(l.VMs, endpoint.ID)
+				if !ok {
+					problems = append(problems, fmt.Sprintf("network link references missing vm %q", endpoint.ID))
+					continue
+				}
+				if endpoint.NIC < 0 || endpoint.NIC >= len(vm.Networks) {
+					problems = append(problems, fmt.Sprintf("network link references missing vm nic %q:%d", endpoint.ID, endpoint.NIC))
+					continue
+				}
+				nic := vm.Networks[endpoint.NIC]
+				if nic.Switch != "" || nic.ExternalLink != "" {
+					problems = append(problems, fmt.Sprintf("network link endpoint vm %q nic %d is already connected", endpoint.ID, endpoint.NIC))
+					continue
+				}
+			case "container":
+				ct, ok := findContainerByID(l.Containers, endpoint.ID)
+				if !ok {
+					problems = append(problems, fmt.Sprintf("network link references missing container %q", endpoint.ID))
+					continue
+				}
+				if endpoint.NIC < 0 || endpoint.NIC >= len(ct.Networks) {
+					problems = append(problems, fmt.Sprintf("network link references missing container nic %q:%d", endpoint.ID, endpoint.NIC))
+					continue
+				}
+				if ct.Networks[endpoint.NIC].Switch != "" {
+					problems = append(problems, fmt.Sprintf("network link endpoint container %q nic %d is already connected", endpoint.ID, endpoint.NIC))
+					continue
+				}
+			default:
+				problems = append(problems, fmt.Sprintf("network link references unknown endpoint type %q", endpoint.Type))
+				continue
+			}
+			linkedNICs[key] = struct{}{}
 		}
 	}
 
@@ -412,12 +480,45 @@ func (l *Lab) ManagedContainerName(ct Container) string {
 	return managedName(l.ID, ct.ID)
 }
 
+func (l *Lab) ManagedNetworkLinkBridgeName(link NetworkLink) string {
+	from := networkEndpointKey(link.From)
+	to := networkEndpointKey(link.To)
+	if to < from {
+		from, to = to, from
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(l.ID + "|" + from + "|" + to))
+	return fmt.Sprintf("flp2p%08x", h.Sum32())
+}
+
 func validID(id string) bool {
 	return idPattern.MatchString(id)
 }
 
 func managedName(labID, resourceID string) string {
 	return strings.ToLower(fmt.Sprintf("%s-%s-%s", ManagedPrefix, labID, resourceID))
+}
+
+func networkEndpointKey(endpoint NetworkEndpoint) string {
+	return fmt.Sprintf("%s:%s:%d", endpoint.Type, endpoint.ID, endpoint.NIC)
+}
+
+func findVMByID(vms []VM, id string) (VM, bool) {
+	for _, vm := range vms {
+		if vm.ID == id {
+			return vm, true
+		}
+	}
+	return VM{}, false
+}
+
+func findContainerByID(containers []Container, id string) (Container, bool) {
+	for _, ct := range containers {
+		if ct.ID == id {
+			return ct, true
+		}
+	}
+	return Container{}, false
 }
 
 func bridgeName(managedName string) string {

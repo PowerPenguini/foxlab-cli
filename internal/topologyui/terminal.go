@@ -16,6 +16,7 @@ const (
 	ansiBrightCyan     = "\x1b[96m"
 	ansiWhite          = "\x1b[97m"
 	ansiBgCyan         = "\x1b[46m"
+	ansiBgRed          = "\x1b[41m"
 	ansiBgGray         = "\x1b[100m"
 	ansiYellow         = "\x1b[33m"
 	ansiDim            = "\x1b[2m"

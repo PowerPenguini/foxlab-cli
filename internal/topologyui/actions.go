@@ -11,18 +11,26 @@ import (
 
 func (a *App) runGlobalMenuAction(action string) {
 	switch action {
-	case "create-vm":
+	case "add vm", "create-vm":
 		a.openCreateVMCommand(Node{})
-	case "create-container":
+	case "add cont", "create-container":
 		a.openCreateContainerCommand(Node{})
-	case "create-switch":
+	case "add sw", "create-switch":
 		a.openCreateSwitchCommand(Node{})
-	case "create-external":
+	case "create external", "create-external":
 		a.openCreateExternalCommand()
 	}
 }
 
 func (a *App) runMenuAction(node Node, action string) {
+	if index, ok := strings.CutPrefix(action, "connect-nic:"); ok {
+		a.startConnectNICIndex(node, index)
+		return
+	}
+	if index, ok := strings.CutPrefix(action, "delete-nic:"); ok {
+		a.deleteNIC(node, index)
+		return
+	}
 	switch action {
 	case "edit":
 		a.openConfigCommand(node)
@@ -62,13 +70,15 @@ func (a *App) runMenuAction(node Node, action string) {
 		} else {
 			a.openCommand("vm set " + node.ID + " iso=")
 		}
-	case "create-vm":
+	case "add-nic":
+		a.openAddNICCommand(node)
+	case "add vm", "create-vm":
 		a.openCreateVMCommand(node)
-	case "create-container":
+	case "add cont", "create-container":
 		a.openCreateContainerCommand(node)
-	case "create-switch":
+	case "add sw", "create-switch":
 		a.openCreateSwitchCommand(node)
-	case "create-external":
+	case "create external", "create-external":
 		a.openCreateExternalCommand()
 	case "delete":
 		switch node.Type {
@@ -138,18 +148,18 @@ func workloadRef(typ, id string) workload.Ref {
 }
 
 func (a *App) openCreateVMCommand(node Node) {
-	a.openCommand("vm create " + a.nextVMID() + " cpus=2 memory=2048" + a.createVMHint(node))
+	a.openCommand("add vm " + a.nextVMID() + a.createVMHint(node))
 }
 
 func (a *App) openCreateContainerCommand(node Node) {
-	a.openCommand("container create " + a.nextContainerID() + " image= " + a.createContainerHint(node))
+	a.openCommand("add cont " + a.nextContainerID() + a.createContainerHint(node))
 }
 
 func (a *App) openCreateSwitchCommand(node Node) {
 	id := a.nextSwitchID()
-	cmd := "switch create " + id + " mode=bridge name=" + id
+	cmd := "add sw " + id
 	if node.Type == NodeExternal {
-		cmd = "switch create " + id + " mode=macnat-bridge external=" + node.ID + " name=" + id
+		cmd = "add sw " + id + " external=" + node.ID
 	}
 	a.openCommand(cmd)
 }
@@ -195,6 +205,15 @@ func (a *App) openExternalSwitchCommand(id string) {
 	a.openCommand("switch set " + switchID + " mode=macnat-bridge external=" + id)
 }
 
+func (a *App) openAddNICCommand(node Node) {
+	switch node.Type {
+	case NodeVM:
+		a.openCommand("vm nic add " + node.ID)
+	case NodeContainer:
+		a.openCommand("container nic add " + node.ID)
+	}
+}
+
 func (a *App) openDiskCommand(id string) {
 	vm, ok := a.labVM(id)
 	if !ok {
@@ -229,9 +248,6 @@ func (a *App) openConfigCommand(node Node) {
 			if len(ct.Command) > 0 {
 				cmd += " command=" + commandValue(strings.Join(ct.Command, " "))
 			}
-			if len(ct.Networks) > 0 {
-				cmd += " switch=" + ct.Networks[0].Switch
-			}
 			a.openCommand(cmd)
 		} else {
 			a.openCommand("container set " + node.ID + " image=")
@@ -252,6 +268,21 @@ func (a *App) vmCreate(id string, args map[string]string) {
 
 func (a *App) vmSet(id string, args map[string]string) {
 	a.State.Message = a.ensureService().VMSet(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) vmNICAdd(id string, args map[string]string) {
+	a.State.Message = a.ensureService().VMNICAdd(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) vmNICConnect(id, index string, args map[string]string) {
+	a.State.Message = a.ensureService().VMNICConnect(id, index, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) vmNICDelete(id, index string) {
+	a.State.Message = a.ensureService().VMNICDelete(id, index)
 	a.syncAfterServiceMutation()
 }
 
@@ -298,6 +329,46 @@ func (a *App) containerCreate(id string, args map[string]string) {
 func (a *App) containerSet(id string, args map[string]string) {
 	a.State.Message = a.ensureService().ContainerSet(id, args)
 	a.syncAfterServiceMutation()
+}
+
+func (a *App) containerNICAdd(id string, args map[string]string) {
+	a.State.Message = a.ensureService().ContainerNICAdd(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) containerNICConnect(id, index string, args map[string]string) {
+	a.State.Message = a.ensureService().ContainerNICConnect(id, index, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) containerNICDelete(id, index string) {
+	a.State.Message = a.ensureService().ContainerNICDelete(id, index)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) deleteNIC(node Node, index string) {
+	switch node.Type {
+	case NodeVM:
+		a.vmNICDelete(node.ID, index)
+	case NodeContainer:
+		a.containerNICDelete(node.ID, index)
+	}
+}
+
+func (a *App) nicConnectDirect(sourceType, sourceID, index, targetType, targetID string) {
+	a.State.Message = a.ensureService().NICConnectDirect(sourceType, sourceID, index, targetType, targetID)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) nicConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex string) {
+	a.State.Message = a.ensureService().NICConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) nicDisconnect(sourceType, sourceID, index string) bool {
+	a.State.Message = a.ensureService().NICDisconnect(sourceType, sourceID, index)
+	a.syncAfterServiceMutation()
+	return strings.HasPrefix(a.State.Message, "disconnected nic")
 }
 
 func (a *App) containerDelete(id string) {
@@ -401,10 +472,10 @@ func (a *App) createVMHint(node Node) string {
 func (a *App) createContainerHint(node Node) string {
 	switch node.Type {
 	case NodeSwitch:
-		return "switch=" + node.ID
+		return " switch=" + node.ID
 	default:
 		if a.Lab != nil && len(a.Lab.Switches) > 0 {
-			return "switch=" + a.Lab.Switches[0].ID
+			return " switch=" + a.Lab.Switches[0].ID
 		}
 		return ""
 	}
