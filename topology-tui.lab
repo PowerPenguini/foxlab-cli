@@ -30,15 +30,6 @@ vms:
       networks:
         - switch: sw1
         - {}
-    - id: hello
-      name: hello
-      desiredState: running
-      memoryMB: 2048
-      cpus: 2
-      disk: ""
-      networks:
-        - externalLink: link1
-        - {}
     - id: new
       name: new
       desiredState: running
@@ -68,15 +59,6 @@ externalLinks:
     - id: link1
       name: in2
       interface: wlp0s20f3
-networkLinks:
-    - from:
-        type: vm
-        id: hello
-        nic: 1
-      to:
-        type: vm
-        id: vm3
-        nic: 2
 disks:
     - id: vm2
       path: labs/topology-tui/disks/vm2.qcow2
@@ -85,28 +67,25 @@ disks:
 layout:
     nodes:
         bash-test:
-            x: 480
-            "y": 72
-        hello:
-            x: 1296
-            "y": 168
+            x: 1200
+            "y": 552
         link1:
             x: 848
-            "y": 696
+            "y": 96
         new:
-            x: 368
+            x: 288
             "y": 552
         sw1:
             x: 848
             "y": 336
         vm2:
-            x: 64
-            "y": 72
+            x: 848
+            "y": 552
         vm3:
-            x: 64
-            "y": 168
+            x: 560
+            "y": 552
         vm4:
-            x: 64
+            x: 1520
             "y": 552
     links:
         - from:

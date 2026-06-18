@@ -54,6 +54,7 @@ func (a *App) Run() error {
 	if len(a.Model.Nodes) == 0 && a.Lab == nil {
 		a.Model = MockModel()
 	}
+	a.resetRouteCache()
 	a.ensureService()
 	a.refreshWorkloadStates()
 	return a.runInteractive(startAppTerminalSession, readAppKey, appTerminalSize)
@@ -77,9 +78,15 @@ func (a *App) syncFromService() {
 	a.Lab = a.Service.Lab
 	a.LabPath = a.Service.Path
 	if a.Lab != nil {
+		a.resetRouteCache()
 		a.Model = ModelFromLab(a.Lab)
 		a.applyWorkloadStates()
 	}
+}
+
+func (a *App) resetRouteCache() {
+	a.RouteCacheKey = ""
+	a.RouteCacheRoutes = nil
 }
 
 type terminalStartFunc func(*App) (func(), error)

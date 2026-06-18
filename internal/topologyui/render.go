@@ -1,7 +1,6 @@
 package topologyui
 
 import (
-	"container/heap"
 	"io"
 	"sort"
 	"strconv"
@@ -545,7 +544,6 @@ const (
 	directionRight = 1
 	directionDown  = 2
 	directionLeft  = 3
-	maxRoutePairs  = 10
 	maxRoutePorts  = 12
 )
 
@@ -570,6 +568,7 @@ func newRoutePlanner(bounds rect, nodes []rect) *routePlanner {
 func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string]rect, bounds rect) []visibleEdge {
 	visible := []visibleEdge{}
 	orderedEdges := append([]Edge(nil), edges...)
+	workloadSourceUsage := map[string]int{}
 	sort.SliceStable(orderedEdges, func(i, j int) bool {
 		return edgeRoutePriority(orderedEdges[i], nodeRects) < edgeRoutePriority(orderedEdges[j], nodeRects)
 	})
@@ -581,15 +580,23 @@ func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string
 		}
 		workloadLink := workloadNodeKey(edge.From) && workloadNodeKey(edge.To)
 		route, ok := planner.planRoute(from, to)
-		if ok && workloadLink && routeHasLargeDetour(route.cells) {
-			if relaxedRoute, relaxedOK := planner.planRouteWithOptions(from, to, routeOptions{allowOccupied: true}); relaxedOK && len(relaxedRoute.cells) < len(route.cells) {
+		if workloadLink {
+			relaxedRoute, relaxedOK := planner.planRouteWithOptions(from, to, routeOptions{allowOccupied: true})
+			if !ok && relaxedOK {
 				route = relaxedRoute
+				ok = true
+			} else if ok && workloadSourceUsage[edge.From] > 0 && relaxedOK && len(relaxedRoute.cells) < len(route.cells) {
+				route = relaxedRoute
+				ok = true
 			}
 		}
 		if !ok {
 			continue
 		}
 		planner.reserve(route)
+		if workloadLink {
+			workloadSourceUsage[edge.From]++
+		}
 		visible = append(visible, visibleEdge{edge: edge, route: route})
 	}
 	return visible
@@ -648,44 +655,7 @@ func (p *routePlanner) planRouteWithOptions(from, to rect, options routeOptions)
 			bestOK = true
 		}
 	}
-	if bestOK && !routeHasLargeDetour(best.cells) {
-		return best, true
-	}
-	for i, pair := range pairs {
-		if i >= maxRoutePairs && bestOK {
-			break
-		}
-		cells, cost, ok := p.shortestPath(pair.start.entry, pair.end.entry, portExitDirection(pair.start), portApproachDirection(pair.end), options)
-		if !ok {
-			continue
-		}
-		cost += pair.score
-		if !bestOK || cost < best.cost || (cost == best.cost && routeTieBreak(cells, pair, best)) {
-			best = edgeRoute{cells: cells, start: pair.start, end: pair.end, cost: cost, pairScore: pair.score}
-			bestOK = true
-		}
-	}
 	return best, bestOK
-}
-
-func routeHasLargeDetour(cells []routePoint) bool {
-	if len(cells) < 2 {
-		return false
-	}
-	direct := manhattan(cells[0], cells[len(cells)-1]) + 1
-	return len(cells) > direct+nodeWidth || routeSpanY(cells) > nodeHeight+2
-}
-
-func routeSpanY(cells []routePoint) int {
-	if len(cells) == 0 {
-		return 0
-	}
-	minY, maxY := cells[0].Y, cells[0].Y
-	for _, cell := range cells {
-		minY = min(minY, cell.Y)
-		maxY = max(maxY, cell.Y)
-	}
-	return maxY - minY + 1
 }
 
 func (p *routePlanner) simplePath(start, goal routePoint, startDir, goalDir int, options routeOptions) ([]routePoint, int, bool) {
@@ -965,128 +935,6 @@ func sidePreferencePenalty(node, other rect, side routeSide) int {
 		return 28
 	}
 	return 75
-}
-
-type routeState struct {
-	point routePoint
-	dir   int
-}
-
-type routeStep struct {
-	state routeState
-	cost  int
-	index int
-}
-
-type routeQueue []routeStep
-
-func (q routeQueue) Len() int { return len(q) }
-func (q routeQueue) Less(i, j int) bool {
-	if q[i].cost != q[j].cost {
-		return q[i].cost < q[j].cost
-	}
-	return q[i].index < q[j].index
-}
-func (q routeQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
-func (q *routeQueue) Push(x any)   { *q = append(*q, x.(routeStep)) }
-func (q *routeQueue) Pop() any {
-	old := *q
-	n := len(old)
-	item := old[n-1]
-	*q = old[:n-1]
-	return item
-}
-
-func (p *routePlanner) shortestPath(start, goal routePoint, startDir, goalDir int, options routeOptions) ([]routePoint, int, bool) {
-	if p.blocked(start, start, goal, options) || p.blocked(goal, start, goal, options) {
-		return nil, 0, false
-	}
-	searchBounds := routeSearchBounds(start, goal, p.bounds)
-	startState := routeState{point: start, dir: startDir}
-	dist := map[routeState]int{startState: 0}
-	prev := map[routeState]routeState{}
-	q := &routeQueue{}
-	heap.Init(q)
-	heap.Push(q, routeStep{state: startState})
-	pushIndex := 1
-	bestGoal := routeState{}
-	bestGoalCost := 0
-	found := false
-	for q.Len() > 0 {
-		item := heap.Pop(q).(routeStep)
-		if item.cost != dist[item.state] {
-			continue
-		}
-		if item.state.point == goal {
-			bestGoal = item.state
-			bestGoalCost = item.cost
-			if goalDir != noDirection && item.state.dir != goalDir {
-				bestGoalCost += 18
-			}
-			found = true
-			break
-		}
-		for dir, next := range routeNeighbors(item.state.point) {
-			if !pointInRect(next, searchBounds) {
-				continue
-			}
-			if p.blocked(next, start, goal, options) {
-				continue
-			}
-			nextState := routeState{point: next, dir: dir}
-			stepCost := 10
-			if item.state.dir != noDirection && item.state.dir != dir {
-				stepCost += routeTurnPenalty(item.state.point, start, goal)
-			}
-			if p.nearNode(next) {
-				stepCost += 25
-			}
-			if options.allowOccupied && p.occupied[next] != 0 {
-				stepCost += 90
-			}
-			nextCost := item.cost + stepCost
-			if current, ok := dist[nextState]; ok && current <= nextCost {
-				continue
-			}
-			dist[nextState] = nextCost
-			prev[nextState] = item.state
-			heap.Push(q, routeStep{state: nextState, cost: nextCost, index: pushIndex})
-			pushIndex++
-		}
-	}
-	if !found {
-		return nil, 0, false
-	}
-	cells := []routePoint{}
-	for state := bestGoal; ; state = prev[state] {
-		cells = append(cells, state.point)
-		if state == startState {
-			break
-		}
-	}
-	for i, j := 0, len(cells)-1; i < j; i, j = i+1, j-1 {
-		cells[i], cells[j] = cells[j], cells[i]
-	}
-	return cells, bestGoalCost, true
-}
-
-func routeSearchBounds(start, goal routePoint, bounds rect) rect {
-	marginX := nodeWidth * 2
-	marginY := nodeHeight * 4
-	minX := max(bounds.X, min(start.X, goal.X)-marginX)
-	maxX := min(bounds.X+bounds.W-1, max(start.X, goal.X)+marginX)
-	minY := max(bounds.Y, min(start.Y, goal.Y)-marginY)
-	maxY := min(bounds.Y+bounds.H-1, max(start.Y, goal.Y)+marginY)
-	return rect{X: minX, Y: minY, W: max(1, maxX-minX+1), H: max(1, maxY-minY+1)}
-}
-
-func routeNeighbors(p routePoint) []routePoint {
-	return []routePoint{
-		{X: p.X, Y: p.Y - 1},
-		{X: p.X + 1, Y: p.Y},
-		{X: p.X, Y: p.Y + 1},
-		{X: p.X - 1, Y: p.Y},
-	}
 }
 
 func (p *routePlanner) blocked(point, start, goal routePoint, options routeOptions) bool {
