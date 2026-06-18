@@ -15,6 +15,9 @@ import (
 const (
 	ManagedPrefix = "foxlab"
 	FileExtension = ".lab"
+
+	DesiredStateRunning = "running"
+	DesiredStateStopped = "stopped"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -42,14 +45,15 @@ type Disk struct {
 }
 
 type VM struct {
-	ID       string      `json:"id" yaml:"id"`
-	Name     string      `json:"name,omitempty" yaml:"name,omitempty"`
-	MemoryMB int         `json:"memoryMB" yaml:"memoryMB"`
-	CPUs     int         `json:"cpus" yaml:"cpus"`
-	Disk     string      `json:"disk" yaml:"disk"`
-	ISO      string      `json:"iso,omitempty" yaml:"iso,omitempty"`
-	VNC      bool        `json:"vnc,omitempty" yaml:"vnc,omitempty"`
-	Networks []VMNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
+	ID           string      `json:"id" yaml:"id"`
+	Name         string      `json:"name,omitempty" yaml:"name,omitempty"`
+	DesiredState string      `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
+	MemoryMB     int         `json:"memoryMB" yaml:"memoryMB"`
+	CPUs         int         `json:"cpus" yaml:"cpus"`
+	Disk         string      `json:"disk" yaml:"disk"`
+	ISO          string      `json:"iso,omitempty" yaml:"iso,omitempty"`
+	VNC          bool        `json:"vnc,omitempty" yaml:"vnc,omitempty"`
+	Networks     []VMNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
 }
 
 type VMNetwork struct {
@@ -59,12 +63,14 @@ type VMNetwork struct {
 }
 
 type Container struct {
-	ID       string             `json:"id" yaml:"id"`
-	Name     string             `json:"name,omitempty" yaml:"name,omitempty"`
-	Image    string             `json:"image" yaml:"image"`
-	Command  []string           `json:"command,omitempty" yaml:"command,omitempty"`
-	Env      map[string]string  `json:"env,omitempty" yaml:"env,omitempty"`
-	Networks []ContainerNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
+	ID           string             `json:"id" yaml:"id"`
+	Name         string             `json:"name,omitempty" yaml:"name,omitempty"`
+	DesiredState string             `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
+	Image        string             `json:"image" yaml:"image"`
+	Command      []string           `json:"command,omitempty" yaml:"command,omitempty"`
+	Shell        string             `json:"shell,omitempty" yaml:"shell,omitempty"`
+	Env          map[string]string  `json:"env,omitempty" yaml:"env,omitempty"`
+	Networks     []ContainerNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
 }
 
 type ContainerNetwork struct {
@@ -193,6 +199,7 @@ func (l *Lab) Normalize() {
 	for i := range l.VMs {
 		l.VMs[i].ID = strings.TrimSpace(l.VMs[i].ID)
 		l.VMs[i].Name = strings.TrimSpace(l.VMs[i].Name)
+		l.VMs[i].DesiredState = normalizeDesiredState(l.VMs[i].DesiredState)
 		l.VMs[i].Disk = strings.TrimSpace(l.VMs[i].Disk)
 		l.VMs[i].ISO = strings.TrimSpace(l.VMs[i].ISO)
 		for j := range l.VMs[i].Networks {
@@ -210,6 +217,7 @@ func (l *Lab) Normalize() {
 	for i := range l.Containers {
 		l.Containers[i].ID = strings.TrimSpace(l.Containers[i].ID)
 		l.Containers[i].Name = strings.TrimSpace(l.Containers[i].Name)
+		l.Containers[i].DesiredState = normalizeDesiredState(l.Containers[i].DesiredState)
 		l.Containers[i].Image = strings.TrimSpace(l.Containers[i].Image)
 		for j := range l.Containers[i].Command {
 			l.Containers[i].Command[j] = strings.TrimSpace(l.Containers[i].Command[j])
@@ -305,8 +313,8 @@ func (l *Lab) Validate() error {
 		if vm.CPUs <= 0 {
 			problems = append(problems, fmt.Sprintf("vm %q cpus must be greater than zero", vm.ID))
 		}
-		if vm.Disk == "" {
-			problems = append(problems, fmt.Sprintf("vm %q disk is required", vm.ID))
+		if !validDesiredState(vm.DesiredState) {
+			problems = append(problems, fmt.Sprintf("vm %q desiredState must be running or stopped", vm.ID))
 		}
 		for _, nic := range vm.Networks {
 			switchRef := nic.Switch != ""
@@ -339,6 +347,9 @@ func (l *Lab) Validate() error {
 		containerIDs[ct.ID] = struct{}{}
 		if ct.Image == "" {
 			problems = append(problems, fmt.Sprintf("container %q image is required", ct.ID))
+		}
+		if !validDesiredState(ct.DesiredState) {
+			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ct.ID))
 		}
 		for _, nic := range ct.Networks {
 			if nic.Switch == "" {
@@ -493,6 +504,27 @@ func (l *Lab) ManagedNetworkLinkBridgeName(link NetworkLink) string {
 
 func validID(id string) bool {
 	return idPattern.MatchString(id)
+}
+
+func DesiredState(value string) string {
+	value = normalizeDesiredState(value)
+	if value == "" {
+		return DesiredStateStopped
+	}
+	return value
+}
+
+func normalizeDesiredState(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func validDesiredState(value string) bool {
+	switch normalizeDesiredState(value) {
+	case "", DesiredStateRunning, DesiredStateStopped:
+		return true
+	default:
+		return false
+	}
 }
 
 func managedName(labID, resourceID string) string {

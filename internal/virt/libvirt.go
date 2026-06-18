@@ -118,20 +118,20 @@ func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) err
 		}
 	} else {
 		state, _, stateErr := dom.GetState()
-		_ = dom.Free()
 		if stateErr == nil && state == libvirt.DOMAIN_RUNNING {
+			_ = dom.Free()
 			return nil
 		}
-		if err := r.attachVMNICs(ctx, l, vm); err != nil {
-			return err
-		}
-		defined, defineErr := r.defineVM(l, vm)
+		defined, defineErr := r.redefineInactiveVM(l, vm, dom)
+		_ = dom.Free()
 		if defineErr != nil {
-			r.detachVMNICs(ctx, l, vm)
 			return defineErr
 		}
 		dom = defined
 		defer dom.Free()
+		if err := r.attachVMNICs(ctx, l, vm); err != nil {
+			return err
+		}
 	}
 	state, _, err := dom.GetState()
 	if err == nil && state == libvirt.DOMAIN_RUNNING {
@@ -142,6 +142,21 @@ func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) err
 		return fmt.Errorf("start domain %q: %w", id, err)
 	}
 	return nil
+}
+
+func (r *LibvirtRuntime) redefineInactiveVM(l *lab.Lab, vm lab.VM, dom *libvirt.Domain) (*libvirt.Domain, error) {
+	xmlText, err := domainXML(l, vm)
+	if err != nil {
+		return nil, err
+	}
+	if err := dom.Undefine(); err != nil {
+		return nil, fmt.Errorf("undefine domain %q: %w", vm.ID, err)
+	}
+	defined, err := r.conn.DomainDefineXML(xmlText)
+	if err != nil {
+		return nil, fmt.Errorf("define domain %q: %w", vm.ID, err)
+	}
+	return defined, nil
 }
 
 func (r *LibvirtRuntime) defineVM(l *lab.Lab, vm lab.VM) (*libvirt.Domain, error) {
@@ -184,13 +199,13 @@ func (r *LibvirtRuntime) StopVM(ctx context.Context, l *lab.Lab, id string) erro
 	state, _, err := dom.GetState()
 	if err == nil && state == libvirt.DOMAIN_SHUTOFF {
 		r.detachVMNICs(ctx, l, vm)
-		return nil
+		return r.undefineVM(vm, dom)
 	}
-	if err := dom.Shutdown(); err != nil && !isNotFound(err) {
-		return fmt.Errorf("stop domain %q: %w", id, err)
+	if err := dom.Destroy(); err != nil && !isNotFound(err) && !isDomainNotRunning(err) {
+		return fmt.Errorf("destroy domain %q: %w", id, err)
 	}
 	r.detachVMNICs(ctx, l, vm)
-	return nil
+	return r.undefineVM(vm, dom)
 }
 
 func (r *LibvirtRuntime) attachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) error {
@@ -205,6 +220,13 @@ func (r *LibvirtRuntime) detachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM
 		r.Bridge = hostnet.NewBridge()
 	}
 	r.Bridge.DetachVMNICs(ctx, l, vm)
+}
+
+func (r *LibvirtRuntime) undefineVM(vm lab.VM, dom *libvirt.Domain) error {
+	if err := dom.Undefine(); err != nil && !isNotFound(err) {
+		return fmt.Errorf("undefine domain %q: %w", vm.ID, err)
+	}
+	return nil
 }
 
 func labVM(l *lab.Lab, id string) (lab.VM, bool) {
@@ -248,4 +270,14 @@ func isNotFound(err error) bool {
 	return strings.Contains(text, "not found") ||
 		strings.Contains(text, "no domain") ||
 		strings.Contains(text, "domain not found")
+}
+
+func isDomainNotRunning(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "domain is not running") ||
+		strings.Contains(text, "domain not running") ||
+		strings.Contains(text, "not active")
 }

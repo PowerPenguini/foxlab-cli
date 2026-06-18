@@ -24,7 +24,7 @@ func MockModel() Model {
 	return Model{
 		ID: "mock",
 		Nodes: []Node{
-			{ID: "router", Type: NodeVM, Badge: "VM", Label: "router", State: "running", X: 4, Y: 3, Details: []string{"cpu=2", "mem=2048M", "vnc=true", "disk=labs/mock/disks/router.img", "nic0 → edge"}},
+			{ID: "router", Type: NodeVM, Badge: "VM", Label: "router", State: "running", DesiredState: lab.DesiredStateRunning, X: 4, Y: 3, Details: []string{"cpu=2", "mem=2048M", "vnc=true", "disk=labs/mock/disks/router.img", "nic0 → edge"}},
 			{ID: "client01", Type: NodeVM, Badge: "VM", Label: "client01", State: "defined", X: 4, Y: 11, Details: []string{"cpu=2", "mem=2048M", "vnc=false", "disk=labs/mock/disks/client01.img", "nic0 → lan"}},
 			{ID: "web", Type: NodeContainer, Badge: "CT", Label: "web", State: "missing", X: 4, Y: 19, Details: []string{"image=docker.io/library/nginx:latest", "nic0 → lan"}},
 			{ID: "edge", Type: NodeSwitch, Badge: "SW", Label: "edge", State: "bridge", X: 28, Y: 5, Details: []string{"mode=macnat-bridge", "uplink=uplink0"}},
@@ -61,7 +61,9 @@ func ModelFromLab(l *lab.Lab) Model {
 			fmt.Sprintf("cpu=%d", vm.CPUs),
 			fmt.Sprintf("mem=%dM", vm.MemoryMB),
 			fmt.Sprintf("vnc=%t", vm.VNC),
-			"disk=" + vm.Disk,
+		}
+		if vm.Disk != "" {
+			details = append(details, "disk="+vm.Disk)
 		}
 		if vm.ISO != "" {
 			details = append(details, "iso="+vm.ISO)
@@ -81,14 +83,15 @@ func ModelFromLab(l *lab.Lab) Model {
 			}
 		}
 		m.Nodes = append(m.Nodes, Node{
-			ID:      vm.ID,
-			Type:    NodeVM,
-			Badge:   "VM",
-			Label:   firstNonEmpty(vm.Name, vm.ID),
-			State:   "defined",
-			X:       layoutX(l, vm.ID, NodeVM, i),
-			Y:       layoutY(l, vm.ID, i),
-			Details: details,
+			ID:           vm.ID,
+			Type:         NodeVM,
+			Badge:        "VM",
+			Label:        firstNonEmpty(vm.Name, vm.ID),
+			State:        "defined",
+			DesiredState: lab.DesiredState(vm.DesiredState),
+			X:            layoutX(l, vm.ID, NodeVM, i),
+			Y:            layoutY(l, vm.ID, i),
+			Details:      details,
 		})
 		for _, nic := range vm.Networks {
 			if nic.Switch != "" {
@@ -120,14 +123,15 @@ func ModelFromLab(l *lab.Lab) Model {
 			}
 		}
 		m.Nodes = append(m.Nodes, Node{
-			ID:      ct.ID,
-			Type:    NodeContainer,
-			Badge:   "CT",
-			Label:   firstNonEmpty(ct.Name, ct.ID),
-			State:   "missing",
-			X:       layoutX(l, ct.ID, NodeContainer, i),
-			Y:       layoutY(l, ct.ID, i),
-			Details: details,
+			ID:           ct.ID,
+			Type:         NodeContainer,
+			Badge:        "CT",
+			Label:        firstNonEmpty(ct.Name, ct.ID),
+			State:        "missing",
+			DesiredState: lab.DesiredState(ct.DesiredState),
+			X:            layoutX(l, ct.ID, NodeContainer, i),
+			Y:            layoutY(l, ct.ID, i),
+			Details:      details,
 		})
 	}
 	for i, sw := range l.Switches {

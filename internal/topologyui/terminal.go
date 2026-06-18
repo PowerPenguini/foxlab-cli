@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -30,6 +32,7 @@ const (
 )
 
 func startAppTerminalSession(a *App) (func(), error) {
+	signal.Ignore(syscall.SIGINT)
 	return startTerminalSession(int(a.In.Fd()), a.Out)
 }
 
@@ -41,6 +44,7 @@ func startTerminalSession(inFD int, out io.Writer) (func(), error) {
 	_, _ = io.WriteString(out, ansiEnterAltScreen+ansiHide+ansiClear)
 	return func() {
 		_, _ = io.WriteString(out, ansiShow+ansiReset+ansiExitAltScreen)
+		signal.Reset(syscall.SIGINT)
 		restoreRaw()
 	}, nil
 }
@@ -67,6 +71,22 @@ func envInt(name string, fallback int) int {
 }
 
 func makeRaw(fd int) (func(), error) {
+	return makeRawWithReadMode(fd, 0, 1)
+}
+
+func makeBlockingRaw(fd int) (func(), error) {
+	return makeRawWithReadMode(fd, 1, 0)
+}
+
+func makeShellRaw(fd int) (func(), error) {
+	return makeShellRawWithReadMode(fd, 0, 1)
+}
+
+func makeShellBlockingRaw(fd int) (func(), error) {
+	return makeShellRawWithReadMode(fd, 1, 0)
+}
+
+func makeRawWithReadMode(fd int, min, timeout uint8) (func(), error) {
 	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		return nil, fmt.Errorf("raw terminal mode: %w", err)
@@ -74,8 +94,26 @@ func makeRaw(fd int) (func(), error) {
 	next := *old
 	next.Iflag &^= unix.ICRNL | unix.IXON
 	next.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN
-	next.Cc[unix.VMIN] = 0
-	next.Cc[unix.VTIME] = 1
+	next.Cc[unix.VMIN] = min
+	next.Cc[unix.VTIME] = timeout
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &next); err != nil {
+		return nil, fmt.Errorf("raw terminal mode: %w", err)
+	}
+	return func() {
+	_ = unix.IoctlSetTermios(fd, unix.TCSETS, old)
+}, nil
+}
+
+func makeShellRawWithReadMode(fd int, min, timeout uint8) (func(), error) {
+	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return nil, fmt.Errorf("raw terminal mode: %w", err)
+	}
+	next := *old
+	next.Iflag &^= unix.ICRNL | unix.IXON
+	next.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN | unix.ISIG
+	next.Cc[unix.VMIN] = min
+	next.Cc[unix.VTIME] = timeout
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &next); err != nil {
 		return nil, fmt.Errorf("raw terminal mode: %w", err)
 	}

@@ -1,6 +1,8 @@
 package virt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,13 +10,17 @@ import (
 )
 
 func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "vm1.qcow2")
+	if err := writeEmptyFile(diskPath); err != nil {
+		t.Fatal(err)
+	}
 	l := &lab.Lab{
 		ID: "demo",
 		VMs: []lab.VM{{
 			ID:       "vm1",
 			MemoryMB: 2048,
 			CPUs:     2,
-			Disk:     "labs/demo/disks/vm1.qcow2",
+			Disk:     diskPath,
 			VNC:      true,
 			Networks: []lab.VMNetwork{{
 				Switch: "sw1",
@@ -30,11 +36,14 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 	for _, want := range []string{
 		"<name>foxlab-demo-vm1</name>",
-		`<source file="labs/demo/disks/vm1.qcow2"/>`,
-		`<interface type="ethernet">`,
-		`<target dev="tfoxlabdemovm10"/>`,
-		`<script path="/bin/true"/>`,
+		`<source file="` + diskPath + `"/>`,
+		`<interface type="bridge">`,
+		`<source bridge="flfoxlabdemosw1"/>`,
 		`<graphics type="vnc"`,
+		`<serial type="pty">`,
+		`<target type="isa-serial" port="0"/>`,
+		`<console type="pty">`,
+		`<target type="serial" port="0"/>`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
@@ -42,6 +51,30 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 	if strings.Contains(xmlText, `<source network="foxlab-demo-sw1"/>`) {
 		t.Fatalf("domain XML still uses libvirt network for switch NIC:\n%s", xmlText)
+	}
+}
+
+func TestDomainXMLOmitsMissingDisk(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     "labs/demo/disks/missing.qcow2",
+		}},
+	}
+	l.Normalize()
+
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(xmlText, `<disk type="file" device="disk">`) {
+		t.Fatalf("domain XML included missing disk:\n%s", xmlText)
+	}
+	if strings.Contains(xmlText, `<boot dev="hd"/>`) {
+		t.Fatalf("domain XML requested disk boot without disk:\n%s", xmlText)
 	}
 }
 
@@ -64,14 +97,17 @@ func TestDomainXMLIncludesDirectLinkedNIC(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`<interface type="ethernet">`,
-		`<target dev="tfoxlabdemovm10"/>`,
-		`<script path="/bin/true"/>`,
+		`<interface type="bridge">`,
+		`<source bridge="flp2p`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing direct NIC %q:\n%s", want, xmlText)
 		}
 	}
+}
+
+func writeEmptyFile(path string) error {
+	return os.WriteFile(path, nil, 0o644)
 }
 
 func TestNetworkXMLUsesManagedMetadata(t *testing.T) {

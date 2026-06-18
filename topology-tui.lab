@@ -11,9 +11,10 @@ vms:
         - switch: sw1
     - id: vm3
       name: vm3
+      desiredState: running
       memoryMB: 2048
       cpus: 2
-      disk: labs/topology-tui/disks/vm3.qcow2
+      disk: ""
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       networks:
         - switch: sw1
@@ -31,12 +32,33 @@ vms:
         - {}
     - id: hello
       name: hello
+      desiredState: running
       memoryMB: 2048
       cpus: 2
-      disk: labs/topology-tui/disks/hello.qcow2
+      disk: ""
       networks:
         - externalLink: link1
         - {}
+    - id: new
+      name: new
+      desiredState: running
+      memoryMB: 2048
+      cpus: 2
+      disk: labs/topology-tui/disks/new.qcow2
+      networks:
+        - switch: sw1
+containers:
+    - id: bash-test
+      name: bash-test
+      desiredState: running
+      image: docker.io/kalilinux/kali-rolling:latest
+      command:
+        - /usr/bin/bash
+        - -lc
+        - sleep infinity
+      shell: /usr/bin/bash
+      networks:
+        - switch: sw1
 switches:
     - id: sw1
       name: sw1
@@ -62,12 +84,18 @@ disks:
       format: qcow2
 layout:
     nodes:
+        bash-test:
+            x: 480
+            "y": 72
         hello:
             x: 1296
-            "y": 192
+            "y": 168
         link1:
             x: 848
             "y": 696
+        new:
+            x: 368
+            "y": 552
         sw1:
             x: 848
             "y": 336
@@ -105,3 +133,9 @@ layout:
           to:
             type: vm
             id: vm4
+        - from:
+            type: switch
+            id: sw1
+          to:
+            type: container
+            id: bash-test

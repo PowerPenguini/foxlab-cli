@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
+	"time"
 
 	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/lab"
@@ -31,12 +33,15 @@ type App struct {
 	WorkloadStates    map[string]string
 	CommandLog        []string
 	HistoryIndex      int
+	PendingShell      *shellCommand
 	In                *os.File
 	Out               *os.File
 	ViewWidth         int
 	ViewHeight        int
 	RouteCacheKey     string
 	RouteCacheRoutes  []visibleEdge
+	ReconcileInterval time.Duration
+	VMConsole         func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 }
 
 func (a *App) Run() error {
@@ -86,10 +91,23 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
 	dirty := true
 	lastWidth, lastHeight := 0, 0
+	reconcileInterval := a.reconcileInterval()
+	nextReconcile := time.Now().Add(reconcileInterval)
+	reconcileActive := false
+	reconcileUpdates := make(chan reconcileUpdate, 1)
 	for {
+		if a.drainReconcileUpdates(reconcileUpdates, &reconcileActive) {
+			dirty = true
+		}
 		width, height := size(a)
 		a.ViewWidth = width
 		a.ViewHeight = height
@@ -105,6 +123,11 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 			}
 			dirty = false
 		}
+		if !reconcileActive && a.Lab != nil && time.Now().After(nextReconcile) {
+			reconcileActive = true
+			nextReconcile = time.Now().Add(reconcileInterval)
+			a.startReconcile(ctx, reconcileUpdates)
+		}
 		key, err := read(a)
 		if err != nil {
 			return err
@@ -115,7 +138,87 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		if a.handleKey(key) {
 			return nil
 		}
+		if a.PendingShell != nil {
+			command := *a.PendingShell
+			a.PendingShell = nil
+			cleanup()
+			cleanup = nil
+			if err := a.runShell(command); err != nil {
+				a.State.Message = "shell failed: " + err.Error()
+			} else {
+				a.State.Message = "shell closed"
+			}
+			cleanup, err = start(a)
+			if err != nil {
+				return err
+			}
+			dirty = true
+			continue
+		}
 		dirty = true
+	}
+}
+
+type reconcileUpdate struct {
+	states  map[string]string
+	message string
+}
+
+func (a *App) reconcileInterval() time.Duration {
+	if a.ReconcileInterval > 0 {
+		return a.ReconcileInterval
+	}
+	return time.Second
+}
+
+func (a *App) startReconcile(ctx context.Context, updates chan<- reconcileUpdate) {
+	l := a.Lab
+	go func() {
+		runtime, closeRuntime, err := a.runtime()
+		if err != nil {
+			sendReconcileUpdate(ctx, updates, reconcileUpdate{message: "runtime connection failed: " + err.Error()})
+			return
+		}
+		defer closeRuntime()
+		result := (&workload.Reconciler{Runtime: runtime}).Step(ctx, l)
+		update := reconcileUpdate{states: result.States}
+		if len(result.Errors) > 0 {
+			update.message = "reconcile failed: " + result.Errors[0].Error()
+		} else if len(result.Actions) > 0 {
+			update.message = strings.Join(result.Actions, ", ")
+		}
+		sendReconcileUpdate(ctx, updates, update)
+	}()
+}
+
+func sendReconcileUpdate(ctx context.Context, updates chan<- reconcileUpdate, update reconcileUpdate) {
+	select {
+	case updates <- update:
+	case <-ctx.Done():
+	}
+}
+
+func (a *App) drainReconcileUpdates(updates <-chan reconcileUpdate, active *bool) bool {
+	changed := false
+	for {
+		select {
+		case update := <-updates:
+			*active = false
+			if update.states != nil && !sameStringMap(a.WorkloadStates, update.states) {
+				a.WorkloadStates = update.states
+				if a.Service != nil {
+					a.Service.States = update.states
+				}
+				a.applyWorkloadStates()
+				changed = true
+			}
+			if update.message != "" && a.State.Message != update.message {
+				a.State.Message = update.message
+				changed = true
+			}
+		default:
+			return changed
+		}
 	}
 }
 
@@ -173,6 +276,18 @@ func (a *App) applyWorkloadStates() {
 			a.Model.Nodes[i].State = state
 		}
 	}
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) containerdAddressFromLab() string {

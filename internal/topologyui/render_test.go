@@ -561,7 +561,7 @@ func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
 		" Memory      2048M",
 		" VNC         [ ]",
 		" Disk        labs/mock/disks/client01.img",
-		" ISO         ?",
+		" ISO",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing config form submenu item %q:\n%s", want, out)
@@ -575,6 +575,26 @@ func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
 	}
 	if strings.Contains(out, "nic0") {
 		t.Fatalf("render kept NIC detail in config submenu:\n%s", out)
+	}
+}
+
+func TestRenderContextEditKeepsEmptyDiskValueEmpty(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextGroup:       "config-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 5,
+		ContextEdit:        true,
+		ContextEditValue:   "",
+		ContextEditCursor:  0,
+	}, 100, 30, false)
+	if strings.Contains(out, "labs/mock/disks/client01.img") {
+		t.Fatalf("empty disk edit restored old path:\n%s", out)
+	}
+	if !strings.Contains(out, "Disk        |") {
+		t.Fatalf("empty disk edit missing empty cursor field:\n%s", out)
 	}
 }
 
@@ -909,5 +929,32 @@ func TestModelFromLabBuildsGraph(t *testing.T) {
 	}
 	if got := m.Edges[0]; got.From != NodeKey(NodeVM, "vm1") || got.To != NodeKey(NodeSwitch, "sw1") {
 		t.Fatalf("first edge = %#v, want vm1 → sw1", got)
+	}
+}
+
+func TestModelFromLabOmitsEmptyDiskDetail(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			Name:     "debian",
+			MemoryMB: 1024,
+			CPUs:     1,
+			Disk:     "",
+		}},
+	})
+	if len(m.Nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(m.Nodes))
+	}
+	details := strings.Join(m.Nodes[0].Details, "\n")
+	if strings.Contains(details, "disk=") {
+		t.Fatalf("empty disk leaked into details: %#v", m.Nodes[0].Details)
+	}
+	out := RenderString(m, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	if strings.Contains(out, "labs/") || strings.Contains(out, "qcow2") {
+		t.Fatalf("render kept disk path after disk clear:\n%s", out)
+	}
+	if !strings.Contains(out, "Disk") {
+		t.Fatalf("render should still allow disk editing:\n%s", out)
 	}
 }

@@ -1,7 +1,6 @@
 package topologyui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -93,6 +92,8 @@ func (a *App) runMenuAction(node Node, action string) {
 		}
 	case "move":
 		a.startMove(node)
+	case "shell":
+		a.startShell(node)
 	case "run":
 		a.runWorkload(node.Type, node.ID)
 	case "stop":
@@ -105,18 +106,7 @@ func (a *App) runWorkload(typ, id string) {
 		a.State.Message = "run needs a loaded .lab file"
 		return
 	}
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		a.State.Message = "runtime connection failed: " + err.Error()
-		return
-	}
-	defer closeRuntime()
-	if err := runtime.Start(context.Background(), a.Lab, workloadRef(typ, id)); err != nil {
-		a.State.Message = "run failed: " + err.Error()
-		return
-	}
-	a.State.Message = "running " + typ + ":" + id
-	a.refreshWorkloadStates()
+	a.setWorkloadDesiredState(typ, id, lab.DesiredStateRunning)
 }
 
 func (a *App) stopWorkload(typ, id string) {
@@ -124,18 +114,20 @@ func (a *App) stopWorkload(typ, id string) {
 		a.State.Message = "stop needs a loaded .lab file"
 		return
 	}
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		a.State.Message = "runtime connection failed: " + err.Error()
-		return
+	a.setWorkloadDesiredState(typ, id, lab.DesiredStateStopped)
+}
+
+func (a *App) setWorkloadDesiredState(typ, id, state string) {
+	service := a.ensureService()
+	switch typ {
+	case NodeContainer:
+		a.State.Message = service.ContainerDesiredState(id, state)
+	case NodeVM:
+		a.State.Message = service.VMDesiredState(id, state)
+	default:
+		a.State.Message = "desired state is available for vm and container nodes"
 	}
-	defer closeRuntime()
-	if err := runtime.Stop(context.Background(), a.Lab, workloadRef(typ, id)); err != nil {
-		a.State.Message = "stop failed: " + err.Error()
-		return
-	}
-	a.State.Message = "stopping " + typ + ":" + id
-	a.refreshWorkloadStates()
+	a.syncFromService()
 }
 
 func workloadRef(typ, id string) workload.Ref {

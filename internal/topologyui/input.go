@@ -31,8 +31,6 @@ func readKey(fd int, commandMode bool) (string, error) {
 	}
 	seq := string(buf[:n])
 	switch {
-	case seq == "\x03":
-		return "quit", nil
 	case seq == "j":
 		if commandMode {
 			return "char:j", nil

@@ -42,22 +42,7 @@ func (b *Bridge) AttachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) error 
 		if bridge == "" {
 			continue
 		}
-		tap := VMTapName(l, vm, index)
-		_ = b.Runner.Run(ctx, "ip", "link", "delete", tap)
-		if err := b.Runner.Run(ctx, "ip", "tuntap", "add", tap, "mode", "tap"); err != nil {
-			return err
-		}
-		if nic.MAC != "" {
-			if err := b.Runner.Run(ctx, "ip", "link", "set", tap, "address", nic.MAC); err != nil {
-				return err
-			}
-		}
-		if err := b.Runner.Run(ctx, "ip", "link", "set", tap, "master", bridge); err != nil {
-			return err
-		}
-		if err := b.Runner.Run(ctx, "ip", "link", "set", tap, "up"); err != nil {
-			return err
-		}
+		_ = b.Runner.Run(ctx, "ip", "link", "delete", VMTapName(l, vm, index))
 	}
 	return nil
 }

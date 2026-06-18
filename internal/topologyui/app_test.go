@@ -8,15 +8,40 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/workload"
 )
 
+type fakeConsole struct {
+	bytes.Buffer
+	closed bool
+}
+
+func (f *fakeConsole) Close() error {
+	f.closed = true
+	return nil
+}
+
+type eofReader struct{}
+
+func (eofReader) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+type closedPipeReader struct{}
+
+func (closedPipeReader) Read([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
 type fakeVMRuntime struct {
 	states  map[string]string
 	started string
 	stopped string
+	starts  int
+	stops   int
 }
 
 func (f *fakeVMRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
@@ -24,6 +49,7 @@ func (f *fakeVMRuntime) States(context.Context, *lab.Lab) (map[string]string, er
 }
 
 func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.starts++
 	f.started = workload.Key(ref)
 	if f.states == nil {
 		f.states = map[string]string{}
@@ -33,6 +59,7 @@ func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) e
 }
 
 func (f *fakeVMRuntime) Stop(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.stops++
 	f.stopped = workload.Key(ref)
 	if f.states == nil {
 		f.states = map[string]string{}
@@ -97,6 +124,29 @@ func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
 	}
 	if app.State.ContextGroup != "" {
 		t.Fatalf("context group after right = %q, want empty", app.State.ContextGroup)
+	}
+}
+
+func TestContextMenuIncludesShellForWorkloads(t *testing.T) {
+	foundVM := false
+	for _, item := range contextMenuItems(Node{ID: "vm1", Type: NodeVM}, "") {
+		if item == "Shell" {
+			foundVM = true
+			break
+		}
+	}
+	if !foundVM {
+		t.Fatalf("vm context menu missing Shell: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
+	}
+	found := false
+	for _, item := range contextMenuItems(Node{ID: "web", Type: NodeContainer}, "") {
+		if item == "Shell" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("container context menu missing Shell: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
 	}
 }
 
@@ -485,66 +535,117 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 	}
 }
 
-func TestRunStopActionsUseVMRuntime(t *testing.T) {
+func TestContextMenuInlineEditClearsDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:  "demo",
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
 	}
-	loaded.Normalize()
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.applyContextEdit(Node{ID: "vm1", Type: NodeVM}, "Disk        labs/demo/disks/vm1.img", "")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Disk != "" {
+		t.Fatalf("disk after inline clear = %q, want empty", reloaded.VMs[0].Disk)
+	}
+	out := RenderString(app.Model, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	if strings.Contains(out, "labs/demo/disks/vm1.img") {
+		t.Fatalf("context menu kept cleared disk path:\n%s", out)
+	}
+}
+
+func TestRunStopActionsSetVMDesiredState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "shutoff"}}
 	app := App{
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
+		LabPath: path,
 		Runtime: runtime,
 		State:   ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "run")
-	if runtime.started != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("started vm = %q, want vm:vm1", runtime.started)
+	if runtime.starts != 0 {
+		t.Fatalf("run called runtime Start %d times", runtime.starts)
 	}
-	if app.Model.Nodes[0].State != "running" {
-		t.Fatalf("model state after run = %q, want running", app.Model.Nodes[0].State)
+	if app.Lab.VMs[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("desired state after run = %q, want running", app.Lab.VMs[0].DesiredState)
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "stop")
-	if runtime.stopped != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("stopped vm = %q, want vm:vm1", runtime.stopped)
+	if runtime.stops != 0 {
+		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
 	}
-	if app.Model.Nodes[0].State != "shutoff" {
-		t.Fatalf("model state after stop = %q, want shutoff", app.Model.Nodes[0].State)
+	if app.Lab.VMs[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("desired state after stop = %q, want stopped", app.Lab.VMs[0].DesiredState)
 	}
 }
 
-func TestRunStopActionsUseContainerRuntime(t *testing.T) {
+func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:         "demo",
 		Switches:   []lab.Switch{{ID: "lan", Mode: "bridge"}},
 		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
 	}
-	loaded.Normalize()
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "stopped"}}
 	app := App{
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
+		LabPath: path,
 		Runtime: runtime,
 		State:   ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "run")
-	if runtime.started != NodeKey(NodeContainer, "web") {
-		t.Fatalf("started container = %q, want container:web", runtime.started)
+	if runtime.starts != 0 {
+		t.Fatalf("run called runtime Start %d times", runtime.starts)
 	}
-	if app.Model.Nodes[0].State != "running" {
-		t.Fatalf("model state after run = %q, want running", app.Model.Nodes[0].State)
+	if app.Lab.Containers[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("desired state after run = %q, want running", app.Lab.Containers[0].DesiredState)
 	}
 
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "stop")
-	if runtime.stopped != NodeKey(NodeContainer, "web") {
-		t.Fatalf("stopped container = %q, want container:web", runtime.stopped)
+	if runtime.stops != 0 {
+		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
 	}
-	if app.Model.Nodes[0].State != "shutoff" {
-		t.Fatalf("model state after stop = %q, want shutoff", app.Model.Nodes[0].State)
+	if app.Lab.Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("desired state after stop = %q, want stopped", app.Lab.Containers[0].DesiredState)
 	}
 }
 
@@ -910,6 +1011,143 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 	}
 }
 
+func TestCommandStartStopSetsDesiredState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 512,
+			CPUs:     1,
+			Disk:     "disks/vm1.qcow2",
+		}},
+		Containers: []lab.Container{{ID: "web", Image: "nginx"}},
+	}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeVMRuntime{}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		Runtime: runtime,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.executeCommand("vm start vm1")
+	if runtime.starts != 0 {
+		t.Fatalf("vm start called runtime Start %d times", runtime.starts)
+	}
+	if app.Lab.VMs[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("vm desired after start = %q", app.Lab.VMs[0].DesiredState)
+	}
+	app.executeCommand("container start web")
+	if runtime.starts != 0 {
+		t.Fatalf("container start called runtime Start %d times", runtime.starts)
+	}
+	if app.Lab.Containers[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("container desired after start = %q", app.Lab.Containers[0].DesiredState)
+	}
+	app.executeCommand("vm stop vm1")
+	app.executeCommand("container stop web")
+	if runtime.stops != 0 {
+		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
+	}
+	if app.Lab.VMs[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("vm desired after stop = %q", app.Lab.VMs[0].DesiredState)
+	}
+	if app.Lab.Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("container desired after stop = %q", app.Lab.Containers[0].DesiredState)
+	}
+}
+
+func TestShellVMUsesDirectConsole(t *testing.T) {
+	app := App{
+		Model:   MockModel(),
+		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		Runtime: &fakeVMRuntime{},
+		State:   ViewState{Focus: FocusGraph},
+		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
+			if id != "vm1" {
+				t.Fatalf("console id = %q", id)
+			}
+			return &fakeConsole{}, "vm console /dev/pts/7", nil
+		},
+	}
+
+	app.executeCommand("shell vm vm1")
+
+	if app.PendingShell == nil {
+		t.Fatal("vm shell did not set pending command")
+	}
+	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("vm shell started %q", got)
+	}
+	if app.PendingShell.Console == nil || app.PendingShell.NativeRun != nil {
+		t.Fatalf("vm shell command = %#v", app.PendingShell)
+	}
+	if app.PendingShell.Display != "vm console /dev/pts/7" {
+		t.Fatalf("vm shell display = %q", app.PendingShell.Display)
+	}
+}
+
+func TestCopyConsoleOutputKeepsSessionOpenOnEOF(t *testing.T) {
+	done := make(chan struct{})
+	errc := make(chan error, 1)
+	go func() {
+		errc <- copyConsoleOutput(io.Discard, eofReader{}, done)
+	}()
+
+	select {
+	case err := <-errc:
+		t.Fatalf("console copy exited on EOF: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	close(done)
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("console copy after done = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("console copy did not exit after done")
+	}
+}
+
+func TestCopyConsoleOutputKeepsSessionOpenOnClosedPipe(t *testing.T) {
+	var out bytes.Buffer
+	done := make(chan struct{})
+	errc := make(chan error, 1)
+	go func() {
+		errc <- copyConsoleOutput(&out, closedPipeReader{}, done)
+	}()
+
+	select {
+	case err := <-errc:
+		t.Fatalf("console copy exited on closed pipe: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if strings.Contains(out.String(), "closed pipe") {
+		t.Fatalf("console copy printed closed pipe: %q", out.String())
+	}
+
+	close(done)
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("console copy after done = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("console copy did not exit after done")
+	}
+}
+
 func TestCommandAddCreatesGraphNodesWithMinimalData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	if err := lab.SaveFile(path, &lab.Lab{ID: "demo"}); err != nil {
@@ -998,6 +1236,32 @@ func TestCommandVMSetUpdatesDiskPath(t *testing.T) {
 	}
 	if reloaded.VMs[0].Disk != "labs/demo/disks/vm1.img" || reloaded.VMs[0].ISO != "images/debian.iso" {
 		t.Fatalf("vm after set = %#v", reloaded.VMs[0])
+	}
+}
+
+func TestCommandVMSetClearsDiskAndISO(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.qcow2", ISO: "images/debian.iso"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("vm set vm1 disk= iso=")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Disk != "" || reloaded.VMs[0].ISO != "" {
+		t.Fatalf("vm after clear = %#v, want empty disk and iso", reloaded.VMs[0])
 	}
 }
 
@@ -1224,10 +1488,20 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   MockModel(),
-		Lab:     loaded,
+		Model: MockModel(),
+		Lab:   loaded,
+		Runtime: &fakeVMRuntime{states: map[string]string{
+			NodeKey(NodeVM, "vm1"):        "shutoff",
+			NodeKey(NodeContainer, "web"): "stopped",
+		}},
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
+		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
+			if id != "vm1" {
+				t.Fatalf("console id = %q", id)
+			}
+			return &fakeConsole{}, "vm console /dev/pts/7", nil
+		},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
@@ -1276,6 +1550,18 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 	app.State.ConnectMode = false
 
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "shell")
+	if app.PendingShell == nil {
+		t.Fatal("vm shell did not set pending shell")
+	}
+	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("vm shell started %q", got)
+	}
+	if app.PendingShell.Console == nil || app.PendingShell.Display != "vm console /dev/pts/7" {
+		t.Fatalf("vm shell command = %#v", app.PendingShell)
+	}
+	app.PendingShell = nil
+
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "add-nic")
 	if app.State.Command != "container nic add web" {
 		t.Fatalf("container add-nic command = %q", app.State.Command)
@@ -1284,6 +1570,18 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
 	if !app.State.ConnectMode || app.State.ConnectNodeID != "web" || app.State.ConnectNICIndex != "0" {
 		t.Fatalf("container connect-nic state = %#v", app.State)
+	}
+	app.State.ConnectMode = false
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "shell")
+	if app.PendingShell == nil {
+		t.Fatal("container shell did not set pending shell")
+	}
+	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeContainer, "web") {
+		t.Fatalf("container shell started %q", got)
+	}
+	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-web") {
+		t.Fatalf("container shell command = %#v", app.PendingShell)
 	}
 }
 

@@ -2,10 +2,19 @@ package containerd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"os/exec"
-	"strconv"
+	"sort"
 	"strings"
+	"syscall"
+	"time"
+
+	containerd "github.com/containerd/containerd"
+	"github.com/containerd/containerd/cio"
+	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/oci"
 
 	"foxlab-cli/internal/hostnet"
 	"foxlab-cli/internal/lab"
@@ -15,33 +24,12 @@ import (
 const (
 	DefaultAddress   = "/run/containerd/containerd.sock"
 	DefaultNamespace = "foxlab"
+	configLabel      = "foxlab.config.sha256"
 )
-
-type CommandRunner interface {
-	Output(context.Context, string, ...string) (string, error)
-	Run(context.Context, string, ...string) error
-}
-
-type ExecRunner struct{}
-
-func (ExecRunner) Output(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("%s %v: %w: %s", name, args, err, string(output))
-	}
-	return string(output), nil
-}
-
-func (r ExecRunner) Run(ctx context.Context, name string, args ...string) error {
-	_, err := r.Output(ctx, name, args...)
-	return err
-}
 
 type Runtime struct {
 	Address   string
 	Namespace string
-	Runner    CommandRunner
 	Bridge    *hostnet.Bridge
 }
 
@@ -52,7 +40,6 @@ func NewRuntime(address string) *Runtime {
 	return &Runtime{
 		Address:   address,
 		Namespace: DefaultNamespace,
-		Runner:    ExecRunner{},
 		Bridge:    hostnet.NewBridge(),
 	}
 }
@@ -60,22 +47,36 @@ func NewRuntime(address string) *Runtime {
 func (r *Runtime) Close() error { return nil }
 
 func (r *Runtime) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
+	client, ctx, closeClient, err := r.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeClient()
 	states := map[string]string{}
 	for _, ct := range l.Containers {
-		states[workload.Key(workload.Ref{Type: workload.TypeContainer, ID: ct.ID})] = "missing"
-	}
-	tasks, err := r.ctrOutput(ctx, "tasks", "ls")
-	if err != nil {
-		return states, err
-	}
-	for _, line := range strings.Split(tasks, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || fields[0] == "TASK" {
+		key := workload.Key(workload.Ref{Type: workload.TypeContainer, ID: ct.ID})
+		states[key] = "missing"
+		container, err := client.LoadContainer(ctx, l.ManagedContainerName(ct))
+		if err != nil {
+			if errdefs.IsNotFound(err) {
+				continue
+			}
+			return states, err
+		}
+		task, err := container.Task(ctx, nil)
+		if err != nil {
+			if errdefs.IsNotFound(err) {
+				states[key] = "created"
+				continue
+			}
+			return states, err
+		}
+		status, err := task.Status(ctx)
+		if err != nil {
+			states[key] = "unknown"
 			continue
 		}
-		if ct, ok := findContainerByManagedName(l, fields[0]); ok {
-			states[workload.Key(workload.Ref{Type: workload.TypeContainer, ID: ct.ID})] = strings.ToLower(fields[1])
-		}
+		states[key] = string(status.Status)
 	}
 	return states, nil
 }
@@ -88,30 +89,56 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error
 	if !ok {
 		return fmt.Errorf("container not found: %s", ref.ID)
 	}
-	name := l.ManagedContainerName(ct)
-	_ = r.ctrRun(ctx, "images", "pull", ct.Image)
-	if running, _ := r.taskRunning(ctx, name); running {
-		return nil
-	}
-	if exists, _ := r.containerExists(ctx, name); !exists {
-		args := []string{"run", "--detach"}
-		for key, value := range ct.Env {
-			args = append(args, "--env", key+"="+value)
-		}
-		args = append(args, ct.Image, name)
-		args = append(args, ct.Command...)
-		if err := r.ctrRun(ctx, args...); err != nil {
-			return err
-		}
-	} else if err := r.ctrRun(ctx, "tasks", "start", name); err != nil {
-		return err
-	}
-	pid, err := r.taskPID(ctx, name)
+	client, ctx, closeClient, err := r.client(ctx)
 	if err != nil {
 		return err
 	}
+	defer closeClient()
+	name := l.ManagedContainerName(ct)
+	image, err := client.Pull(ctx, ct.Image, containerd.WithPullUnpack)
+	if err != nil {
+		return err
+	}
+	container, err := client.LoadContainer(ctx, name)
+	if err != nil {
+		if !errdefs.IsNotFound(err) {
+			return err
+		}
+		container, err = createContainer(ctx, client, name, image, ct)
+	} else if changed, err := containerConfigChanged(ctx, container, ct); err != nil {
+		return err
+	} else if changed {
+		if err := deleteContainer(ctx, container); err != nil {
+			return err
+		}
+		container, err = createContainer(ctx, client, name, image, ct)
+	}
+	if err != nil {
+		return err
+	}
+	task, err := container.Task(ctx, nil)
+	if err == nil {
+		status, statusErr := task.Status(ctx)
+		if statusErr == nil && status.Status == containerd.Running {
+			if r.Bridge != nil {
+				return r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid()))
+			}
+			return nil
+		}
+		_ = deleteTask(ctx, task)
+	} else if !errdefs.IsNotFound(err) {
+		return err
+	}
+	task, err = container.NewTask(ctx, cio.NullIO)
+	if err != nil {
+		return err
+	}
+	if err := task.Start(ctx); err != nil {
+		_ = deleteTask(ctx, task)
+		return err
+	}
 	if r.Bridge != nil {
-		if err := r.Bridge.AttachContainer(ctx, l, ct, pid); err != nil {
+		if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
 			return err
 		}
 	}
@@ -129,66 +156,30 @@ func (r *Runtime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error 
 	if r.Bridge != nil {
 		r.Bridge.DetachContainer(ctx, l, ct)
 	}
-	name := l.ManagedContainerName(ct)
-	_ = r.ctrRun(ctx, "tasks", "kill", name)
-	_ = r.ctrRun(ctx, "tasks", "delete", "--force", name)
-	return nil
-}
-
-func (r *Runtime) containerExists(ctx context.Context, name string) (bool, error) {
-	if _, err := r.ctrOutput(ctx, "containers", "info", name); err != nil {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (r *Runtime) taskRunning(ctx context.Context, name string) (bool, error) {
-	output, err := r.ctrOutput(ctx, "tasks", "ls")
+	client, ctx, closeClient, err := r.client(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == name {
-			return strings.EqualFold(fields[1], "running"), nil
-		}
-	}
-	return false, nil
-}
-
-func (r *Runtime) taskPID(ctx context.Context, name string) (int, error) {
-	output, err := r.ctrOutput(ctx, "tasks", "ls")
+	defer closeClient()
+	container, err := client.LoadContainer(ctx, l.ManagedContainerName(ct))
 	if err != nil {
-		return 0, err
-	}
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 && fields[0] == name {
-			pid, err := strconv.Atoi(fields[2])
-			if err != nil {
-				return 0, err
-			}
-			return pid, nil
+		if errdefs.IsNotFound(err) {
+			return nil
 		}
+		return err
 	}
-	return 0, fmt.Errorf("container task pid not found: %s", name)
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	_ = task.Kill(ctx, syscall.SIGTERM)
+	return deleteTask(ctx, task)
 }
 
-func (r *Runtime) ctrOutput(ctx context.Context, args ...string) (string, error) {
-	if r.Runner == nil {
-		r.Runner = ExecRunner{}
-	}
-	return r.Runner.Output(ctx, "ctr", r.ctrArgs(args...)...)
-}
-
-func (r *Runtime) ctrRun(ctx context.Context, args ...string) error {
-	if r.Runner == nil {
-		r.Runner = ExecRunner{}
-	}
-	return r.Runner.Run(ctx, "ctr", r.ctrArgs(args...)...)
-}
-
-func (r *Runtime) ctrArgs(args ...string) []string {
+func (r *Runtime) client(ctx context.Context) (*containerd.Client, context.Context, func(), error) {
 	address := r.Address
 	if address == "" {
 		address = DefaultAddress
@@ -197,8 +188,124 @@ func (r *Runtime) ctrArgs(args ...string) []string {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
-	out := []string{"--address", address, "--namespace", namespace}
-	return append(out, args...)
+	client, err := containerd.New(address)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return client, namespaces.WithNamespace(ctx, namespace), func() { _ = client.Close() }, nil
+}
+
+func containerSpecOpts(image containerd.Image, ct lab.Container) []oci.SpecOpts {
+	opts := []oci.SpecOpts{
+		oci.WithImageConfig(image),
+	}
+	if len(ct.Command) > 0 {
+		opts = append(opts, oci.WithProcessArgs(ct.Command...))
+	}
+	env := []string{}
+	for key, value := range ct.Env {
+		env = append(env, key+"="+value)
+	}
+	if len(env) > 0 {
+		opts = append(opts, oci.WithEnv(env))
+	}
+	return opts
+}
+
+func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, ct lab.Container) (containerd.Container, error) {
+	return client.NewContainer(
+		ctx,
+		name,
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot(name+"-rootfs", image),
+		containerd.WithNewSpec(containerSpecOpts(image, ct)...),
+		containerd.WithContainerLabels(map[string]string{configLabel: containerConfigHash(ct)}),
+	)
+}
+
+func containerConfigChanged(ctx context.Context, container containerd.Container, ct lab.Container) (bool, error) {
+	labels, err := container.Labels(ctx)
+	if err != nil {
+		return false, err
+	}
+	return labels[configLabel] != containerConfigHash(ct), nil
+}
+
+func deleteContainer(ctx context.Context, container containerd.Container) error {
+	task, err := container.Task(ctx, nil)
+	if err == nil {
+		if err := deleteTask(ctx, task); err != nil {
+			return err
+		}
+	} else if !errdefs.IsNotFound(err) {
+		return err
+	}
+	if err := container.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func containerConfigHash(ct lab.Container) string {
+	var parts []string
+	parts = append(parts, "image="+ct.Image)
+	parts = append(parts, "shell="+ct.Shell)
+	parts = append(parts, "command="+strings.Join(ct.Command, "\x00"))
+	keys := make([]string, 0, len(ct.Env))
+	for key := range ct.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts = append(parts, "env:"+key+"="+ct.Env[key])
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
+	return hex.EncodeToString(sum[:])
+}
+
+func deleteTask(ctx context.Context, task containerd.Task) error {
+	status, statusErr := task.Status(ctx)
+	if statusErr != nil && !errdefs.IsNotFound(statusErr) {
+		return statusErr
+	}
+	if statusErr == nil && status.Status == containerd.Running {
+		statusC, waitErr := task.Wait(ctx)
+		if waitErr == nil {
+			select {
+			case <-statusC:
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(3 * time.Second):
+				_ = task.Kill(ctx, syscall.SIGKILL)
+				select {
+				case <-statusC:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
+	}
+	_, err := task.Delete(ctx)
+	if err == nil || errdefs.IsNotFound(err) {
+		return nil
+	}
+	if !errdefs.IsFailedPrecondition(err) {
+		return err
+	}
+	_ = task.Kill(ctx, syscall.SIGKILL)
+	statusC, waitErr := task.Wait(ctx)
+	if waitErr == nil {
+		select {
+		case <-statusC:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	_, err = task.Delete(ctx)
+	if err == nil || errdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func findContainer(l *lab.Lab, id string) (lab.Container, bool) {
@@ -220,4 +327,11 @@ func findContainerByManagedName(l *lab.Lab, name string) (lab.Container, bool) {
 		}
 	}
 	return lab.Container{}, false
+}
+
+func containerShellArgs(ct lab.Container) []string {
+	if ct.Shell != "" {
+		return []string{ct.Shell}
+	}
+	return []string{"/bin/sh"}
 }

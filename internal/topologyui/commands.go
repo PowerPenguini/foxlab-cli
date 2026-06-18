@@ -30,6 +30,8 @@ func (a *App) executeCommand(command string) bool {
 		a.executeVMCommand(fields)
 	case "container", "ct":
 		a.executeContainerCommand(fields)
+	case "shell":
+		a.executeShellCommand(fields)
 	case "switch", "sw":
 		a.executeSwitchCommand(fields)
 	case "external", "ext":
@@ -64,7 +66,7 @@ func (a *App) executeAddCommand(fields []string) {
 
 func (a *App) executeContainerCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: container <create|set|nic|delete> ..."
+		a.State.Message = "usage: container <create|set|start|stop|nic|delete> ..."
 		return
 	}
 	switch fields[1] {
@@ -90,6 +92,10 @@ func (a *App) executeContainerCommand(fields []string) {
 			return
 		}
 		a.containerSet(fields[2], args)
+	case "start", "run":
+		a.runWorkload(NodeContainer, commandArg(fields, 2))
+	case "stop":
+		a.stopWorkload(NodeContainer, commandArg(fields, 2))
 	case "nic":
 		if len(fields) < 3 {
 			a.State.Message = "usage: container nic <add|connect> ..."
@@ -200,7 +206,7 @@ func (a *App) executeExternalCommand(fields []string) {
 
 func (a *App) executeVMCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: vm <create|set|nic|delete> ..."
+		a.State.Message = "usage: vm <create|set|start|stop|nic|delete> ..."
 		return
 	}
 	switch fields[1] {
@@ -226,6 +232,10 @@ func (a *App) executeVMCommand(fields []string) {
 			return
 		}
 		a.vmSet(fields[2], args)
+	case "start", "run":
+		a.runWorkload(NodeVM, commandArg(fields, 2))
+	case "stop":
+		a.stopWorkload(NodeVM, commandArg(fields, 2))
 	case "nic":
 		if len(fields) < 3 {
 			a.State.Message = "usage: vm nic <add|connect> ..."
@@ -439,17 +449,17 @@ func helpLines(topic string) []string {
 		return []string{
 			"add vm: :add vm <id> [cpus=N] [memory=N] [switch=ID] [external=ID]",
 			"vm set: :vm set <id> name=.. cpus=N memory=N disk=<path> iso=<path> vnc=true/false",
-			"vm nic add: :vm nic add <id> [mac=MAC]",
-			"vm nic connect: :vm nic connect <id> <index> to=ID [mac=MAC]",
-			"vm delete: :vm delete <id>",
+			"vm power: :vm start <id>  :vm stop <id> (sets desired state)",
+			"vm nic: :vm nic add <id> [mac=MAC]  :vm nic connect <id> <index> to=ID",
+			"vm shell/delete: :shell vm <id>  :vm delete <id>",
 		}
 	case "container", "containers", "ct":
 		return []string{
 			"add cont: :add cont <id> [image=REF] [command=CMD] [switch=ID]",
 			"container set: :container set <id> name=.. image=REF command=CMD switch=ID",
-			"container nic add: :container nic add <id> [mac=MAC]",
-			"container nic connect: :container nic connect <id> <index> to=ID [mac=MAC]",
-			"container delete: :container delete <id>",
+			"container power: :container start <id>  :container stop <id> (sets desired state)",
+			"container nic: :container nic add <id> [mac=MAC]  :container nic connect <id> <index> to=ID",
+			"container shell/delete: :shell container <id>  :container delete <id>",
 		}
 	case "switch", "switches":
 		return []string{

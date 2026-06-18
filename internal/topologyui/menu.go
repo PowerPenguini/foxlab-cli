@@ -1,6 +1,10 @@
 package topologyui
 
-import "strings"
+import (
+	"strings"
+
+	"foxlab-cli/internal/lab"
+)
 
 func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
@@ -47,7 +51,7 @@ func containerContextMenuItems(node Node, group string) []string {
 	case "nic-menu":
 		return nicMenuItems(node.Details)
 	case "":
-		return []string{"Configuration >", "NIC >", "Move", "Delete"}
+		return []string{"Configuration >", "NIC >", "Move", "Shell", "Delete"}
 	default:
 		return nil
 	}
@@ -62,13 +66,13 @@ func vmContextMenuItems(node Node, group string) []string {
 			contextFieldItem("cpu", nodeDetailValue(node, "cpu", "cpus=?")),
 			contextFieldItem("mem", nodeDetailValue(node, "mem", "memory=?")),
 			contextCheckboxItem(nodeDetailValue(node, "vnc", "vnc=false")),
-			contextFieldItem("disk", nodeDetailValue(node, "disk", "disk=?")),
-			contextFieldItem("iso", nodeDetailValue(node, "iso", "iso=?")),
+			contextFieldItem("disk", nodeDetailValue(node, "disk", "disk=")),
+			contextFieldItem("iso", nodeDetailValue(node, "iso", "iso=")),
 		}, node.Details)
 	case "nic-menu":
 		return nicMenuItems(node.Details)
 	case "":
-		return []string{"Configuration >", "NIC >", "Move", "Delete"}
+		return []string{"Configuration >", "NIC >", "Move", "Shell", "Delete"}
 	default:
 		return nil
 	}
@@ -78,7 +82,6 @@ func switchContextMenuItems(node Node, group string) []string {
 	switch group {
 	case "config-menu":
 		return configMenuItems([]string{
-			contextPowerAction(node),
 			contextFieldItem("name", node.ID),
 			contextFieldItem("mode", nodeDetailValue(node, "mode", "mode=bridge")),
 			contextFieldItem("external", nodeDetailValue(node, "external", "external=?")),
@@ -94,7 +97,6 @@ func externalContextMenuItems(node Node, group string) []string {
 	switch group {
 	case "config-menu":
 		return configMenuItems([]string{
-			contextPowerAction(node),
 			contextFieldItem("name", node.Label),
 			contextFieldItem("interface", nodeDetailValue(node, "interface", "interface=?")),
 		}, node.Details)
@@ -119,7 +121,7 @@ func connectTargetNICMenuItems(node Node) []string {
 }
 
 func contextPowerAction(node Node) string {
-	if node.State == "running" || node.State == "link" {
+	if lab.DesiredState(node.DesiredState) == lab.DesiredStateRunning {
 		return "Stop"
 	}
 	return "Run"
@@ -293,6 +295,8 @@ func contextMenuAction(label string) string {
 		return "stop"
 	case "Add NIC":
 		return "add-nic"
+	case "Shell":
+		return "shell"
 	case "Delete", "delete":
 		return "delete"
 	case "Move", "move":
@@ -372,15 +376,11 @@ func contextMenuWidth(items []string) int {
 func contextEditLabel(item, value string, cursor int) string {
 	key, _, ok := strings.Cut(item, "=")
 	if !ok {
-		var displayValue string
-		displayValue, ok = contextDisplayValue(item)
+		_, ok = contextDisplayValue(item)
 		if !ok {
 			return item
 		}
 		key = contextItemKey(item)
-		if value == "" {
-			value = displayValue
-		}
 	}
 	runes := []rune(value)
 	cursor = clamp(cursor, 0, len(runes))

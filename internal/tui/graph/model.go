@@ -7,14 +7,15 @@ type Model struct {
 }
 
 type Node struct {
-	ID      string
-	Type    string
-	Badge   string
-	Label   string
-	State   string
-	X       int
-	Y       int
-	Details []string
+	ID           string
+	Type         string
+	Badge        string
+	Label        string
+	State        string
+	DesiredState string
+	X            int
+	Y            int
+	Details      []string
 }
 
 type Edge struct {

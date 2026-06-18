@@ -10,7 +10,6 @@ import (
 	"strings"
 	"text/template"
 
-	"foxlab-cli/internal/hostnet"
 	"foxlab-cli/internal/lab"
 )
 
@@ -20,6 +19,7 @@ type domainXMLData struct {
 	Name     string
 	MemoryMB int
 	CPUs     int
+	HasDisk  bool
 	DiskPath string
 	DiskType string
 	ISO      string
@@ -31,7 +31,6 @@ type domainXMLData struct {
 type domainNetworkXMLData struct {
 	Kind       string
 	SourceName string
-	TargetDev  string
 	MAC        string
 }
 
@@ -57,11 +56,14 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 		Name:     l.ManagedDomainName(vm),
 		MemoryMB: vm.MemoryMB,
 		CPUs:     vm.CPUs,
-		DiskPath: l.ResolvePath(vm.Disk),
-		DiskType: detectImageFormat(vm.Disk),
 		ISO:      l.ResolvePath(vm.ISO),
 		HasISO:   vm.ISO != "",
 		HasVNC:   vm.VNC,
+	}
+	if diskPath, ok := resolveExistingDisk(l, vm.Disk); ok {
+		data.HasDisk = true
+		data.DiskPath = diskPath
+		data.DiskType = detectImageFormat(vm.Disk)
 	}
 	for index, nic := range vm.Networks {
 		linked := vmNICHasNetworkLink(l, vm.ID, index)
@@ -71,20 +73,21 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 		case linked && (nic.Switch != "" || nic.ExternalLink != ""):
 			return "", fmt.Errorf("vm %q network nic %d has both direct link and endpoint", vm.ID, index)
 		case linked:
+			link, _ := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index})
 			data.Networks = append(data.Networks, domainNetworkXMLData{
-				Kind:      "ethernet",
-				TargetDev: hostnet.VMTapName(l, vm, index),
-				MAC:       nic.MAC,
+				Kind:       "bridge",
+				SourceName: l.ManagedNetworkLinkBridgeName(link),
+				MAC:        nic.MAC,
 			})
 		case nic.Switch != "":
-			_, ok := findSwitch(l, nic.Switch)
+			sw, ok := findSwitch(l, nic.Switch)
 			if !ok {
 				return "", fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 			}
 			data.Networks = append(data.Networks, domainNetworkXMLData{
-				Kind:      "ethernet",
-				TargetDev: hostnet.VMTapName(l, vm, index),
-				MAC:       nic.MAC,
+				Kind:       "bridge",
+				SourceName: l.ManagedSwitchBridgeName(sw),
+				MAC:        nic.MAC,
 			})
 		case nic.ExternalLink != "":
 			link, ok := findExternalLink(l, nic.ExternalLink)
@@ -204,6 +207,22 @@ func vmNICHasNetworkLink(l *lab.Lab, id string, index int) bool {
 	return false
 }
 
+func findNetworkLinkForEndpoint(l *lab.Lab, endpoint lab.NetworkEndpoint) (lab.NetworkLink, bool) {
+	if l == nil {
+		return lab.NetworkLink{}, false
+	}
+	for _, link := range l.NetworkLinks {
+		if sameNetworkEndpoint(link.From, endpoint) || sameNetworkEndpoint(link.To, endpoint) {
+			return link, true
+		}
+	}
+	return lab.NetworkLink{}, false
+}
+
+func sameNetworkEndpoint(a, b lab.NetworkEndpoint) bool {
+	return a.Type == b.Type && a.ID == b.ID && a.NIC == b.NIC
+}
+
 func detectImageFormat(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".qcow2", ".qcow":
@@ -211,6 +230,18 @@ func detectImageFormat(path string) string {
 	default:
 		return "raw"
 	}
+}
+
+func resolveExistingDisk(l *lab.Lab, disk string) (string, bool) {
+	disk = strings.TrimSpace(disk)
+	if disk == "" {
+		return "", false
+	}
+	path := l.ResolvePath(disk)
+	if !pathExists(path) {
+		return "", false
+	}
+	return path, true
 }
 
 func isLinuxBridge(name string) bool {
@@ -250,7 +281,7 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
     <type arch="x86_64" machine="q35">hvm</type>
     {{- if .HasISO }}
     <boot dev="cdrom"/>
-    {{- else }}
+    {{- else if .HasDisk }}
     <boot dev="hd"/>
     {{- end }}
   </os>
@@ -261,11 +292,13 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
   </features>
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    {{- if .HasDisk }}
     <disk type="file" device="disk">
       <driver name="qemu" type="{{ .DiskType }}"/>
       <source file="{{ .DiskPath }}"/>
       <target dev="vda" bus="virtio"/>
     </disk>
+    {{- end }}
     {{- if .HasISO }}
     <disk type="file" device="cdrom">
       <driver name="qemu" type="raw"/>
@@ -280,9 +313,6 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
       <source bridge="{{ .SourceName }}"/>
       {{- else if eq .Kind "direct" }}
       <source dev="{{ .SourceName }}" mode="bridge"/>
-      {{- else if eq .Kind "ethernet" }}
-      <target dev="{{ .TargetDev }}"/>
-      <script path="/bin/true"/>
       {{- end }}
       {{- if .MAC }}
       <mac address="{{ .MAC }}"/>
@@ -293,7 +323,12 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
     {{- if .HasVNC }}
     <graphics type="vnc" port="-1" autoport="yes" listen="127.0.0.1"/>
     {{- end }}
-    <console type="pty"/>
+    <serial type="pty">
+      <target type="isa-serial" port="0"/>
+    </serial>
+    <console type="pty">
+      <target type="serial" port="0"/>
+    </console>
   </devices>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>

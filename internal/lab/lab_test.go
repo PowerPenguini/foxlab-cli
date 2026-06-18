@@ -84,6 +84,83 @@ func TestValidateAcceptsUnconnectedNICs(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsVMWithoutDisk(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		VMs: []VM{{
+			ID:       "vm1",
+			MemoryMB: 512,
+			CPUs:     1,
+		}},
+	}
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected vm without disk to validate, got %v", err)
+	}
+}
+
+func TestValidateDesiredState(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		VMs: []VM{{
+			ID:           "vm1",
+			DesiredState: " Running ",
+			MemoryMB:     512,
+			CPUs:         1,
+			Disk:         "disks/vm1.qcow2",
+		}},
+		Containers: []Container{{
+			ID:           "web",
+			DesiredState: "STOPPED",
+			Image:        "nginx",
+		}},
+	}
+	l.Normalize()
+	if l.VMs[0].DesiredState != DesiredStateRunning {
+		t.Fatalf("vm desiredState = %q, want running", l.VMs[0].DesiredState)
+	}
+	if l.Containers[0].DesiredState != DesiredStateStopped {
+		t.Fatalf("container desiredState = %q, want stopped", l.Containers[0].DesiredState)
+	}
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected desired states to validate, got %v", err)
+	}
+	if got := DesiredState(""); got != DesiredStateStopped {
+		t.Fatalf("empty desired state default = %q, want stopped", got)
+	}
+}
+
+func TestValidateRejectsInvalidDesiredState(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		VMs: []VM{{
+			ID:           "vm1",
+			DesiredState: "paused",
+			MemoryMB:     512,
+			CPUs:         1,
+			Disk:         "disks/vm1.qcow2",
+		}},
+		Containers: []Container{{
+			ID:           "web",
+			DesiredState: "starting",
+			Image:        "nginx",
+		}},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil {
+		t.Fatal("expected invalid desired state errors")
+	}
+	for _, want := range []string{
+		`vm "vm1" desiredState must be running or stopped`,
+		`container "web" desiredState must be running or stopped`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in validation error, got %v", want, err)
+		}
+	}
+}
+
 func TestValidateAcceptsDirectNetworkLinks(t *testing.T) {
 	l := &Lab{
 		ID: "demo",

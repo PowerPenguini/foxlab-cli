@@ -68,14 +68,13 @@ func TestAttachVMNICsPlansBridgeAndTapCommands(t *testing.T) {
 	for _, want := range []string{
 		"ip link show " + l.ManagedSwitchBridgeName(l.Switches[0]),
 		"ip link delete " + tap,
-		"ip tuntap add " + tap + " mode tap",
-		"ip link set " + tap + " address 02:00:00:00:00:20",
-		"ip link set " + tap + " master " + l.ManagedSwitchBridgeName(l.Switches[0]),
-		"ip link set " + tap + " up",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "ip tuntap add") || strings.Contains(joined, " master "+l.ManagedSwitchBridgeName(l.Switches[0])) {
+		t.Fatalf("vm attach should let libvirt create tap interfaces:\n%s", joined)
 	}
 }
 
@@ -104,12 +103,12 @@ func TestAttachVMNICsPlansDirectLinkBridgeCommands(t *testing.T) {
 	for _, want := range []string{
 		"ip link show " + linkBridge,
 		"ip link delete " + tap,
-		"ip tuntap add " + tap + " mode tap",
-		"ip link set " + tap + " master " + linkBridge,
-		"ip link set " + tap + " up",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "ip tuntap add") || strings.Contains(joined, " master "+linkBridge) {
+		t.Fatalf("vm attach should let libvirt create tap interfaces:\n%s", joined)
 	}
 }

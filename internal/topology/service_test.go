@@ -121,3 +121,45 @@ func TestServiceContainerNICDelete(t *testing.T) {
 		t.Fatalf("container networks = %#v, want one nic", ct.Networks)
 	}
 }
+
+func TestServiceDesiredStatePersistsAndRefreshesLab(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 512,
+			CPUs:     1,
+			Disk:     "disks/vm1.qcow2",
+		}},
+		Containers: []lab.Container{{
+			ID:    "web",
+			Image: "nginx",
+		}},
+	}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatalf("save initial lab: %v", err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load initial lab: %v", err)
+	}
+
+	service := NewService(loaded, path)
+	if got, want := service.VMDesiredState("vm1", lab.DesiredStateRunning), "desired vm:vm1 running"; got != want {
+		t.Fatalf("VMDesiredState() = %q, want %q", got, want)
+	}
+	if got, want := service.ContainerDesiredState("web", lab.DesiredStateStopped), "desired container:web stopped"; got != want {
+		t.Fatalf("ContainerDesiredState() = %q, want %q", got, want)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatalf("reload lab: %v", err)
+	}
+	if reloaded.VMs[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("vm desiredState = %q, want running", reloaded.VMs[0].DesiredState)
+	}
+	if reloaded.Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("container desiredState = %q, want stopped", reloaded.Containers[0].DesiredState)
+	}
+}

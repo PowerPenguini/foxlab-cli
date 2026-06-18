@@ -173,6 +173,48 @@ func (s *Service) SwitchForExternal(id string) string {
 	return ""
 }
 
+func (s *Service) VMDesiredState(id, state string) string {
+	if s.Lab == nil {
+		return "vm state needs a loaded .lab file"
+	}
+	state = lab.DesiredState(state)
+	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {
+		return "unsupported vm desired state: " + state
+	}
+	for i := range s.Lab.VMs {
+		if s.Lab.VMs[i].ID != id {
+			continue
+		}
+		s.Lab.VMs[i].DesiredState = state
+		if err := s.SaveAndRefresh(); err != nil {
+			return "desired state failed: " + err.Error()
+		}
+		return "desired vm:" + id + " " + state
+	}
+	return "vm not found: " + id
+}
+
+func (s *Service) ContainerDesiredState(id, state string) string {
+	if s.Lab == nil {
+		return "container state needs a loaded .lab file"
+	}
+	state = lab.DesiredState(state)
+	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {
+		return "unsupported container desired state: " + state
+	}
+	for i := range s.Lab.Containers {
+		if s.Lab.Containers[i].ID != id {
+			continue
+		}
+		s.Lab.Containers[i].DesiredState = state
+		if err := s.SaveAndRefresh(); err != nil {
+			return "desired state failed: " + err.Error()
+		}
+		return "desired container:" + id + " " + state
+	}
+	return "container not found: " + id
+}
+
 func (s *Service) nodeCount() int {
 	if s.Lab == nil {
 		return 0

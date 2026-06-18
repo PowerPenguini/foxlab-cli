@@ -24,13 +24,12 @@ func (s *Service) VMCreate(id string, args map[string]string) string {
 	if value, ok := positiveInt(args["mem"]); ok {
 		memory = value
 	}
-	diskPath := firstNonEmpty(args["disk"], filepath.ToSlash(filepath.Join("labs", s.Lab.ID, "disks", id+".qcow2")))
 	vm := lab.VM{
 		ID:       id,
 		Name:     firstNonEmpty(args["name"], id),
 		MemoryMB: memory,
 		CPUs:     cpus,
-		Disk:     diskPath,
+		Disk:     filepath.ToSlash(args["disk"]),
 	}
 	switchRef := args["switch"]
 	externalRef := args["external"]
@@ -68,10 +67,10 @@ func (s *Service) VMSet(id string, args map[string]string) string {
 		if value := args["name"]; value != "" {
 			s.Lab.VMs[i].Name = value
 		}
-		if value := args["disk"]; value != "" {
+		if value, ok := args["disk"]; ok {
 			s.Lab.VMs[i].Disk = value
 		}
-		if value := args["iso"]; value != "" {
+		if value, ok := args["iso"]; ok {
 			s.Lab.VMs[i].ISO = value
 		}
 		if value := args["vnc"]; value != "" {
