@@ -78,6 +78,37 @@ func (r *LibvirtRuntime) States(ctx context.Context, l *lab.Lab) (map[string]str
 	return states, nil
 }
 
+func (r *LibvirtRuntime) VNCPorts(ctx context.Context, l *lab.Lab) (map[string]int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ports := map[string]int{}
+	for _, vm := range l.VMs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !vm.VNC {
+			continue
+		}
+		dom, err := r.conn.LookupDomainByName(l.ManagedDomainName(vm))
+		if err != nil {
+			if isNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		xmlText, xmlErr := dom.GetXMLDesc(0)
+		_ = dom.Free()
+		if xmlErr != nil {
+			return nil, fmt.Errorf("read domain XML %q: %w", vm.ID, xmlErr)
+		}
+		if port := parseVNCPort(xmlText); port > 0 {
+			ports[workload.Key(workload.Ref{Type: workload.TypeVM, ID: vm.ID})] = port
+		}
+	}
+	return ports, nil
+}
+
 func (r *LibvirtRuntime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
 	if ref.Type != workload.TypeVM {
 		return fmt.Errorf("libvirt cannot start workload type %q", ref.Type)

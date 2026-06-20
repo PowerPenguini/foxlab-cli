@@ -31,9 +31,12 @@ type App struct {
 	ContainerdAddress string
 	Runtime           WorkloadRuntime
 	WorkloadStates    map[string]string
+	VNCPorts          map[string]int
+	VNCViewer         string
 	CommandLog        []string
 	HistoryIndex      int
 	PendingShell      *shellCommand
+	PendingVNC        *shellCommand
 	In                *os.File
 	Out               *os.File
 	ViewWidth         int
@@ -162,13 +165,31 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 			dirty = true
 			continue
 		}
+		if a.PendingVNC != nil {
+			command := *a.PendingVNC
+			a.PendingVNC = nil
+			cleanup()
+			cleanup = nil
+			if err := a.runShell(command); err != nil {
+				a.State.Message = "vnc failed: " + err.Error()
+			} else {
+				a.State.Message = "vnc closed"
+			}
+			cleanup, err = start(a)
+			if err != nil {
+				return err
+			}
+			dirty = true
+			continue
+		}
 		dirty = true
 	}
 }
 
 type reconcileUpdate struct {
-	states  map[string]string
-	message string
+	states   map[string]string
+	vncPorts map[string]int
+	message  string
 }
 
 func (a *App) reconcileInterval() time.Duration {
@@ -189,6 +210,11 @@ func (a *App) startReconcile(ctx context.Context, updates chan<- reconcileUpdate
 		defer closeRuntime()
 		result := (&workload.Reconciler{Runtime: runtime}).Step(ctx, l)
 		update := reconcileUpdate{states: result.States}
+		if ports, err := runtimeVNCPorts(ctx, runtime, l); err == nil {
+			update.vncPorts = ports
+		} else if len(result.Errors) == 0 {
+			update.message = "vnc status failed: " + err.Error()
+		}
 		if len(result.Errors) > 0 {
 			update.message = "reconcile failed: " + result.Errors[0].Error()
 		} else if len(result.Actions) > 0 {
@@ -216,6 +242,11 @@ func (a *App) drainReconcileUpdates(updates <-chan reconcileUpdate, active *bool
 				if a.Service != nil {
 					a.Service.States = update.states
 				}
+				a.applyWorkloadStates()
+				changed = true
+			}
+			if update.vncPorts != nil && !sameIntMap(a.VNCPorts, update.vncPorts) {
+				a.VNCPorts = update.vncPorts
 				a.applyWorkloadStates()
 				changed = true
 			}
@@ -270,22 +301,61 @@ func (a *App) refreshWorkloadStates() {
 	states, err := runtime.States(context.Background(), a.Lab)
 	if err != nil {
 		a.State.Message = "runtime status failed: " + err.Error()
+		_ = a.refreshVNCPortsWithRuntime(context.Background(), runtime)
 		return
 	}
 	a.WorkloadStates = states
 	a.Service.States = states
+	if portErr := a.refreshVNCPortsWithRuntime(context.Background(), runtime); portErr != nil {
+		a.State.Message = "vnc status failed: " + portErr.Error()
+	}
 	a.applyWorkloadStates()
+}
+
+func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime WorkloadRuntime) error {
+	ports, err := runtimeVNCPorts(ctx, runtime, a.Lab)
+	if err != nil {
+		return err
+	}
+	a.VNCPorts = ports
+	a.applyWorkloadStates()
+	return nil
 }
 
 func (a *App) applyWorkloadStates() {
 	for i := range a.Model.Nodes {
-		if state, ok := a.WorkloadStates[NodeKey(a.Model.Nodes[i].Type, a.Model.Nodes[i].ID)]; ok {
-			a.Model.Nodes[i].State = state
+		node := &a.Model.Nodes[i]
+		key := NodeKey(node.Type, node.ID)
+		if state, ok := a.WorkloadStates[key]; ok {
+			node.State = state
+		}
+		if node.Type == NodeVM {
+			node.Details = withVNCDetailPort(node.Details, a.VNCPorts[key])
 		}
 	}
 }
 
+func runtimeVNCPorts(ctx context.Context, runtime WorkloadRuntime, l *lab.Lab) (map[string]int, error) {
+	vncRuntime, ok := runtime.(workload.VNCRuntime)
+	if !ok {
+		return map[string]int{}, nil
+	}
+	return vncRuntime.VNCPorts(ctx, l)
+}
+
 func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func sameIntMap(a, b map[string]int) bool {
 	if len(a) != len(b) {
 		return false
 	}

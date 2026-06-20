@@ -576,6 +576,9 @@ func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
 	if strings.Contains(out, "nic0") {
 		t.Fatalf("render kept NIC detail in config submenu:\n%s", out)
 	}
+	if strings.Contains(out, "VNC:") {
+		t.Fatalf("render showed VNC info for disabled VNC:\n%s", out)
+	}
 }
 
 func TestRenderContextEditKeepsEmptyDiskValueEmpty(t *testing.T) {
@@ -738,8 +741,34 @@ func TestRenderContextCheckboxUsesUppercaseX(t *testing.T) {
 	if !strings.Contains(out, "VNC         [X]") {
 		t.Fatalf("render missing checked checkbox with uppercase X:\n%s", out)
 	}
+	if !strings.Contains(out, "VNC: restart needed") {
+		t.Fatalf("render missing enabled VNC status without runtime port:\n%s", out)
+	}
 	if strings.Contains(out, "[x]") {
 		t.Fatalf("render contains lowercase checkbox marker:\n%s", out)
+	}
+}
+
+func TestRenderContextVNCInfoUsesRuntimePort(t *testing.T) {
+	m := MockModel()
+	m.Nodes[0].Details = append(m.Nodes[0].Details, "vnc-port=5903")
+
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	if !strings.Contains(out, "VNC: 127.0.0.1:5903") {
+		t.Fatalf("render missing runtime VNC port:\n%s", out)
+	}
+	if strings.Contains(out, "autoport") {
+		t.Fatalf("render still contains autoport:\n%s", out)
+	}
+}
+
+func TestRenderContextVNCInfoPromptsStartForStoppedVM(t *testing.T) {
+	m := MockModel()
+	m.Nodes[0].State = "shutoff"
+
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	if !strings.Contains(out, "VNC: start VM") {
+		t.Fatalf("render missing VNC start prompt:\n%s", out)
 	}
 }
 

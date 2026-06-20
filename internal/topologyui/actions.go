@@ -94,6 +94,8 @@ func (a *App) runMenuAction(node Node, action string) {
 		a.startMove(node)
 	case "shell":
 		a.startShell(node)
+	case "vnc":
+		a.startVNC(node)
 	case "run":
 		a.runWorkload(node.Type, node.ID)
 	case "stop":
@@ -261,6 +263,9 @@ func (a *App) vmCreate(id string, args map[string]string) {
 func (a *App) vmSet(id string, args map[string]string) {
 	a.State.Message = a.ensureService().VMSet(id, args)
 	a.syncAfterServiceMutation()
+	if _, ok := args["vnc"]; ok && a.shouldRefreshRuntimeAfterMutation() {
+		a.refreshWorkloadStates()
+	}
 }
 
 func (a *App) vmNICAdd(id string, args map[string]string) {
@@ -373,6 +378,10 @@ func (a *App) syncAfterServiceMutation() {
 	if a.State.Selected >= len(a.Model.Nodes) {
 		a.State.Selected = max(0, len(a.Model.Nodes)-1)
 	}
+}
+
+func (a *App) shouldRefreshRuntimeAfterMutation() bool {
+	return a.Runtime != nil || a.WorkloadStates != nil || a.VNCPorts != nil
 }
 
 func (a *App) saveAndRefresh() error {

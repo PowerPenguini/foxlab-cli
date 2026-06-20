@@ -1,6 +1,7 @@
 package topologyui
 
 import (
+	"strconv"
 	"strings"
 
 	"foxlab-cli/internal/lab"
@@ -60,19 +61,24 @@ func containerContextMenuItems(node Node, group string) []string {
 func vmContextMenuItems(node Node, group string) []string {
 	switch group {
 	case "config-menu":
-		return configMenuItems([]string{
+		vncDetail := nodeDetailValue(node, "vnc", "vnc=false")
+		prefix := []string{
 			contextPowerAction(node),
 			contextFieldItem("name", node.Label),
 			contextFieldItem("cpu", nodeDetailValue(node, "cpu", "cpus=?")),
 			contextFieldItem("mem", nodeDetailValue(node, "mem", "memory=?")),
-			contextCheckboxItem(nodeDetailValue(node, "vnc", "vnc=false")),
+			contextCheckboxItem(vncDetail),
 			contextFieldItem("disk", nodeDetailValue(node, "disk", "disk=")),
 			contextFieldItem("iso", nodeDetailValue(node, "iso", "iso=")),
-		}, node.Details)
+		}
+		if vncEnabled(vncDetail) {
+			prefix = append(prefix, vncInfoItem(node))
+		}
+		return configMenuItems(prefix, node.Details)
 	case "nic-menu":
 		return nicMenuItems(node.Details)
 	case "":
-		return []string{"Configuration >", "NIC >", "Move", "Shell", "Delete"}
+		return []string{"Configuration >", "NIC >", "Move", "Shell", "VNC", "Delete"}
 	default:
 		return nil
 	}
@@ -154,7 +160,7 @@ func compactMenuItems(prefix []string, details []string, suffix []string) []stri
 func nonNICDetails(details []string) []string {
 	out := make([]string, 0, len(details))
 	for _, detail := range details {
-		if !isNICDetail(detail) {
+		if !isNICDetail(detail) && !isRuntimeDetail(detail) {
 			out = append(out, detail)
 		}
 	}
@@ -173,6 +179,10 @@ func nicDetails(details []string) []string {
 
 func isNICDetail(detail string) bool {
 	return strings.HasPrefix(strings.TrimSpace(detail), "nic")
+}
+
+func isRuntimeDetail(detail string) bool {
+	return strings.HasPrefix(strings.TrimSpace(detail), "vnc-port=")
 }
 
 func containsContextItemKey(items []string, key string) bool {
@@ -281,6 +291,58 @@ func nodeDetailValue(node Node, key, fallback string) string {
 	return fallback
 }
 
+func withVNCDetailPort(details []string, port int) []string {
+	out := make([]string, 0, len(details)+1)
+	for _, detail := range details {
+		if strings.HasPrefix(strings.TrimSpace(detail), "vnc-port=") {
+			continue
+		}
+		out = append(out, detail)
+	}
+	if port > 0 {
+		out = append(out, "vnc-port="+strconv.Itoa(port))
+	}
+	return out
+}
+
+func vncEnabled(detail string) bool {
+	_, value, ok := strings.Cut(strings.TrimSpace(detail), "=")
+	return ok && strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func vncInfoItem(node Node) string {
+	if port := vncPort(node); port > 0 {
+		return "VNC: 127.0.0.1:" + strconv.Itoa(port)
+	}
+	if vncNeedsRestart(node.State) {
+		return "VNC: restart needed"
+	}
+	return "VNC: start VM"
+}
+
+func vncPort(node Node) int {
+	value := nodeDetailValue(node, "vnc-port", "")
+	_, value, _ = strings.Cut(strings.TrimSpace(value), "=")
+	port, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || port <= 0 {
+		return 0
+	}
+	return port
+}
+
+func isContextInfoItem(item string) bool {
+	return strings.HasPrefix(strings.TrimSpace(item), "VNC:")
+}
+
+func vncNeedsRestart(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "running", "blocked", "paused":
+		return true
+	default:
+		return false
+	}
+}
+
 func contextMenuAction(label string) string {
 	switch strings.TrimSpace(label) {
 	case "Configuration >", "Configuration", "config >":
@@ -297,6 +359,8 @@ func contextMenuAction(label string) string {
 		return "add-nic"
 	case "Shell":
 		return "shell"
+	case "VNC":
+		return "vnc"
 	case "Delete", "delete":
 		return "delete"
 	case "Move", "move":

@@ -322,6 +322,9 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
     {{- end }}
     {{- if .HasVNC }}
     <graphics type="vnc" port="-1" autoport="yes" listen="127.0.0.1"/>
+    <video>
+      <model type="virtio" heads="1" primary="yes"/>
+    </video>
     {{- end }}
     <serial type="pty">
       <target type="isa-serial" port="0"/>

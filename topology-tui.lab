@@ -16,6 +16,7 @@ vms:
       cpus: 2
       disk: ""
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
+      vnc: true
       networks:
         - switch: sw1
         - {}
@@ -36,6 +37,16 @@ vms:
       memoryMB: 2048
       cpus: 2
       disk: labs/topology-tui/disks/new.qcow2
+      vnc: true
+      networks:
+        - switch: sw1
+    - id: ubuntu
+      name: ubuntu
+      desiredState: running
+      memoryMB: 2048
+      cpus: 2
+      disk: /var/lib/libvirt/images/foxlab-ubuntu-vnc-test.qcow2
+      vnc: true
       networks:
         - switch: sw1
 containers:
@@ -78,6 +89,9 @@ layout:
         sw1:
             x: 848
             "y": 336
+        ubuntu:
+            x: 16
+            "y": 552
         vm2:
             x: 848
             "y": 552
@@ -118,3 +132,9 @@ layout:
           to:
             type: container
             id: bash-test
+        - from:
+            type: switch
+            id: sw1
+          to:
+            type: vm
+            id: ubuntu

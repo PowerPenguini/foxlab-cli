@@ -23,6 +23,10 @@ type Runtime interface {
 	Close() error
 }
 
+type VNCRuntime interface {
+	VNCPorts(context.Context, *lab.Lab) (map[string]int, error)
+}
+
 func Key(ref Ref) string {
 	return ref.Type + ":" + ref.ID
 }

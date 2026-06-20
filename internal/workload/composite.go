@@ -35,6 +35,17 @@ func (c *Composite) States(ctx context.Context, l *lab.Lab) (map[string]string, 
 	return out, nil
 }
 
+func (c *Composite) VNCPorts(ctx context.Context, l *lab.Lab) (map[string]int, error) {
+	if c.VM == nil || l == nil || len(l.VMs) == 0 {
+		return map[string]int{}, nil
+	}
+	runtime, ok := c.VM.(VNCRuntime)
+	if !ok {
+		return map[string]int{}, nil
+	}
+	return runtime.VNCPorts(ctx, l)
+}
+
 func (c *Composite) Start(ctx context.Context, l *lab.Lab, ref Ref) error {
 	runtime, err := c.runtimeFor(ref)
 	if err != nil {

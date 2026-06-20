@@ -181,6 +181,9 @@ func (a *App) handleContextMenuKey(key string) bool {
 					a.applyContextEdit(node, subItems[selected], toggledBoolValue(contextItemValue(subItems[selected])))
 					return false
 				}
+				if isContextInfoItem(subItems[selected]) {
+					return false
+				}
 				if ok && isEditableContextItem(subItems[selected]) {
 					a.State.ContextEdit = true
 					a.State.ContextEditValue = contextItemValue(subItems[selected])

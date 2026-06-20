@@ -3,6 +3,7 @@ package topologyui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,15 +38,24 @@ func (closedPipeReader) Read([]byte) (int, error) {
 }
 
 type fakeVMRuntime struct {
-	states  map[string]string
-	started string
-	stopped string
-	starts  int
-	stops   int
+	states    map[string]string
+	vncPorts  map[string]int
+	statesErr error
+	started   string
+	stopped   string
+	starts    int
+	stops     int
 }
 
 func (f *fakeVMRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
+	if f.statesErr != nil {
+		return nil, f.statesErr
+	}
 	return f.states, nil
+}
+
+func (f *fakeVMRuntime) VNCPorts(context.Context, *lab.Lab) (map[string]int, error) {
+	return f.vncPorts, nil
 }
 
 func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
@@ -129,24 +139,92 @@ func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
 
 func TestContextMenuIncludesShellForWorkloads(t *testing.T) {
 	foundVM := false
+	foundVNC := false
 	for _, item := range contextMenuItems(Node{ID: "vm1", Type: NodeVM}, "") {
 		if item == "Shell" {
 			foundVM = true
-			break
+		}
+		if item == "VNC" {
+			foundVNC = true
 		}
 	}
 	if !foundVM {
 		t.Fatalf("vm context menu missing Shell: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
 	}
+	if !foundVNC {
+		t.Fatalf("vm context menu missing VNC: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
+	}
 	found := false
+	foundContainerVNC := false
 	for _, item := range contextMenuItems(Node{ID: "web", Type: NodeContainer}, "") {
 		if item == "Shell" {
 			found = true
-			break
+		}
+		if item == "VNC" {
+			foundContainerVNC = true
 		}
 	}
 	if !found {
 		t.Fatalf("container context menu missing Shell: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
+	}
+	if foundContainerVNC {
+		t.Fatalf("container context menu unexpectedly contains VNC: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
+	}
+}
+
+func TestContextMenuVNCInfoIsNoOp(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		State: ViewState{
+			Focus:            FocusGraph,
+			Selected:         0,
+			ContextMenu:      true,
+			ContextGroup:     "config-menu",
+			ContextInSubmenu: true,
+		},
+	}
+	node, _ := selectedNode(app.Model, app.State.Selected)
+	items := contextMenuItems(node, app.State.ContextGroup)
+	for i, item := range items {
+		if isContextInfoItem(item) {
+			app.State.ContextSubSelected = i
+			break
+		}
+	}
+	if !isContextInfoItem(items[app.State.ContextSubSelected]) {
+		t.Fatalf("enabled VNC info item missing: %#v", items)
+	}
+
+	app.handleKey("enter")
+	if !app.State.ContextMenu || !app.State.ContextInSubmenu {
+		t.Fatalf("VNC info closed menu: %#v", app.State)
+	}
+	if app.State.ContextEdit {
+		t.Fatal("VNC info opened inline edit")
+	}
+}
+
+func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		Runtime: &fakeVMRuntime{
+			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
+			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5903},
+		},
+	}
+
+	app.refreshWorkloadStates()
+	if got := strings.Join(app.Model.Nodes[0].Details, "\n"); !strings.Contains(got, "vnc-port=5903") {
+		t.Fatalf("model details missing runtime VNC port: %#v", app.Model.Nodes[0].Details)
+	}
+	items := contextMenuItems(app.Model.Nodes[0], "config-menu")
+	if got := strings.Join(items, "\n"); !strings.Contains(got, "VNC: 127.0.0.1:5903") {
+		t.Fatalf("config menu missing runtime VNC port: %#v", items)
 	}
 }
 
@@ -513,6 +591,10 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
+		Runtime: &fakeVMRuntime{
+			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
+			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5904},
+		},
 		State: ViewState{
 			Focus:              FocusGraph,
 			ContextMenu:        true,
@@ -532,6 +614,9 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 	}
 	if !reloaded.VMs[0].VNC {
 		t.Fatalf("vnc = %t, want true", reloaded.VMs[0].VNC)
+	}
+	if details := strings.Join(app.Model.Nodes[0].Details, "\n"); !strings.Contains(details, "vnc-port=5904") {
+		t.Fatalf("model details missing refreshed VNC port: %#v", app.Model.Nodes[0].Details)
 	}
 }
 
@@ -1582,6 +1667,128 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-web") {
 		t.Fatalf("container shell command = %#v", app.PendingShell)
+	}
+}
+
+func TestContextMenuVNCActionUsesExistingRuntimePort(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	app := App{
+		Model:     ModelFromLab(loaded),
+		Lab:       loaded,
+		VNCPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5905},
+		VNCViewer: "/bin/true",
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
+	if app.PendingVNC == nil {
+		t.Fatal("vnc action did not set pending vnc")
+	}
+	if app.PendingVNC.Display != "vnc 127.0.0.1::5905" {
+		t.Fatalf("vnc display = %q", app.PendingVNC.Display)
+	}
+	if err := app.runShell(*app.PendingVNC); err != nil {
+		t.Fatalf("vnc viewer command failed: %v", err)
+	}
+}
+
+func TestContextMenuVNCActionStartsVMAndRefreshesPort(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	runtime := &fakeVMRuntime{
+		states:   map[string]string{NodeKey(NodeVM, "vm1"): "shutoff"},
+		vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5906},
+	}
+	app := App{
+		Model:     ModelFromLab(loaded),
+		Lab:       loaded,
+		Runtime:   runtime,
+		VNCViewer: "/bin/true",
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
+	if runtime.started != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("vnc action started %q", runtime.started)
+	}
+	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5906" {
+		t.Fatalf("vnc command = %#v", app.PendingVNC)
+	}
+}
+
+func TestContextMenuVNCActionUsesPortWhenStateRefreshFails(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	runtime := &fakeVMRuntime{
+		statesErr: errors.New("containerd unavailable"),
+		vncPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5907},
+	}
+	app := App{
+		Model:     ModelFromLab(loaded),
+		Lab:       loaded,
+		Runtime:   runtime,
+		VNCViewer: "/bin/true",
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
+	if runtime.started != NodeKey(NodeVM, "vm1") {
+		t.Fatalf("vnc action started %q", runtime.started)
+	}
+	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5907" {
+		t.Fatalf("vnc command = %#v message=%q", app.PendingVNC, app.State.Message)
+	}
+}
+
+func TestContextMenuVNCActionRejectsDisabledVNC(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: false}},
+	}
+	app := App{
+		Model:     ModelFromLab(loaded),
+		Lab:       loaded,
+		VNCViewer: "/bin/true",
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
+	if app.PendingVNC != nil {
+		t.Fatalf("disabled VNC set pending command: %#v", app.PendingVNC)
+	}
+	if !strings.Contains(app.State.Message, "vnc is disabled") {
+		t.Fatalf("disabled VNC message = %q", app.State.Message)
+	}
+}
+
+func TestContextMenuVNCActionReportsRestartNeededWithoutPort(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	app := App{
+		Model: Model{Nodes: []Node{{
+			ID:      "vm1",
+			Type:    NodeVM,
+			State:   "running",
+			Details: []string{"vnc=true"},
+		}}},
+		Lab: loaded,
+		Runtime: &fakeVMRuntime{
+			states: map[string]string{NodeKey(NodeVM, "vm1"): "running"},
+		},
+		VNCViewer: "/bin/true",
+	}
+
+	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
+	if app.PendingVNC != nil {
+		t.Fatalf("missing VNC port set pending command: %#v", app.PendingVNC)
+	}
+	if !strings.Contains(app.State.Message, "vnc needs restart") {
+		t.Fatalf("missing VNC port message = %q", app.State.Message)
 	}
 }
 

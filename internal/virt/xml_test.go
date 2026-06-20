@@ -40,6 +40,7 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		`<interface type="bridge">`,
 		`<source bridge="flfoxlabdemosw1"/>`,
 		`<graphics type="vnc"`,
+		`<model type="virtio" heads="1" primary="yes"/>`,
 		`<serial type="pty">`,
 		`<target type="isa-serial" port="0"/>`,
 		`<console type="pty">`,
@@ -103,6 +104,22 @@ func TestDomainXMLIncludesDirectLinkedNIC(t *testing.T) {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing direct NIC %q:\n%s", want, xmlText)
 		}
+	}
+}
+
+func TestParseVNCPortReturnsAssignedPort(t *testing.T) {
+	xmlText := `<domain><devices><graphics type="vnc" port="5903" autoport="yes" listen="127.0.0.1"/></devices></domain>`
+
+	if got := parseVNCPort(xmlText); got != 5903 {
+		t.Fatalf("VNC port = %d, want 5903", got)
+	}
+}
+
+func TestParseVNCPortIgnoresAutoportPlaceholder(t *testing.T) {
+	xmlText := `<domain><devices><graphics type="vnc" port="-1" autoport="yes" listen="127.0.0.1"/></devices></domain>`
+
+	if got := parseVNCPort(xmlText); got != 0 {
+		t.Fatalf("VNC port = %d, want 0", got)
 	}
 }
 
