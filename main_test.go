@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"foxlab-cli/internal/lab"
 )
 
 func TestLoadModelLoadsRealLabFile(t *testing.T) {
@@ -45,16 +47,46 @@ func TestDefaultLabPathSearchesFoxlabHome(t *testing.T) {
 	if err := os.MkdirAll(foxlabDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(foxlabDir, "topology-tui.lab")
+	want := filepath.Join(foxlabDir, "default.lab")
 	if err := os.WriteFile(want, []byte("id: topology-tui\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	got, ok := defaultLabPath()
+	got, ok, err := defaultLabPath()
+	if err != nil {
+		t.Fatalf("defaultLabPath returned error: %v", err)
+	}
 	if !ok {
 		t.Fatal("expected default lab path")
 	}
 	if got != want {
 		t.Fatalf("default lab path = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultLabPathCreatesFoxlabHomeLab(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, ok, err := defaultLabPath()
+	if err != nil {
+		t.Fatalf("defaultLabPath returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected default lab path")
+	}
+	want := filepath.Join(home, ".foxlab", "default.lab")
+	if got != want {
+		t.Fatalf("default lab path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected created default lab: %v", err)
+	}
+	loaded, err := lab.LoadFile(want)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+	if loaded.ID != "default" {
+		t.Fatalf("created lab ID = %q, want default", loaded.ID)
 	}
 }

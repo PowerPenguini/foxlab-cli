@@ -33,7 +33,12 @@ func main() {
 		*labPath = fs.Arg(0)
 	}
 	if *labPath == "" && !*mock {
-		if path, ok := defaultLabPath(); ok {
+		path, ok, err := defaultLabPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if ok {
 			*labPath = path
 		}
 	}
@@ -86,22 +91,26 @@ func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error)
 	return topologyui.ModelFromLab(loaded), loaded, nil
 }
 
-func defaultLabPath() (string, bool) {
+func defaultLabPath() (string, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	dir := filepath.Join(home, ".foxlab")
-	if path, ok := regularFile(filepath.Join(dir, "topology-tui.lab")); ok {
-		return path, true
+	path := filepath.Join(dir, "default.lab")
+	if path, ok := regularFile(path); ok {
+		return path, true, nil
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, "*.lab"))
 	if err == nil && len(matches) == 1 {
 		if path, ok := regularFile(matches[0]); ok {
-			return path, true
+			return path, true, nil
 		}
 	}
-	return "", false
+	if err := lab.SaveFile(path, &lab.Lab{ID: "default"}); err != nil {
+		return "", false, fmt.Errorf("create default lab: %w", err)
+	}
+	return path, true, nil
 }
 
 func regularFile(path string) (string, bool) {

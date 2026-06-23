@@ -13,7 +13,7 @@ build:
 
 install: build
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
-	$(INSTALL) -m 0755 bin/foxlab-cli "$(DESTDIR)$(BINDIR)/foxlab-cli"
+	$(INSTALL) -m 0755 bin/foxlab-cli "$(DESTDIR)$(BINDIR)/foxlab"
 
 test:
 	GOCACHE="$(GOCACHE)" $(GO) test ./...
