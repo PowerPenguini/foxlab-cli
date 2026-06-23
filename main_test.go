@@ -37,17 +37,18 @@ func TestLoadModelMockIsExplicit(t *testing.T) {
 	}
 }
 
-func TestDefaultLabPathSearchesParents(t *testing.T) {
-	root := t.TempDir()
-	nested := filepath.Join(root, "apps", "topology-tui", "cmd", "topology-tui")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
+func TestDefaultLabPathSearchesFoxlabHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	foxlabDir := filepath.Join(home, ".foxlab")
+	if err := os.MkdirAll(foxlabDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "topology-tui.lab")
+	want := filepath.Join(foxlabDir, "topology-tui.lab")
 	if err := os.WriteFile(want, []byte("id: topology-tui\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(nested)
 
 	got, ok := defaultLabPath()
 	if !ok {
