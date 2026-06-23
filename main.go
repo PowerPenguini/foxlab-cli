@@ -77,7 +77,7 @@ func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error)
 		return topologyui.MockModel(), nil, nil
 	}
 	if path == "" {
-		return topologyui.Model{}, nil, fmt.Errorf("missing .lab file; pass a path or use --mock")
+		return topologyui.Model{}, nil, fmt.Errorf("missing .lab file; pass a path, put one in ~/.foxlab, or use --mock")
 	}
 	loaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -87,26 +87,21 @@ func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error)
 }
 
 func defaultLabPath() (string, bool) {
-	dir, err := os.Getwd()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", false
 	}
-	for {
-		if path, ok := regularFile(filepath.Join(dir, "topology-tui.lab")); ok {
+	dir := filepath.Join(home, ".foxlab")
+	if path, ok := regularFile(filepath.Join(dir, "topology-tui.lab")); ok {
+		return path, true
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*.lab"))
+	if err == nil && len(matches) == 1 {
+		if path, ok := regularFile(matches[0]); ok {
 			return path, true
 		}
-		matches, err := filepath.Glob(filepath.Join(dir, "*.lab"))
-		if err == nil && len(matches) == 1 {
-			if path, ok := regularFile(matches[0]); ok {
-				return path, true
-			}
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
 	}
+	return "", false
 }
 
 func regularFile(path string) (string, bool) {
