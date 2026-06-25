@@ -84,10 +84,14 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 			if !ok {
 				return "", fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 			}
+			mac := nic.MAC
+			if switchUsesMacNAT(l, sw) {
+				mac = firstNonEmpty(mac, l.GeneratedNICMAC("vm", vm.ID, index))
+			}
 			data.Networks = append(data.Networks, domainNetworkXMLData{
 				Kind:       "bridge",
 				SourceName: l.ManagedSwitchBridgeName(sw),
-				MAC:        nic.MAC,
+				MAC:        mac,
 			})
 		case nic.ExternalLink != "":
 			link, ok := findExternalLink(l, nic.ExternalLink)
@@ -95,13 +99,21 @@ func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
 				return "", fmt.Errorf("vm %q references missing external link %q", vm.ID, nic.ExternalLink)
 			}
 			kind := "direct"
-			if isLinuxBridge(link.Interface) {
+			source := link.Interface
+			mac := nic.MAC
+			if link.Mode == lab.ExternalModeNAT || link.Mode == lab.ExternalModeMacNAT {
+				kind = "bridge"
+				source = l.ManagedExternalBridgeName(link)
+				if link.Mode == lab.ExternalModeMacNAT {
+					mac = firstNonEmpty(mac, l.GeneratedNICMAC("vm", vm.ID, index))
+				}
+			} else if isLinuxBridge(link.Interface) {
 				kind = "bridge"
 			}
 			data.Networks = append(data.Networks, domainNetworkXMLData{
 				Kind:       kind,
-				SourceName: link.Interface,
-				MAC:        nic.MAC,
+				SourceName: source,
+				MAC:        mac,
 			})
 		default:
 			continue
@@ -122,7 +134,7 @@ func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 		Name:   name,
 		Bridge: l.ManagedSwitchBridgeName(sw),
 	}
-	if sw.Mode == "nat" {
+	if sw.Mode == "nat" && !switchUsesMacNAT(l, sw) {
 		address, start, end := natIPv4Range(l.ID, sw.ID)
 		data.NAT = true
 		data.NATAddress = address
@@ -130,7 +142,7 @@ func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 		data.DHCPStart = start
 		data.DHCPEnd = end
 	}
-	if sw.ExternalLink != "" && sw.Mode != "macnat-bridge" {
+	if sw.ExternalLink != "" && !switchUsesMacNAT(l, sw) {
 		link, ok := findExternalLink(l, sw.ExternalLink)
 		if !ok {
 			return "", fmt.Errorf("switch %q references missing external link %q", sw.ID, sw.ExternalLink)
@@ -194,6 +206,23 @@ func findExternalLink(l *lab.Lab, id string) (lab.ExternalLink, bool) {
 		}
 	}
 	return lab.ExternalLink{}, false
+}
+
+func switchUsesMacNAT(l *lab.Lab, sw lab.Switch) bool {
+	if sw.Mode == "macnat-bridge" {
+		return true
+	}
+	link, ok := findExternalLink(l, sw.ExternalLink)
+	return ok && link.Mode == lab.ExternalModeMacNAT
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func vmNICHasNetworkLink(l *lab.Lab, id string, index int) bool {

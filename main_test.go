@@ -10,7 +10,7 @@ import (
 
 func TestLoadModelLoadsRealLabFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "real.lab")
-	if err := os.WriteFile(path, []byte("id: real\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("name: real\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -42,13 +42,14 @@ func TestLoadModelMockIsExplicit(t *testing.T) {
 func TestDefaultLabPathSearchesFoxlabHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
 
 	foxlabDir := filepath.Join(home, ".foxlab")
 	if err := os.MkdirAll(foxlabDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(foxlabDir, "default.lab")
-	if err := os.WriteFile(want, []byte("id: topology-tui\n"), 0o644); err != nil {
+	if err := os.WriteFile(want, []byte("name: topology-tui\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,6 +68,7 @@ func TestDefaultLabPathSearchesFoxlabHome(t *testing.T) {
 func TestDefaultLabPathCreatesFoxlabHomeLab(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
 
 	got, ok, err := defaultLabPath()
 	if err != nil {
@@ -81,6 +83,13 @@ func TestDefaultLabPathCreatesFoxlabHomeLab(t *testing.T) {
 	}
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("expected created default lab: %v", err)
+	}
+	data, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "name: default\n" {
+		t.Fatalf("created default lab = %q, want name field", string(data))
 	}
 	loaded, err := lab.LoadFile(want)
 	if err != nil {

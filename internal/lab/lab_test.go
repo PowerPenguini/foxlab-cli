@@ -60,6 +60,30 @@ func TestValidateAcceptsExternalLinks(t *testing.T) {
 	if err := l.Validate(); err != nil {
 		t.Fatalf("expected external link config to validate, got %v", err)
 	}
+	if l.ExternalLinks[0].Mode != ExternalModeDirect {
+		t.Fatalf("legacy external mode = %q, want direct", l.ExternalLinks[0].Mode)
+	}
+}
+
+func TestValidateExternalLinkModes(t *testing.T) {
+	for _, mode := range []string{ExternalModeNAT, ExternalModeDirect, ExternalModeMacNAT} {
+		l := &Lab{
+			ID:            "demo",
+			ExternalLinks: []ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: mode}},
+		}
+		l.Normalize()
+		if err := l.Validate(); err != nil {
+			t.Fatalf("mode %q should validate: %v", mode, err)
+		}
+	}
+	l := &Lab{
+		ID:            "demo",
+		ExternalLinks: []ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: "wifi"}},
+	}
+	l.Normalize()
+	if err := l.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported mode") {
+		t.Fatalf("expected unsupported mode error, got %v", err)
+	}
 }
 
 func TestValidateAcceptsUnconnectedNICs(t *testing.T) {
@@ -96,6 +120,116 @@ func TestValidateAcceptsVMWithoutDisk(t *testing.T) {
 	l.Normalize()
 	if err := l.Validate(); err != nil {
 		t.Fatalf("expected vm without disk to validate, got %v", err)
+	}
+}
+
+func TestValidateAcceptsContainerDataDisk(t *testing.T) {
+	l := &Lab{
+		ID:         "demo",
+		Containers: []Container{{ID: "web", Image: "nginx", Disk: "disks/web.qcow2"}},
+		Disks: []Disk{{
+			ID:           "web-data",
+			Path:         "disks/web.qcow2",
+			Format:       "qcow2",
+			Kind:         "data",
+			AttachedType: "container",
+			AttachedTo:   "web",
+		}},
+	}
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected container data disk to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsDataDiskForVM(t *testing.T) {
+	l := &Lab{
+		ID:  "demo",
+		VMs: []VM{{ID: "vm1", MemoryMB: 512, CPUs: 1, Disk: "disks/data.qcow2"}},
+		Disks: []Disk{{
+			ID:           "data",
+			Path:         "disks/data.qcow2",
+			Format:       "qcow2",
+			Kind:         "data",
+			AttachedType: "vm",
+			AttachedTo:   "vm1",
+		}},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil || !strings.Contains(err.Error(), `disk "data" data disk cannot attach to vm`) {
+		t.Fatalf("expected vm data disk validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsDataDiskWithBase(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		Disks: []Disk{
+			{ID: "base", Path: "disks/base.qcow2", Format: "qcow2", Kind: "base"},
+			{ID: "data", Path: "disks/data.qcow2", Format: "qcow2", Kind: "data", Base: "base"},
+		},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil || !strings.Contains(err.Error(), `disk "data" data disk must not reference base`) {
+		t.Fatalf("expected data base validation error, got %v", err)
+	}
+}
+
+func TestFoxlabHomeUsesSudoUserHomeWhenRunningAsRoot(t *testing.T) {
+	oldHomeDir := userHomeDir
+	oldEffectiveUserID := effectiveUserID
+	oldLookupUserHome := lookupUserHome
+	t.Cleanup(func() {
+		userHomeDir = oldHomeDir
+		effectiveUserID = oldEffectiveUserID
+		lookupUserHome = oldLookupUserHome
+	})
+
+	t.Setenv("SUDO_USER", "alice")
+	userHomeDir = func() (string, error) { return "/root", nil }
+	effectiveUserID = func() int { return 0 }
+	lookupUserHome = func(name string) (string, error) {
+		if name != "alice" {
+			t.Fatalf("lookup user = %q, want alice", name)
+		}
+		return "/home/alice", nil
+	}
+
+	got, err := FoxlabHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/home/alice/.foxlab" {
+		t.Fatalf("FoxlabHome = %q, want user home", got)
+	}
+}
+
+func TestFoxlabHomeUsesProcessHomeWhenNotSudoRoot(t *testing.T) {
+	oldHomeDir := userHomeDir
+	oldEffectiveUserID := effectiveUserID
+	oldLookupUserHome := lookupUserHome
+	t.Cleanup(func() {
+		userHomeDir = oldHomeDir
+		effectiveUserID = oldEffectiveUserID
+		lookupUserHome = oldLookupUserHome
+	})
+
+	t.Setenv("SUDO_USER", "alice")
+	userHomeDir = func() (string, error) { return "/tmp/home", nil }
+	effectiveUserID = func() int { return 1000 }
+	lookupUserHome = func(name string) (string, error) {
+		t.Fatalf("unexpected sudo user lookup for %q", name)
+		return "", nil
+	}
+
+	got, err := FoxlabHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/tmp/home/.foxlab" {
+		t.Fatalf("FoxlabHome = %q, want process home", got)
 	}
 }
 
@@ -296,8 +430,9 @@ func TestManagedNamesAreStable(t *testing.T) {
 
 func TestValidateAcceptsContainers(t *testing.T) {
 	l := &Lab{
-		ID:       "demo",
-		Switches: []Switch{{ID: "lan", Mode: "bridge"}},
+		ID:            "demo",
+		Switches:      []Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []ExternalLink{{ID: "uplink1", Interface: "br0"}},
 		Containers: []Container{{
 			ID:      "web",
 			Image:   "docker.io/library/nginx:latest",
@@ -306,6 +441,8 @@ func TestValidateAcceptsContainers(t *testing.T) {
 			Networks: []ContainerNetwork{{
 				Switch: "lan",
 				MAC:    "02:00:00:00:00:10",
+			}, {
+				ExternalLink: "uplink1",
 			}},
 		}},
 		Layout: Layout{
@@ -323,7 +460,7 @@ func TestValidateRejectsInvalidContainers(t *testing.T) {
 	l := &Lab{
 		ID: "demo",
 		Containers: []Container{
-			{ID: "web", Networks: []ContainerNetwork{{Switch: "missing"}}},
+			{ID: "web", Networks: []ContainerNetwork{{Switch: "missing"}, {Switch: "lan", ExternalLink: "uplink1"}, {ExternalLink: "missing-uplink"}}},
 			{ID: "web", Image: "docker.io/library/nginx:latest"},
 		},
 		Layout: Layout{
@@ -338,6 +475,8 @@ func TestValidateRejectsInvalidContainers(t *testing.T) {
 	for _, want := range []string{
 		`container "web" image is required`,
 		`container "web" references missing switch "missing"`,
+		`container "web" network must not reference both switch and externalLink`,
+		`container "web" references missing external link "missing-uplink"`,
 		`duplicate container id "web"`,
 		`layout link references missing container "missing"`,
 	} {
@@ -350,7 +489,7 @@ func TestValidateRejectsInvalidContainers(t *testing.T) {
 func TestLoadFileKnownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.lab")
-	writeTestFile(t, path, "id: demo\nunknown: true\n")
+	writeTestFile(t, path, "name: demo\nunknown: true\n")
 	if _, err := LoadFile(path); err == nil {
 		t.Fatal("expected known-fields validation error")
 	}
@@ -359,7 +498,7 @@ func TestLoadFileKnownFields(t *testing.T) {
 func TestLoadFileAllowsDisksField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "demo.lab")
-	writeTestFile(t, path, `id: demo
+	writeTestFile(t, path, `name: demo
 disks:
   - id: vm1
     path: labs/demo/disks/vm1.qcow2
@@ -389,18 +528,65 @@ externalLinks:
 	}
 }
 
-func TestLoadFileRejectsTopLevelName(t *testing.T) {
+func TestLoadFileAllowsManagedDiskFieldsAndContainerDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.lab")
+	writeTestFile(t, path, `name: demo
+containers:
+  - id: web
+    image: nginx
+    disk: /tmp/web-layer.qcow2
+disks:
+  - id: data
+    path: /tmp/data.qcow2
+    sizeGB: 10
+    format: qcow2
+    kind: base
+  - id: container-web-data
+    path: /tmp/web-layer.qcow2
+    format: qcow2
+    kind: layer
+    base: data
+    attachedType: container
+    attachedTo: web
+`)
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+	if loaded.Containers[0].Disk != "/tmp/web-layer.qcow2" {
+		t.Fatalf("container disk = %q", loaded.Containers[0].Disk)
+	}
+	if got := loaded.Disks[1]; got.Kind != "layer" || got.Base != "data" || got.AttachedType != "container" || got.AttachedTo != "web" {
+		t.Fatalf("layer disk = %#v", got)
+	}
+}
+
+func TestLoadFileAcceptsLegacyTopLevelID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.lab")
+	writeTestFile(t, path, "id: demo\n")
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile returned error: %v", err)
+	}
+	if loaded.ID != "demo" {
+		t.Fatalf("loaded name = %q, want demo", loaded.ID)
+	}
+}
+
+func TestLoadFileRejectsTopLevelNameAndID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.lab")
-	writeTestFile(t, path, "id: demo\nname: Demo\n")
+	writeTestFile(t, path, "name: demo\nid: legacy\n")
 	if _, err := LoadFile(path); err == nil {
-		t.Fatal("expected top-level name to be rejected")
+		t.Fatal("expected mixed top-level name/id to be rejected")
 	}
 }
 
 func TestListFilesIncludesOnlyLabExtension(t *testing.T) {
 	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "demo.lab"), "id: demo\n")
+	writeTestFile(t, filepath.Join(dir, "demo.lab"), "name: demo\n")
 	writeTestFile(t, filepath.Join(dir, "legacy.yaml"), "id: legacy\n")
 	writeTestFile(t, filepath.Join(dir, "old.yml"), "id: old\n")
 	writeTestFile(t, filepath.Join(dir, "notes.txt"), "id: notes\n")

@@ -11,15 +11,29 @@ func (a *App) handleContextEditKey(key string, node Node, ok bool, subItems []st
 	switch {
 	case key == "enter":
 		if ok && item != "" {
-			a.applyContextEdit(node, item, a.State.ContextEditValue)
+			if a.State.ContextGroup == "disk-menu" {
+				entries := a.diskMenuEntries(node)
+				entry := diskMenuEntry{}
+				if len(entries) > 0 {
+					entry = entries[normalizedMenuSelection(a.State.ContextSubSelected, len(entries))]
+				}
+				switch {
+				case item == "Add Disk":
+					a.createNamedDiskForNode(node, a.State.ContextEditValue)
+					a.closeContextMenuAfterEdit()
+				case a.diskMenuEntryKind(node, entry) == "base" && a.State.ContextAddDiskLayer:
+					a.createNamedLayerForNode(node, entry, a.State.ContextEditValue)
+					a.closeContextMenuAfterEdit()
+				default:
+					a.applyContextEdit(node, item, a.State.ContextEditValue)
+				}
+			} else {
+				a.applyContextEdit(node, item, a.State.ContextEditValue)
+			}
 		}
-		a.State.ContextEdit = false
-		a.State.ContextEditValue = ""
-		a.State.ContextEditCursor = 0
+		a.State.clearContextEditState()
 	case key == "escape":
-		a.State.ContextEdit = false
-		a.State.ContextEditValue = ""
-		a.State.ContextEditCursor = 0
+		a.State.clearContextEditState()
 	case key == "left":
 		a.State.ContextEditCursor = clamp(a.State.ContextEditCursor-1, 0, runeLen(a.State.ContextEditValue))
 	case key == "right":
@@ -48,6 +62,10 @@ func (a *App) handleContextEditKey(key string, node Node, ok bool, subItems []st
 	return false
 }
 
+func (a *App) closeContextMenuAfterEdit() {
+	a.State.closeContextMenu()
+}
+
 func (a *App) insertContextEditText(value string) {
 	runes := []rune(a.State.ContextEditValue)
 	cursor := clamp(a.State.ContextEditCursor, 0, len(runes))
@@ -63,7 +81,7 @@ func isEditableContextItem(item string) bool {
 		return false
 	}
 	switch key {
-	case "name", "cpu", "cpus", "mem", "memory", "vnc", "disk", "iso", "mode", "external", "uplink", "interface", "image", "command", "switch":
+	case "name", "cpu", "cpus", "mem", "memory", "vnc", "iso", "mode", "external", "uplink", "interface", "image", "command", "switch":
 		return true
 	default:
 		return false
@@ -88,7 +106,11 @@ func contextItemValue(item string) string {
 	case "[ ]", "[]":
 		return "false"
 	}
-	return strings.TrimSuffix(value, "M")
+	value = strings.TrimSuffix(strings.TrimSpace(value), "M")
+	if value == "?" || value == contextEditPlaceholder {
+		return ""
+	}
+	return value
 }
 
 func toggledBoolValue(value string) string {

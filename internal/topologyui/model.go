@@ -87,7 +87,7 @@ func ModelFromLab(l *lab.Lab) Model {
 			Type:         NodeVM,
 			Badge:        "VM",
 			Label:        firstNonEmpty(vm.Name, vm.ID),
-			State:        "defined",
+			State:        displayWorkloadState(lab.DesiredState(vm.DesiredState), "defined"),
 			DesiredState: lab.DesiredState(vm.DesiredState),
 			X:            layoutX(l, vm.ID, NodeVM, i),
 			Y:            layoutY(l, vm.ID, i),
@@ -104,6 +104,9 @@ func ModelFromLab(l *lab.Lab) Model {
 	}
 	for i, ct := range l.Containers {
 		details := []string{"image=" + ct.Image}
+		if ct.Disk != "" {
+			details = append(details, "disk="+ct.Disk)
+		}
 		if len(ct.Command) > 0 {
 			details = append(details, "command="+strings.Join(ct.Command, " "))
 		}
@@ -115,10 +118,14 @@ func ModelFromLab(l *lab.Lab) Model {
 				details = append(details, detail)
 				continue
 			}
-			if nic.Switch != "" {
+			switch {
+			case nic.Switch != "":
 				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
 				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeSwitch, nic.Switch)})
-			} else {
+			case nic.ExternalLink != "":
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.ExternalLink))
+				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeExternal, nic.ExternalLink)})
+			default:
 				details = append(details, fmt.Sprintf("nic%d", idx))
 			}
 		}
@@ -127,7 +134,7 @@ func ModelFromLab(l *lab.Lab) Model {
 			Type:         NodeContainer,
 			Badge:        "CT",
 			Label:        firstNonEmpty(ct.Name, ct.ID),
-			State:        "missing",
+			State:        displayWorkloadState(lab.DesiredState(ct.DesiredState), "missing"),
 			DesiredState: lab.DesiredState(ct.DesiredState),
 			X:            layoutX(l, ct.ID, NodeContainer, i),
 			Y:            layoutY(l, ct.ID, i),
@@ -153,20 +160,33 @@ func ModelFromLab(l *lab.Lab) Model {
 	}
 	for i, link := range l.ExternalLinks {
 		m.Nodes = append(m.Nodes, Node{
-			ID:      link.ID,
-			Type:    NodeExternal,
-			Badge:   "IF",
-			Label:   firstNonEmpty(link.Name, link.Interface, link.ID),
-			State:   "link",
-			X:       layoutX(l, link.ID, NodeExternal, i),
-			Y:       layoutY(l, link.ID, i),
-			Details: []string{"interface=" + firstNonEmpty(link.Interface, "-")},
+			ID:    link.ID,
+			Type:  NodeExternal,
+			Badge: "IF",
+			Label: firstNonEmpty(link.Name, link.Interface, link.ID),
+			State: firstNonEmpty(link.Mode, lab.ExternalModeDirect),
+			X:     layoutX(l, link.ID, NodeExternal, i),
+			Y:     layoutY(l, link.ID, i),
+			Details: []string{
+				"interface=" + firstNonEmpty(link.Interface, "-"),
+				"mode=" + firstNonEmpty(link.Mode, lab.ExternalModeDirect),
+			},
 		})
 	}
 	sort.SliceStable(m.Nodes, func(i, j int) bool {
 		return nodeSort(m.Nodes[i]) < nodeSort(m.Nodes[j])
 	})
 	return m
+}
+
+func displayWorkloadState(desired, actual string) string {
+	if desired == lab.DesiredStateRunning {
+		switch actual {
+		case "", "missing", "created", "defined", "stopped", "shutoff":
+			return "starting"
+		}
+	}
+	return actual
 }
 
 func NodeKey(typ, id string) string { return graph.Key(typ, id) }

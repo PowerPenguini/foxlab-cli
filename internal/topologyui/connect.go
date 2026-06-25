@@ -145,7 +145,7 @@ func (a *App) canConnectToEndpoint(node Node) bool {
 	case NodeVM:
 		return node.Type == NodeSwitch || node.Type == NodeExternal || node.Type == NodeVM || node.Type == NodeContainer
 	case NodeContainer:
-		return node.Type == NodeSwitch || node.Type == NodeVM || node.Type == NodeContainer
+		return node.Type == NodeSwitch || node.Type == NodeExternal || node.Type == NodeVM || node.Type == NodeContainer
 	default:
 		return false
 	}
@@ -153,7 +153,7 @@ func (a *App) canConnectToEndpoint(node Node) bool {
 
 func (a *App) connectEndpointLabel() string {
 	if a.State.ConnectNodeType == NodeContainer {
-		return "switch or workload endpoint"
+		return "switch, external or workload endpoint"
 	}
 	return "switch, external or workload endpoint"
 }

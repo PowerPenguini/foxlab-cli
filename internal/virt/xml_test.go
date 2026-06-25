@@ -107,6 +107,63 @@ func TestDomainXMLIncludesDirectLinkedNIC(t *testing.T) {
 	}
 }
 
+func TestDomainXMLUsesManagedBridgeForNATExternalLink(t *testing.T) {
+	l := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     "labs/demo/disks/vm1.qcow2",
+			Networks: []lab.VMNetwork{{ExternalLink: "uplink1"}},
+		}},
+	}
+	l.Normalize()
+
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge := l.ManagedExternalBridgeName(l.ExternalLinks[0])
+	for _, want := range []string{
+		`<interface type="bridge">`,
+		`<source bridge="` + bridge + `"/>`,
+	} {
+		if !strings.Contains(xmlText, want) {
+			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
+		}
+	}
+}
+
+func TestDomainXMLUsesGeneratedMACForMacNATExternalLink(t *testing.T) {
+	l := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeMacNAT}},
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     "labs/demo/disks/vm1.qcow2",
+			Networks: []lab.VMNetwork{{ExternalLink: "uplink1"}},
+		}},
+	}
+	l.Normalize()
+
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<source bridge="` + l.ManagedExternalBridgeName(l.ExternalLinks[0]) + `"/>`,
+		`<mac address="` + l.GeneratedNICMAC("vm", "vm1", 0) + `"/>`,
+	} {
+		if !strings.Contains(xmlText, want) {
+			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
+		}
+	}
+}
+
 func TestParseVNCPortReturnsAssignedPort(t *testing.T) {
 	xmlText := `<domain><devices><graphics type="vnc" port="5903" autoport="yes" listen="127.0.0.1"/></devices></domain>`
 

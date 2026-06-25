@@ -1,10 +1,10 @@
-id: topology-tui
+name: topology-tui
 vms:
     - id: vm2
       name: vm2
       memoryMB: 2048
       cpus: 1
-      disk: labs/topology-tui/disks/vm2.qcow2
+      disk: ""
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
@@ -25,7 +25,7 @@ vms:
       name: vm4
       memoryMB: 4096
       cpus: 2
-      disk: labs/topology-tui/disks/vm4.qcow2
+      disk: ""
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
@@ -36,7 +36,7 @@ vms:
       desiredState: running
       memoryMB: 2048
       cpus: 2
-      disk: labs/topology-tui/disks/new.qcow2
+      disk: ""
       vnc: true
       networks:
         - switch: sw1
@@ -45,7 +45,7 @@ vms:
       desiredState: running
       memoryMB: 2048
       cpus: 2
-      disk: /var/lib/libvirt/images/foxlab-ubuntu-vnc-test.qcow2
+      disk: ""
       vnc: true
       networks:
         - switch: sw1
@@ -70,11 +70,6 @@ externalLinks:
     - id: link1
       name: in2
       interface: wlp0s20f3
-disks:
-    - id: vm2
-      path: labs/topology-tui/disks/vm2.qcow2
-      sizeGB: 20
-      format: qcow2
 layout:
     nodes:
         bash-test:

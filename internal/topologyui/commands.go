@@ -1,10 +1,6 @@
 package topologyui
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
+import "strings"
 
 func (a *App) executeCommand(command string) bool {
 	if command == "" {
@@ -30,16 +26,74 @@ func (a *App) executeCommand(command string) bool {
 		a.executeVMCommand(fields)
 	case "container", "ct":
 		a.executeContainerCommand(fields)
+	case "disk":
+		a.executeDiskCommand(fields)
 	case "shell":
 		a.executeShellCommand(fields)
 	case "switch", "sw":
 		a.executeSwitchCommand(fields)
 	case "external", "ext":
 		a.executeExternalCommand(fields)
+	case "link", "links":
+		a.executeLinkCommand(fields)
 	default:
 		a.State.Message = "unknown command: " + fields[0]
 	}
 	return false
+}
+
+func (a *App) executeDiskCommand(fields []string) {
+	if len(fields) < 2 {
+		a.State.Message = "usage: disk <create|attach|detach|merge|delete|layer> ..."
+		return
+	}
+	switch fields[1] {
+	case "create", "new":
+		if len(fields) < 3 {
+			a.State.Message = "usage: disk create <id> [size=N] [format=qcow2|raw]"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskCreate(fields[2], args)
+	case "attach", "connect":
+		if len(fields) < 4 {
+			a.State.Message = "usage: disk attach <id> to=vm:<id>|container:<id>"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskAttach(fields[2], args)
+	case "detach":
+		if len(fields) < 3 {
+			a.State.Message = "usage: disk detach <workload-id> [type=vm|container] [disk=ID]"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskDetach(fields[2], args)
+	case "merge":
+		a.diskMerge(commandArg(fields, 2))
+	case "delete", "rm":
+		a.diskDelete(commandArg(fields, 2))
+	case "layer":
+		if len(fields) >= 4 && (fields[2] == "delete" || fields[2] == "rm") {
+			a.diskLayerDelete(fields[3])
+			return
+		}
+		a.State.Message = "usage: disk layer delete <id>"
+	default:
+		a.State.Message = "unknown disk command: " + fields[1]
+	}
 }
 
 func (a *App) executeAddCommand(fields []string) {
@@ -64,6 +118,76 @@ func (a *App) executeAddCommand(fields []string) {
 	}
 }
 
+func (a *App) executeLinkCommand(fields []string) {
+	if len(fields) < 2 {
+		a.State.Message = "usage: link <add|connect|delete> ..."
+		return
+	}
+	switch fields[1] {
+	case "add", "connect", "create":
+		a.executeLinkAddCommand(fields)
+	case "delete", "disconnect", "rm":
+		a.executeLinkDeleteCommand(fields)
+	default:
+		a.State.Message = "unknown link command: " + fields[1]
+	}
+}
+
+func (a *App) executeLinkAddCommand(fields []string) {
+	if len(fields) < 4 {
+		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
+		return
+	}
+	source, ok := parseLinkEndpoint(fields[2], true)
+	if !ok {
+		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
+		return
+	}
+	targetValue := ""
+	if strings.HasPrefix(strings.ToLower(fields[3]), "to=") || strings.HasPrefix(strings.ToLower(fields[3]), "target=") {
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		for key := range args {
+			if key != "to" && key != "target" {
+				a.State.Message = "unsupported link add argument: " + key
+				return
+			}
+		}
+		targetValue = firstNonEmpty(args["to"], args["target"])
+	} else if len(fields) == 4 {
+		targetValue = fields[3]
+	} else {
+		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
+		return
+	}
+	target, ok := parseLinkEndpoint(targetValue, false)
+	if !ok {
+		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
+		return
+	}
+	if target.NIC == "" {
+		a.nicConnectDirect(source.Type, source.ID, source.NIC, target.Type, target.ID)
+		return
+	}
+	a.nicConnectDirectTo(source.Type, source.ID, source.NIC, target.Type, target.ID, target.NIC)
+}
+
+func (a *App) executeLinkDeleteCommand(fields []string) {
+	if len(fields) < 3 {
+		a.State.Message = "usage: link delete <vm|container>:<id>:<nic>"
+		return
+	}
+	endpoint, ok := parseLinkEndpoint(fields[2], true)
+	if !ok {
+		a.State.Message = "usage: link delete <vm|container>:<id>:<nic>"
+		return
+	}
+	a.nicDisconnect(endpoint.Type, endpoint.ID, endpoint.NIC)
+}
+
 func (a *App) executeContainerCommand(fields []string) {
 	if len(fields) < 2 {
 		a.State.Message = "usage: container <create|set|start|stop|nic|delete> ..."
@@ -83,7 +207,7 @@ func (a *App) executeContainerCommand(fields []string) {
 		a.containerCreate(fields[2], args)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID"
+			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID|external=ID"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -177,7 +301,7 @@ func (a *App) executeExternalCommand(fields []string) {
 	switch fields[1] {
 	case "create", "new":
 		if len(fields) < 3 {
-			a.State.Message = "usage: external create <id> interface=IFACE"
+			a.State.Message = "usage: external create <id> interface=IFACE [mode=nat|direct|macnat]"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -188,7 +312,7 @@ func (a *App) executeExternalCommand(fields []string) {
 		a.externalCreate(fields[2], args)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: external set <id> interface=IFACE name=NAME"
+			a.State.Message = "usage: external set <id> interface=IFACE name=NAME mode=nat|direct|macnat"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -271,212 +395,5 @@ func (a *App) executeVMCommand(fields []string) {
 		a.vmDelete(commandArg(fields, 2))
 	default:
 		a.State.Message = "unknown vm command: " + fields[1]
-	}
-}
-
-func parseArgs(fields []string) (map[string]string, error) {
-	out := map[string]string{}
-	for _, field := range fields {
-		key, value, ok := strings.Cut(field, "=")
-		if !ok {
-			return nil, fmt.Errorf("expected key=value: %q", field)
-		}
-		key = strings.ToLower(strings.TrimSpace(key))
-		if key == "" {
-			return nil, fmt.Errorf("expected key=value: %q", field)
-		}
-		if strings.HasSuffix(key, "+") || strings.HasSuffix(key, "-") {
-			return nil, fmt.Errorf("unsupported increment syntax: %q", key)
-		}
-		out[key] = strings.TrimSpace(unquoteValue(value))
-	}
-	return out, nil
-}
-
-func unexpectedVMCreateArgs(args map[string]string) []string {
-	valid := map[string]struct{}{
-		"name":     {},
-		"cpus":     {},
-		"memory":   {},
-		"mem":      {},
-		"disk":     {},
-		"switch":   {},
-		"external": {},
-	}
-	var invalid []string
-	for key := range args {
-		if _, ok := valid[key]; !ok {
-			invalid = append(invalid, key)
-		}
-	}
-	return invalid
-}
-
-func unexpectedVMSetArgs(args map[string]string) []string {
-	valid := map[string]struct{}{
-		"name":     {},
-		"disk":     {},
-		"iso":      {},
-		"vnc":      {},
-		"cpus":     {},
-		"memory":   {},
-		"mem":      {},
-		"switch":   {},
-		"external": {},
-	}
-	var invalid []string
-	for key := range args {
-		if _, ok := valid[key]; !ok {
-			invalid = append(invalid, key)
-		}
-	}
-	return invalid
-}
-
-func commandFields(command string) ([]string, error) {
-	var fields []string
-	var b strings.Builder
-	quote := rune(0)
-	escaped := false
-	for _, ch := range command {
-		switch {
-		case escaped:
-			b.WriteRune(ch)
-			escaped = false
-		case ch == '\\' && quote != 0:
-			escaped = true
-		case quote != 0:
-			if ch == quote {
-				quote = 0
-			} else {
-				b.WriteRune(ch)
-			}
-		case ch == '"' || ch == '\'':
-			quote = ch
-		case ch == ' ' || ch == '\t':
-			if b.Len() > 0 {
-				fields = append(fields, b.String())
-				b.Reset()
-			}
-		default:
-			b.WriteRune(ch)
-		}
-	}
-	if escaped {
-		b.WriteRune('\\')
-	}
-	if quote != 0 {
-		return nil, fmt.Errorf("unterminated quote")
-	}
-	if b.Len() > 0 {
-		fields = append(fields, b.String())
-	}
-	return fields, nil
-}
-
-func unquoteValue(value string) string {
-	if len(value) < 2 {
-		return value
-	}
-	if unquoted, err := strconv.Unquote(value); err == nil {
-		return unquoted
-	}
-	return value
-}
-
-func commandValue(value string) string {
-	if value == "" {
-		return ""
-	}
-	if strings.ContainsAny(value, " \t\"'\\") {
-		return strconv.Quote(value)
-	}
-	return value
-}
-
-func commandArg(fields []string, index int) string {
-	if len(fields) <= index {
-		return ""
-	}
-	return fields[index]
-}
-
-func intArg(args map[string]string, key string, fallback int) int {
-	if value, ok := positiveInt(args[key]); ok {
-		return value
-	}
-	return fallback
-}
-
-func positiveInt(value string) (int, bool) {
-	if value == "" {
-		return 0, false
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return 0, false
-	}
-	return parsed, true
-}
-
-func boolArg(value string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func helpLines(topic string) []string {
-	switch strings.ToLower(strings.TrimSpace(topic)) {
-	case "", "general", "all":
-		return []string{
-			"help: Space opens menu; : opens console; Enter selects; :q quits",
-			"topics: :help add  :help vm  :help container  :help switch  :help external",
-			"history: Up/Down recall console commands; Escape closes console/menu",
-			"ids: use vm/switch/external ids or node labels",
-		}
-	case "add":
-		return []string{
-			"add vm: :add vm <id> [cpus=N] [memory=N] [switch=ID] [external=ID]",
-			"add sw: :add sw <id> [mode=bridge|nat|macnat-bridge] [external=ID]",
-			"add cont: :add cont <id> [image=REF] [command=CMD] [switch=ID]",
-		}
-	case "vm", "vms":
-		return []string{
-			"add vm: :add vm <id> [cpus=N] [memory=N] [switch=ID] [external=ID]",
-			"vm set: :vm set <id> name=.. cpus=N memory=N disk=<path> iso=<path> vnc=true/false",
-			"vm power: :vm start <id>  :vm stop <id> (sets desired state)",
-			"vm nic: :vm nic add <id> [mac=MAC]  :vm nic connect <id> <index> to=ID",
-			"vm shell/delete: :shell vm <id>  :vm delete <id>",
-		}
-	case "container", "containers", "ct":
-		return []string{
-			"add cont: :add cont <id> [image=REF] [command=CMD] [switch=ID]",
-			"container set: :container set <id> name=.. image=REF command=CMD switch=ID",
-			"container power: :container start <id>  :container stop <id> (sets desired state)",
-			"container nic: :container nic add <id> [mac=MAC]  :container nic connect <id> <index> to=ID",
-			"container shell/delete: :shell container <id>  :container delete <id>",
-		}
-	case "switch", "switches":
-		return []string{
-			"add sw: :add sw <id> [mode=bridge|nat|macnat-bridge] [external=ID]",
-			"switch set: :switch set <id> mode=bridge external=ID",
-			"switch delete: :switch delete <id>",
-		}
-	case "external":
-		return []string{
-			"external create: :external create <id> interface=IFACE",
-			"external set: :external set <id> interface=IFACE name=LABEL",
-			"external delete: :external delete <id>",
-		}
-	default:
-		return []string{
-			"unknown help topic: " + topic,
-			"topics: :help add  :help vm  :help container  :help switch  :help external",
-		}
 	}
 }

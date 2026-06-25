@@ -6,7 +6,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +32,29 @@ type eofReader struct{}
 
 func (eofReader) Read([]byte) (int, error) {
 	return 0, io.EOF
+}
+
+func fakeQemuImg(t *testing.T) func() {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "qemu-img")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
+	return func() {}
+}
+
+func fakeHostInterfaces(t *testing.T, names ...string) {
+	t.Helper()
+	previous := hostInterfaceNames
+	hostInterfaceNames = func() []string {
+		return append([]string{}, names...)
+	}
+	t.Cleanup(func() {
+		hostInterfaceNames = previous
+	})
 }
 
 type closedPipeReader struct{}
@@ -115,7 +141,112 @@ func TestHandleKeyContextMenuFlow(t *testing.T) {
 	}
 }
 
-func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
+func TestContextMenuInlineEditQuestionFallbackStartsEmpty(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		State: ViewState{Focus: FocusGraph, Selected: 2},
+	}
+
+	app.handleKey("space")
+	app.handleKey("enter")
+	node, _ := selectedNode(app.Model, app.State.Selected)
+	items := contextMenuItems(node, app.State.ContextGroup)
+	for i, item := range items {
+		if contextItemKey(item) == "command" {
+			app.State.ContextSubSelected = i
+			break
+		}
+	}
+	app.handleKey("enter")
+
+	if !app.State.ContextEdit {
+		t.Fatal("enter on command value did not start inline edit")
+	}
+	if app.State.ContextEditValue != "" {
+		t.Fatalf("inline edit value = %q, want empty", app.State.ContextEditValue)
+	}
+}
+
+func TestExternalInterfaceFieldOpensChoiceMenu(t *testing.T) {
+	fakeHostInterfaces(t, "br0", "eth0")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		State: ViewState{
+			Focus:            FocusGraph,
+			Selected:         0,
+			ContextMenu:      true,
+			ContextGroup:     "config-menu",
+			ContextInSubmenu: true,
+		},
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok {
+		t.Fatal("selected node not found")
+	}
+	app.State.ContextSubSelected = externalInterfaceFieldIndex(node)
+
+	app.handleKey("enter")
+
+	if app.State.ContextGroup != "interface-menu" || !app.State.ContextInSubmenu {
+		t.Fatalf("context group = %q submenu=%t, want interface-menu submenu", app.State.ContextGroup, app.State.ContextInSubmenu)
+	}
+	if app.State.ContextEdit {
+		t.Fatal("interface choice opened inline edit")
+	}
+	items := app.contextMenuSubmenuItems(node, true)
+	if !reflect.DeepEqual(items, []string{"br0", "eth0"}) {
+		t.Fatalf("interface items = %#v", items)
+	}
+}
+
+func TestExternalInterfaceChoiceAppliesSelectedInterface(t *testing.T) {
+	fakeHostInterfaces(t, "br0", "eth0")
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:              FocusGraph,
+			Selected:           0,
+			ContextMenu:        true,
+			ContextGroup:       "interface-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 0,
+		},
+	}
+
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].Interface != "br0" {
+		t.Fatalf("external links = %#v, want interface br0", reloaded.ExternalLinks)
+	}
+	if app.State.ContextMenu {
+		t.Fatal("interface choice did not close context menu")
+	}
+}
+
+func TestContextMenuGroupRequiresRootConfirmation(t *testing.T) {
 	app := App{
 		Model: MockModel(),
 		State: ViewState{Focus: FocusGraph, Selected: 1},
@@ -123,6 +254,11 @@ func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
 
 	app.handleKey("space")
 	app.handleKey("down")
+	app.handleKey("down")
+	if app.State.ContextGroup != "" || app.State.ContextInSubmenu {
+		t.Fatalf("context group after hovering disk = %q submenu=%t, want closed", app.State.ContextGroup, app.State.ContextInSubmenu)
+	}
+
 	app.handleKey("down")
 	if app.State.ContextGroup != "" {
 		t.Fatalf("context group after moving to action = %q, want empty", app.State.ContextGroup)
@@ -134,6 +270,66 @@ func TestContextMenuGroupFollowsRootSelection(t *testing.T) {
 	}
 	if app.State.ContextGroup != "" {
 		t.Fatalf("context group after right = %q, want empty", app.State.ContextGroup)
+	}
+}
+
+func TestContextMenuRowChangeClearsInlineActionState(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		State: ViewState{
+			Focus:               FocusGraph,
+			Selected:            1,
+			ContextMenu:         true,
+			ContextGroup:        "disk-menu",
+			ContextInSubmenu:    true,
+			ContextSubSelected:  1,
+			ContextDeleteNIC:    true,
+			ContextAddDiskLayer: true,
+			ContextMergeDisk:    true,
+			ContextDetachDisk:   true,
+			ContextDeleteDisk:   true,
+			DiskMenuItems:       []string{"Add Disk", "base 10G", diskMenuLayerTreePrefix + "base-layer"},
+			DiskMenuActions:     []string{diskMenuActionCreate, diskMenuActionAttach, diskMenuActionNone},
+			DiskMenuKinds:       []string{"", "base", "layer"},
+		},
+	}
+
+	app.handleKey("down")
+
+	if app.State.ContextDeleteNIC || app.State.ContextAddDiskLayer || app.State.ContextMergeDisk || app.State.ContextDetachDisk || app.State.ContextDeleteDisk {
+		t.Fatalf("row action flags were not cleared: %#v", app.State)
+	}
+}
+
+func TestContextMenuClickOutsideClearsMenuState(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		ViewWidth:  100,
+		ViewHeight: 30,
+		State: ViewState{
+			Focus:              FocusGraph,
+			Selected:           1,
+			ContextMenu:        true,
+			ContextGroup:       "disk-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 1,
+			ContextEdit:        true,
+			ContextEditValue:   "data",
+			ContextEditCursor:  4,
+			ContextDeleteDisk:  true,
+			DiskMenuItems:      []string{"Add Disk", "base 10G"},
+			DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionAttach},
+			DiskMenuKinds:      []string{"", "base"},
+		},
+	}
+
+	app.handleContextMenuMouse(mouseEvent{x: 0, y: 29, button: 0})
+
+	if app.State.ContextMenu || app.State.ContextInSubmenu || app.State.ContextGroup != "" || app.State.ContextEdit {
+		t.Fatalf("context state was not closed: %#v", app.State)
+	}
+	if app.State.DiskMenuItems != nil || app.State.DiskMenuActions != nil || app.State.DiskMenuKinds != nil {
+		t.Fatalf("disk menu cache was not cleared: %#v", app.State)
 	}
 }
 
@@ -228,6 +424,29 @@ func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
 	}
 }
 
+func TestRefreshWorkloadStatesShowsStartingForDesiredRunningMissingContainer(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		Runtime: &fakeVMRuntime{
+			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
+		},
+	}
+
+	app.refreshWorkloadStates()
+	node, ok := nodeByKey(app.Model, NodeKey(NodeContainer, "kali"))
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "starting" {
+		t.Fatalf("container state = %q, want starting", node.State)
+	}
+}
+
 func TestNormalModeQDoesNotQuit(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 
@@ -246,6 +465,27 @@ func TestEnterDoesNotShowSelectedNodeMessage(t *testing.T) {
 	}
 	if strings.Contains(app.State.Message, "selected ") {
 		t.Fatalf("enter set selected-node message %q", app.State.Message)
+	}
+}
+
+func TestHJKLMoveGraphFocusLikeArrows(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph, Selected: 0}}
+
+	app.handleKey("char:j")
+	if app.State.Selected != 1 {
+		t.Fatalf("j selected = %d, want client01", app.State.Selected)
+	}
+	app.handleKey("char:l")
+	if app.State.Selected != 4 {
+		t.Fatalf("l selected = %d, want lan", app.State.Selected)
+	}
+	app.handleKey("char:h")
+	if app.State.Selected != 1 {
+		t.Fatalf("h selected = %d, want client01", app.State.Selected)
+	}
+	app.handleKey("char:k")
+	if app.State.Selected != 0 {
+		t.Fatalf("k selected = %d, want router", app.State.Selected)
 	}
 }
 
@@ -323,8 +563,21 @@ func TestContextMenuMoveSavesLayout(t *testing.T) {
 	}
 
 	app.handleKey("space")
-	app.handleKey("down")
-	app.handleKey("down")
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok {
+		t.Fatal("no selected node")
+	}
+	moveIndex := -1
+	for i, item := range app.contextMenuRootItems(node, ok) {
+		if contextMenuAction(item) == "move" {
+			moveIndex = i
+			break
+		}
+	}
+	if moveIndex < 0 {
+		t.Fatal("Move menu item not found")
+	}
+	app.State.ContextSelected = moveIndex
 	app.handleKey("enter")
 	if !app.State.MoveMode {
 		t.Fatal("Move menu action did not enter move mode")
@@ -461,6 +714,33 @@ func TestRunInteractiveSkipsRenderOnEmptyKeyTimeout(t *testing.T) {
 	got := outputFileString(t, app.Out)
 	if count := strings.Count(got, ansiMoveHome); count != 1 {
 		t.Fatalf("render count = %d, want 1; output=%q", count, got)
+	}
+}
+
+func TestRunInteractiveFlashesAndClearsMouseClickFeedback(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	start := func(*App) (func(), error) { return func() {}, nil }
+	keys := []string{"mouse:1:0:0", "quit"}
+	read := func(*App) (string, error) {
+		key := keys[0]
+		keys = keys[1:]
+		return key, nil
+	}
+	size := func(*App) (int, int) { return 80, 20 }
+
+	if err := app.runInteractive(start, read, size); err != nil {
+		t.Fatal(err)
+	}
+
+	if app.State.MouseClickActive {
+		t.Fatal("mouse click feedback stayed active after interactive flash")
+	}
+	got := outputFileString(t, app.Out)
+	if count := strings.Count(got, ansiMoveHome); count < 3 {
+		t.Fatalf("render count = %d, want at least initial, flash, and cleared frames; output=%q", count, got)
+	}
+	if !strings.Contains(got, ansiBgCyan+ansiWhite+ansiBold) {
+		t.Fatalf("interactive output missing click flash style:\n%q", got)
 	}
 }
 
@@ -620,11 +900,18 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 	}
 }
 
-func TestContextMenuInlineEditClearsDisk(t *testing.T) {
+func TestContextMenuDiskRootOpensDiskSubmenu(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:  "demo",
-		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
 	}
 	if err := lab.SaveFile(path, loaded); err != nil {
 		t.Fatal(err)
@@ -640,19 +927,507 @@ func TestContextMenuInlineEditClearsDisk(t *testing.T) {
 		State:   ViewState{Focus: FocusGraph},
 	}
 
-	app.applyContextEdit(Node{ID: "vm1", Type: NodeVM}, "Disk        labs/demo/disks/vm1.img", "")
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok {
+		t.Fatal("no selected node")
+	}
+	items := app.contextMenuRootItems(node, true)
+	diskIndex := -1
+	for i, item := range items {
+		if contextMenuAction(item) == "disk-menu" {
+			diskIndex = i
+			break
+		}
+	}
+	if diskIndex < 0 {
+		t.Fatal("Disk root menu item not found")
+	}
+	app.State.ContextMenu = true
+	app.State.ContextSelected = diskIndex
+	app.handleKey("enter")
+
+	if !app.State.ContextInSubmenu || app.State.ContextGroup != "disk-menu" {
+		t.Fatalf("disk root did not open submenu: %#v", app.State)
+	}
+	if app.State.ContextEdit {
+		t.Fatal("disk submenu opened text editor")
+	}
+	if got := strings.Join(app.State.DiskMenuItems, "\n"); !strings.Contains(got, "Add Disk") || !strings.Contains(got, "data 4G") {
+		t.Fatalf("disk menu items = %#v, want data disk", app.State.DiskMenuItems)
+	}
+	out := RenderString(app.Model, app.State, 100, 30, false)
+	if !strings.Contains(out, "data 4G") {
+		t.Fatalf("rendered disk menu missing disk:\n%s", out)
+	}
+}
+
+func TestDiskMenuEnterAttachesContainerDataDiskWithoutLayer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Name: "web", Image: "docker.io/library/alpine:latest"}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "web", Type: NodeContainer}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 1
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 1 {
+		t.Fatalf("disk count after data attach = %d, want one data disk", len(reloaded.Disks))
+	}
+	if reloaded.Disks[0].Kind != "data" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
+		t.Fatalf("data attach state = %#v", reloaded.Disks[0])
+	}
+	if reloaded.Containers[0].Disk == "" || !strings.Contains(reloaded.Containers[0].Disk, "/disks/data.qcow2") {
+		t.Fatalf("container disk after data attach = %q", reloaded.Containers[0].Disk)
+	}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	if len(app.State.DiskMenuItems) < 2 || app.State.DiskMenuItems[1] != "data 4G" {
+		t.Fatalf("disk menu items after base attach = %#v", app.State.DiskMenuItems)
+	}
+	if len(app.State.DiskMenuActions) < 2 || app.State.DiskMenuActions[1] != diskMenuActionNone {
+		t.Fatalf("disk menu actions after base attach = %#v", app.State.DiskMenuActions)
+	}
+	app.State.ContextSubSelected = 1
+	app.handleKey("right")
+	app.handleKey("enter")
+
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Containers[0].Disk != "" {
+		t.Fatalf("container disk after data detach = %q", reloaded.Containers[0].Disk)
+	}
+	if reloaded.Disks[0].AttachedTo != "" {
+		t.Fatalf("data disk still attached after detach: %#v", reloaded.Disks[0])
+	}
+}
+
+func TestDiskMenuAttachAndDetach(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "vm1", Type: NodeVM}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	if len(app.State.DiskMenuItems) < 2 || app.State.DiskMenuItems[0] != "Add Disk" || !strings.Contains(app.State.DiskMenuItems[1], "data") {
+		t.Fatalf("disk menu items before attach = %#v", app.State.DiskMenuItems)
+	}
+	app.handleKey("down")
+	app.handleKey("enter")
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after attach")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Disk == "" || !strings.Contains(reloaded.VMs[0].Disk, "/disks/data.qcow2") {
+		t.Fatalf("vm disk after attach = %q", reloaded.VMs[0].Disk)
+	}
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
+		t.Fatalf("disk after attach = %#v", reloaded.Disks)
+	}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", Node{ID: "vm1", Type: NodeVM}, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 1
+	app.handleKey("right")
+	app.handleKey("enter")
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VMs[0].Disk != "" {
+		t.Fatalf("vm disk after detach = %q", reloaded.VMs[0].Disk)
+	}
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].AttachedTo != "" {
+		t.Fatalf("disk after detach = %#v, want detached base", reloaded.Disks)
+	}
+}
+
+func TestDiskMenuDeleteActiveLayerWithX(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "vm1", Type: NodeVM}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 1
+	app.handleKey("right")
+	app.handleKey("enter")
+	app.handleKey("enter")
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 2
+	app.handleKey("right")
+	app.handleKey("right")
+	app.handleKey("right")
+	app.handleKey("enter")
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reloaded.VMs[0].Disk != "" {
-		t.Fatalf("disk after inline clear = %q, want empty", reloaded.VMs[0].Disk)
+		t.Fatalf("vm disk after delete = %q, want detached", reloaded.VMs[0].Disk)
 	}
-	out := RenderString(app.Model, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
-	if strings.Contains(out, "labs/demo/disks/vm1.img") {
-		t.Fatalf("context menu kept cleared disk path:\n%s", out)
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" {
+		t.Fatalf("disks after delete = %#v, want only base", reloaded.Disks)
 	}
+}
+
+func TestDiskMenuAddDiskCreatesBaseDisk(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "vm1", Type: NodeVM}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	if len(app.State.DiskMenuItems) < 1 || app.State.DiskMenuItems[0] != "Add Disk" {
+		t.Fatalf("disk menu items = %#v", app.State.DiskMenuItems)
+	}
+	app.handleKey("enter")
+
+	if !app.State.ContextEdit {
+		t.Fatal("add disk did not open inline name edit")
+	}
+	if app.State.CommandMode || app.State.Command != "" {
+		t.Fatalf("add disk opened command mode: mode=%t command=%q", app.State.CommandMode, app.State.Command)
+	}
+	if !app.State.ContextMenu || app.State.ContextGroup != "disk-menu" {
+		t.Fatalf("add disk edit left context menu: %#v", app.State)
+	}
+	for range "disk" {
+		app.handleKey("backspace")
+	}
+	for _, r := range "data" {
+		app.handleKey("char:" + string(r))
+	}
+	app.handleKey("enter")
+	if app.State.ContextEdit {
+		t.Fatal("inline disk name edit stayed open after enter")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 1 {
+		t.Fatalf("disk count = %d, want base only", len(reloaded.Disks))
+	}
+	if reloaded.Disks[0].ID != "data" {
+		t.Fatalf("base disk id = %q, want custom disk name", reloaded.Disks[0].ID)
+	}
+	if reloaded.VMs[0].Disk != "" {
+		t.Fatalf("vm disk after add = %q, want no attached layer", reloaded.VMs[0].Disk)
+	}
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	if got := strings.Join(app.State.DiskMenuItems, "\n"); !strings.Contains(got, "data 10G") {
+		t.Fatalf("disk menu after add = %#v, want attachable base", app.State.DiskMenuItems)
+	}
+}
+
+func TestDiskMenuCreatesSwitchesAndDeletesLayerVariants(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "vm1", Type: NodeVM}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 1
+	app.handleKey("right")
+	app.handleKey("enter")
+	app.handleKey("enter")
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	baseIndex := indexOfContextItem(app.State.DiskMenuItems, "data")
+	if baseIndex < 0 {
+		t.Fatalf("base row missing after first attach: %#v", app.State.DiskMenuItems)
+	}
+	app.State.ContextSubSelected = baseIndex
+	app.handleKey("right")
+	app.handleKey("enter")
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 3 {
+		t.Fatalf("disk count after second layer = %d, want 3", len(reloaded.Disks))
+	}
+	if !strings.Contains(reloaded.VMs[0].Disk, "/layers/data-layer-2.qcow2") {
+		t.Fatalf("active disk after second layer = %q", reloaded.VMs[0].Disk)
+	}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	savedFirst := indexOfExactContextItem(app.State.DiskMenuItems, "data | data-layer")
+	if savedFirst < 0 {
+		t.Fatalf("saved first layer missing: %#v", app.State.DiskMenuItems)
+	}
+	app.State.ContextSubSelected = savedFirst
+	app.handleKey("enter")
+
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reloaded.VMs[0].Disk, "/layers/data-layer.qcow2") {
+		t.Fatalf("active disk after switching layer = %q", reloaded.VMs[0].Disk)
+	}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	savedSecond := indexOfExactContextItem(app.State.DiskMenuItems, "data | data-layer-2")
+	if savedSecond < 0 {
+		t.Fatalf("saved second layer missing: %#v", app.State.DiskMenuItems)
+	}
+	app.State.ContextSubSelected = savedSecond
+	app.handleKey("right")
+	app.handleKey("right")
+	app.handleKey("enter")
+
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, disk := range reloaded.Disks {
+		if disk.ID == "data-layer-2" {
+			t.Fatalf("deleted layer still present: %#v", reloaded.Disks)
+		}
+	}
+}
+
+func TestDiskMenuAddLayerPromptsForLayerName(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2}},
+		Disks: []lab.Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: 4,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+	node := Node{ID: "vm1", Type: NodeVM}
+
+	app.State.ContextMenu = true
+	app.setContextGroup("disk-menu", node, true)
+	app.State.ContextInSubmenu = true
+	app.State.ContextSubSelected = 1
+	app.handleKey("right")
+	app.handleKey("enter")
+	if !app.State.ContextEdit {
+		t.Fatal("add layer did not open inline name edit")
+	}
+	for range "data-layer" {
+		app.handleKey("backspace")
+	}
+	for _, r := range "clean" {
+		app.handleKey("char:" + string(r))
+	}
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 2 || reloaded.Disks[1].ID != "clean" {
+		t.Fatalf("disks = %#v, want custom layer", reloaded.Disks)
+	}
+	if !strings.Contains(reloaded.VMs[0].Disk, "/layers/clean.qcow2") {
+		t.Fatalf("vm disk = %q", reloaded.VMs[0].Disk)
+	}
+}
+
+func indexOfContextItem(items []string, prefix string) int {
+	for i, item := range items {
+		if strings.HasPrefix(item, prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+func indexOfExactContextItem(items []string, want string) int {
+	for i, item := range items {
+		treeItem := strings.TrimPrefix(item, diskMenuLayerTreePrefix)
+		_, wantLayer, hasWantBase := strings.Cut(want, "|")
+		if item == want || treeItem == want || (hasWantBase && strings.TrimSpace(wantLayer) == treeItem) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestRunStopActionsSetVMDesiredState(t *testing.T) {
@@ -832,10 +1607,10 @@ func TestCommandHelpTopics(t *testing.T) {
 		command string
 		want    string
 	}{
-		{"help add", "add vm:"},
-		{"help vm", "add vm:"},
-		{"help switch", "add sw:"},
-		{"help external", "external create:"},
+		{"help add", "global add menu"},
+		{"help vm", "Configuration edits"},
+		{"help switch", "switch: Configuration"},
+		{"help external", "external: Configuration"},
 		{"help wat", "unknown help topic: wat"},
 	}
 
@@ -852,23 +1627,15 @@ func TestCommandHelpTopics(t *testing.T) {
 	}
 }
 
-func TestCommandHistoryRecall(t *testing.T) {
+func TestCommandBarIsRemoved(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 
 	app.openCommand("")
-	for _, ch := range "help" {
-		app.handleKey("char:" + string(ch))
+	if app.State.CommandMode || app.State.Command != "" {
+		t.Fatalf("command bar state = mode:%t command:%q, want disabled", app.State.CommandMode, app.State.Command)
 	}
-	app.handleKey("enter")
-
-	app.openCommand("")
-	app.handleKey("up")
-	if app.State.Command != "help" {
-		t.Fatalf("recalled command = %q, want help", app.State.Command)
-	}
-	app.handleKey("down")
-	if app.State.Command != "" {
-		t.Fatalf("command after down = %q, want empty", app.State.Command)
+	if app.State.Message != "command bar removed; use the menu" {
+		t.Fatalf("message = %q", app.State.Message)
 	}
 }
 
@@ -891,8 +1658,250 @@ func TestCommandInputAcceptsSpaces(t *testing.T) {
 		app.handleKey(key)
 	}
 
-	if app.State.Command != "vm set" {
-		t.Fatalf("command input = %q, want %q", app.State.Command, "vm set")
+	if app.State.Command != "" || app.State.CommandMode {
+		t.Fatalf("command input state = mode:%t command:%q, want disabled", app.State.CommandMode, app.State.Command)
+	}
+}
+
+func TestGlobalCreateContextMenuIsRemoved(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "empty"},
+		Lab:        &lab.Lab{ID: "empty"},
+		State:      ViewState{Focus: FocusGraph, ContextMenu: true},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+
+	if _, _, _, ok := app.currentContextMenuLayout(); ok {
+		t.Fatal("global add context menu layout still exists")
+	}
+	app.handleKey("space")
+	if app.State.ContextMenu {
+		t.Fatalf("space opened global context menu: %#v", app.State)
+	}
+	if len(app.Lab.VMs) != 0 {
+		t.Fatalf("global context path created vms: %#v", app.Lab.VMs)
+	}
+}
+
+func TestMouseClickTopAddDropdownCreatesVM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{ID: "demo"}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+
+	app.handleKey("mouse:1:0:0")
+	if !app.State.TopMenuOpen {
+		t.Fatalf("top add menu did not open: %#v", app.State)
+	}
+	app.handleKey("mouse:2:1:0")
+	if len(app.Lab.VMs) != 1 {
+		t.Fatalf("vms after top add = %#v", app.Lab.VMs)
+	}
+	if app.State.TopMenuOpen {
+		t.Fatal("top add menu stayed open after create")
+	}
+}
+
+func TestMouseClickTopExitQuits(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "empty"},
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+	rects := topMenuButtonRects(topRibbonRootItems(), app.ViewWidth)
+	if len(rects) < 2 {
+		t.Fatalf("top ribbon rects = %#v", rects)
+	}
+
+	if !app.handleKey("mouse:" + strconv.Itoa(rects[1].X+1) + ":0:0") {
+		t.Fatal("top Exit click did not quit")
+	}
+}
+
+func TestTabTogglesTopAndGraphFocus(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph, Selected: 0}}
+	startSelected := app.State.Selected
+
+	app.handleKey("tab")
+	if app.State.Focus != FocusTop {
+		t.Fatalf("focus after first tab = %d, want top", app.State.Focus)
+	}
+	app.handleKey("right")
+	if app.State.Selected != startSelected {
+		t.Fatalf("top focus right moved graph selection from %d to %d", startSelected, app.State.Selected)
+	}
+	if app.State.TopMenuRootSelected != 1 {
+		t.Fatalf("top root selection = %d, want Exit", app.State.TopMenuRootSelected)
+	}
+	app.handleKey("tab")
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after second tab = %d, want graph", app.State.Focus)
+	}
+}
+
+func TestTabClosesContextMenuAndTogglesFocus(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		State: ViewState{
+			Focus:              FocusGraph,
+			Selected:           1,
+			ContextMenu:        true,
+			ContextGroup:       "disk-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 1,
+			ContextEdit:        true,
+			ContextEditValue:   "data",
+			ContextEditCursor:  4,
+			ContextDeleteDisk:  true,
+			DiskMenuItems:      []string{"Add Disk", "base 10G"},
+			DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionAttach},
+			DiskMenuKinds:      []string{"", "base"},
+		},
+	}
+
+	app.handleKey("tab")
+
+	if app.State.Focus != FocusTop {
+		t.Fatalf("focus after tab = %d, want top", app.State.Focus)
+	}
+	if app.State.ContextMenu || app.State.ContextInSubmenu || app.State.ContextGroup != "" || app.State.ContextEdit {
+		t.Fatalf("context menu state after tab = %#v, want closed", app.State)
+	}
+	if app.State.ContextDeleteDisk || app.State.DiskMenuItems != nil || app.State.DiskMenuActions != nil || app.State.DiskMenuKinds != nil {
+		t.Fatalf("context menu flags/cache after tab = %#v, want cleared", app.State)
+	}
+}
+
+func TestTopFocusKeyboardAddAndExit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{ID: "demo"}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.handleKey("tab")
+	app.handleKey("enter")
+	if !app.State.TopMenuOpen {
+		t.Fatalf("enter on top Add did not open dropdown: %#v", app.State)
+	}
+	app.handleKey("enter")
+	if len(app.Lab.VMs) != 1 {
+		t.Fatalf("vms after keyboard top add = %#v", app.Lab.VMs)
+	}
+
+	app.State.TopMenuRootSelected = 1
+	if !app.handleKey("enter") {
+		t.Fatal("keyboard top Exit did not quit")
+	}
+}
+
+func TestMouseClickTopAddLinkCreatesExternalLink(t *testing.T) {
+	fakeHostInterfaces(t, "br0", "eth0")
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 1024, CPUs: 1, Networks: []lab.VMNetwork{{}}}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{Focus: FocusGraph, Selected: 0},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+
+	app.handleKey("mouse:1:0:0")
+	app.handleKey("mouse:2:5:0")
+	if app.State.ConnectMode {
+		t.Fatalf("link started connect mode: %#v", app.State)
+	}
+	if len(app.Lab.ExternalLinks) != 1 {
+		t.Fatalf("external links after top link add = %#v", app.Lab.ExternalLinks)
+	}
+	if app.Lab.ExternalLinks[0].Interface != "eth0" {
+		t.Fatalf("external interface = %q, want eth0", app.Lab.ExternalLinks[0].Interface)
+	}
+	if app.Lab.ExternalLinks[0].Mode != lab.ExternalModeNAT {
+		t.Fatalf("external mode = %q, want nat", app.Lab.ExternalLinks[0].Mode)
+	}
+	if len(app.Lab.VMs[0].Networks) != 1 {
+		t.Fatalf("source nics changed: %#v", app.Lab.VMs[0].Networks)
+	}
+}
+
+func TestTopAddLinkDoesNotCreateMissingSourceNIC(t *testing.T) {
+	fakeHostInterfaces(t, "br0", "eth0")
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 1024, CPUs: 1}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{Focus: FocusGraph, Selected: 0},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+
+	app.runGlobalMenuAction("link")
+	if app.State.ConnectMode {
+		t.Fatalf("link started connect mode: %#v", app.State)
+	}
+	if len(app.Lab.ExternalLinks) != 1 {
+		t.Fatalf("external links after global link add = %#v", app.Lab.ExternalLinks)
+	}
+	if app.Lab.ExternalLinks[0].Interface != "eth0" {
+		t.Fatalf("external interface = %q, want eth0", app.Lab.ExternalLinks[0].Interface)
+	}
+	if app.Lab.ExternalLinks[0].Mode != lab.ExternalModeNAT {
+		t.Fatalf("external mode = %q, want nat", app.Lab.ExternalLinks[0].Mode)
+	}
+	if len(app.Lab.VMs[0].Networks) != 0 {
+		t.Fatalf("source nics = %#v, want none", app.Lab.VMs[0].Networks)
 	}
 }
 
@@ -991,6 +2000,63 @@ func TestReadKeyKeepsArrowsAsNavigationInTextMode(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Fatalf("readKey in=%q = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestDecodeKeysExpandsBracketedPasteInTextMode(t *testing.T) {
+	got := decodeKeys(bracketedPasteStart+"hj kl"+bracketedPasteEnd, true)
+	want := []string{"char:h", "char:j", "char: ", "char:k", "char:l"}
+	assertKeys(t, got, want)
+}
+
+func TestDecodeKeysMouseClick(t *testing.T) {
+	got := decodeKeys("\x1b[<0;12;5M", false)
+	want := []string{"mouse:11:4:0"}
+	assertKeys(t, got, want)
+}
+
+func TestReadAppKeyQueuesPastedText(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("vm set")); err != nil {
+		_ = w.Close()
+		_ = r.Close()
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	defer r.Close()
+
+	app := App{In: r, State: ViewState{ContextEdit: true}}
+	want := []string{"char:v", "char:m", "char: ", "char:s", "char:e", "char:t"}
+	for _, expected := range want {
+		got, err := readAppKey(&app)
+		if err != nil {
+			t.Fatalf("readAppKey err=%v", err)
+		}
+		if got != expected {
+			t.Fatalf("readAppKey = %q, want %q", got, expected)
+		}
+	}
+	got, err := readAppKey(&app)
+	if err != nil {
+		t.Fatalf("readAppKey after queue err=%v", err)
+	}
+	if got != "" {
+		t.Fatalf("readAppKey after queue = %q, want empty", got)
+	}
+}
+
+func assertKeys(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("keys = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("keys = %#v, want %#v", got, want)
 		}
 	}
 }
@@ -1096,6 +2162,49 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 	}
 }
 
+func TestCommandContainerSetClearsCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		Containers: []lab.Container{{
+			ID:      "web",
+			Image:   "docker.io/library/nginx:latest",
+			Command: []string{"nginx", "-g", "daemon off;"},
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.executeCommand("container set web command=")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Containers[0].Command; len(got) != 0 {
+		t.Fatalf("container command = %#v, want empty", got)
+	}
+	if len(app.Model.Nodes) != 1 {
+		t.Fatalf("model nodes = %#v, want one container", app.Model.Nodes)
+	}
+	for _, detail := range app.Model.Nodes[0].Details {
+		if strings.HasPrefix(detail, "command=") {
+			t.Fatalf("model kept command detail after clear: %#v", app.Model.Nodes[0].Details)
+		}
+	}
+}
+
 func TestCommandStartStopSetsDesiredState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	initial := &lab.Lab{
@@ -1155,7 +2264,7 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 	app := App{
 		Model:   MockModel(),
 		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		Runtime: &fakeVMRuntime{},
+		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "running"}},
 		State:   ViewState{Focus: FocusGraph},
 		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
 			if id != "vm1" {
@@ -1170,14 +2279,80 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("vm shell did not set pending command")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("vm shell started %q", got)
+	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+		t.Fatalf("vm shell started workload %d times", got)
 	}
 	if app.PendingShell.Console == nil || app.PendingShell.NativeRun != nil {
 		t.Fatalf("vm shell command = %#v", app.PendingShell)
 	}
 	if app.PendingShell.Display != "vm console /dev/pts/7" {
 		t.Fatalf("vm shell display = %q", app.PendingShell.Display)
+	}
+}
+
+func TestContainerShellExecCommandUsesCtrTasksExec(t *testing.T) {
+	app := App{
+		ContainerdAddress: "/tmp/containerd.sock",
+		Lab:               &lab.Lab{ID: "demo"},
+	}
+	cmd := app.containerShellExecCommand(lab.Container{ID: "kali", Shell: "/usr/bin/bash"})
+	wantPrefix := []string{
+		"ctr",
+		"--address", "/tmp/containerd.sock",
+		"--namespace", "foxlab",
+		"tasks", "exec",
+		"--tty",
+		"--exec-id",
+	}
+	wantShell := []string{"/usr/bin/bash", "-i"}
+	if len(cmd.Args) != len(wantPrefix)+2+len(wantShell) {
+		t.Fatalf("ctr args = %#v", cmd.Args)
+	}
+	for i, want := range wantPrefix {
+		if cmd.Args[i] != want {
+			t.Fatalf("ctr arg %d = %q, want %q; args=%#v", i, cmd.Args[i], want, cmd.Args)
+		}
+	}
+	if !strings.HasPrefix(cmd.Args[len(wantPrefix)], "foxlab-shell-kali-") {
+		t.Fatalf("exec id = %q", cmd.Args[len(wantPrefix)])
+	}
+	if cmd.Args[len(wantPrefix)+1] != "foxlab-demo-kali" {
+		t.Fatalf("container arg = %q", cmd.Args[len(wantPrefix)+1])
+	}
+	if got := cmd.Args[len(wantPrefix)+2:]; !reflect.DeepEqual(got, wantShell) {
+		t.Fatalf("shell args = %#v, want %#v", got, wantShell)
+	}
+}
+
+func TestContainerShellNeedsRestartForRootFSError(t *testing.T) {
+	for _, detail := range []string{
+		"exec /bin/sh: input/output error",
+		`ERRO[0000] resize pty error="cannot resize a stopped container"`,
+		"task not found",
+	} {
+		if !containerShellNeedsRestart(detail) {
+			t.Fatalf("containerShellNeedsRestart(%q) = false", detail)
+		}
+	}
+}
+
+func TestRunContainerShellExecReturnsStderrDetail(t *testing.T) {
+	out, err := os.CreateTemp(t.TempDir(), "shell-out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	app := App{Out: out}
+	cmd := exec.Command("sh", "-c", "echo 'exec /bin/sh: input/output error' >&2; exit 255")
+	err = app.runContainerShellExec(cmd)
+	if err == nil {
+		t.Fatal("runContainerShellExec returned nil")
+	}
+	if !strings.Contains(err.Error(), "input/output error") {
+		t.Fatalf("error = %q, want stderr detail", err.Error())
+	}
+	if !strings.Contains(err.Error(), "stop and run the container") {
+		t.Fatalf("error = %q, want recovery hint", err.Error())
 	}
 }
 
@@ -1417,9 +2592,10 @@ func TestCommandVMNICAddAndConnect(t *testing.T) {
 func TestCommandContainerNICAddAndConnect(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
-		ID:         "demo",
-		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
-		Switches:   []lab.Switch{{ID: "lan", Mode: "bridge"}, {ID: "wan", Mode: "bridge"}},
+		ID:            "demo",
+		Containers:    []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}, {ID: "wan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
 	}
 	if err := lab.SaveFile(path, loaded); err != nil {
 		t.Fatal(err)
@@ -1432,20 +2608,147 @@ func TestCommandContainerNICAddAndConnect(t *testing.T) {
 
 	app.executeCommand("container nic add web mac=02:00:00:00:00:33")
 	app.executeCommand("container nic connect web 1 to=wan")
+	app.executeCommand("container nic add web")
+	app.executeCommand("container nic connect web 2 to=uplink1")
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	networks := reloaded.Containers[0].Networks
-	if len(networks) != 2 {
-		t.Fatalf("container networks count = %d, want 2: %#v", len(networks), networks)
+	if len(networks) != 3 {
+		t.Fatalf("container networks count = %d, want 3: %#v", len(networks), networks)
 	}
-	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:33" {
+	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:33" || networks[2].ExternalLink != "uplink1" {
 		t.Fatalf("container networks = %#v", networks)
 	}
-	if len(app.Model.Edges) != 2 {
-		t.Fatalf("model edges = %#v, want 2", app.Model.Edges)
+	if len(app.Model.Edges) != 3 {
+		t.Fatalf("model edges = %#v, want 3", app.Model.Edges)
+	}
+}
+
+func TestContainerNICConnectReconcilesRunningContainer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		Containers: []lab.Container{{
+			ID:           "web",
+			DesiredState: lab.DesiredStateRunning,
+			Image:        "docker.io/library/nginx:latest",
+			Networks:     []lab.ContainerNetwork{{}},
+		}},
+		Switches: []lab.Switch{{ID: "wan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "running"}}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		Runtime: runtime,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.containerNICConnect("web", "0", map[string]string{"to": "wan"})
+
+	if runtime.started != NodeKey(NodeContainer, "web") {
+		t.Fatalf("started = %q, want running container reconciled", runtime.started)
+	}
+	if !strings.HasPrefix(app.State.Message, "connected nic to container:") {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+}
+
+func TestCommandLinkAddAndDeleteExplicitNICs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{Switch: "lan"}, {}}},
+		},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("link add vm:vm1:nic0 to=vm:vm2:nic1")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.NetworkLinks) != 1 {
+		t.Fatalf("network links = %#v, want one direct link", reloaded.NetworkLinks)
+	}
+	link := reloaded.NetworkLinks[0]
+	if link.From.Type != "vm" || link.From.ID != "vm1" || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 1 {
+		t.Fatalf("network link = %#v", link)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeVM, "vm1"), NodeKey(NodeVM, "vm2")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+
+	app.executeCommand("link delete vm:vm1:0")
+	reloaded, err = lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.NetworkLinks) != 0 {
+		t.Fatalf("network links after delete = %#v, want none", reloaded.NetworkLinks)
+	}
+}
+
+func TestCommandLinkAddUsesFirstAvailableTargetNIC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		VMs:        []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}}}},
+		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{Switch: "lan"}, {}}}},
+		Switches:   []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("link add vm:vm1:0 to=ct:web")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.NetworkLinks) != 1 {
+		t.Fatalf("network links = %#v, want one direct link", reloaded.NetworkLinks)
+	}
+	link := reloaded.NetworkLinks[0]
+	if link.To.Type != "container" || link.To.ID != "web" || link.To.NIC != 1 {
+		t.Fatalf("network link target = %#v, want web nic1", link)
+	}
+}
+
+func TestCommandLinkReportsUsageForInvalidEndpoint(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+	app.executeCommand("link add vm1 to=vm:vm2")
+
+	if app.State.Message != "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]" {
+		t.Fatalf("message = %q", app.State.Message)
 	}
 }
 
@@ -1494,7 +2797,7 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.executeCommand("external create uplink1 interface=br0")
+	app.executeCommand("external create uplink1 interface=br0 mode=macnat")
 	app.executeCommand("add sw lan mode=bridge external=uplink1")
 	app.executeCommand("switch set lan mode=nat external=uplink1")
 
@@ -1504,6 +2807,9 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	}
 	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID != "uplink1" {
 		t.Fatalf("external links = %#v", reloaded.ExternalLinks)
+	}
+	if reloaded.ExternalLinks[0].Mode != lab.ExternalModeMacNAT {
+		t.Fatalf("external mode = %q, want macnat", reloaded.ExternalLinks[0].Mode)
 	}
 	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Mode != "nat" || reloaded.Switches[0].ExternalLink != "uplink1" {
 		t.Fatalf("switches = %#v", reloaded.Switches)
@@ -1528,23 +2834,23 @@ func TestContextMenuGlobalCreateCommands(t *testing.T) {
 	}
 
 	app.runGlobalMenuAction("add vm")
-	if app.State.Command != "add vm vm1" {
-		t.Fatalf("global add vm command = %q", app.State.Command)
+	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID != "vm1" {
+		t.Fatalf("vms after global add = %#v", app.Lab.VMs)
 	}
 
 	app.runGlobalMenuAction("add sw")
-	if app.State.Command != "add sw sw1" {
-		t.Fatalf("global add sw command = %q", app.State.Command)
+	if len(app.Lab.Switches) != 1 || app.Lab.Switches[0].ID == "" {
+		t.Fatalf("switches after global add = %#v", app.Lab.Switches)
 	}
 
 	app.runGlobalMenuAction("add cont")
-	if app.State.Command != "add cont ct1" {
-		t.Fatalf("global add cont command = %q", app.State.Command)
+	if len(app.Lab.Containers) != 1 || app.Lab.Containers[0].ID == "" {
+		t.Fatalf("containers after global add = %#v", app.Lab.Containers)
 	}
 
 	app.runGlobalMenuAction("create external")
-	if !strings.Contains(app.State.Command, "external create uplink1") {
-		t.Fatalf("global create external command = %q", app.State.Command)
+	if len(app.Lab.ExternalLinks) != 1 || app.Lab.ExternalLinks[0].ID == "" {
+		t.Fatalf("external links after global add = %#v", app.Lab.ExternalLinks)
 	}
 }
 
@@ -1576,8 +2882,8 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		Model: MockModel(),
 		Lab:   loaded,
 		Runtime: &fakeVMRuntime{states: map[string]string{
-			NodeKey(NodeVM, "vm1"):        "shutoff",
-			NodeKey(NodeContainer, "web"): "stopped",
+			NodeKey(NodeVM, "vm1"):        "running",
+			NodeKey(NodeContainer, "web"): "running",
 		}},
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
@@ -1590,43 +2896,45 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
-	if !strings.HasPrefix(app.State.Command, "vm set vm1 ") {
-		t.Fatalf("edit command = %q", app.State.Command)
-	}
-
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "disk")
-	if !strings.Contains(app.State.Command, `disk="labs/demo/disks/web server.qcow2"`) {
-		t.Fatalf("disk command = %q", app.State.Command)
+	if app.State.Message != "edit fields from Configuration" {
+		t.Fatalf("edit message = %q", app.State.Message)
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "iso")
-	if app.State.Command != `vm set vm1 iso="images/debian 12.iso"` {
-		t.Fatalf("iso command = %q", app.State.Command)
+	if app.State.Message != "command bar removed; use the menu" && app.State.Message != "edit fields from Configuration" {
+		t.Fatalf("iso message = %q", app.State.Message)
 	}
 
 	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "interface")
-	if app.State.Command != `external set uplink1 interface="enp 1s0"` {
-		t.Fatalf("interface command = %q", app.State.Command)
+	if app.State.Message != "choose interface from Configuration" {
+		t.Fatalf("interface message = %q", app.State.Message)
 	}
 
 	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "name")
-	if app.State.Command != `external set uplink1 name="office uplink"` {
-		t.Fatalf("name command = %q", app.State.Command)
+	if app.State.Message != "edit name from Configuration" {
+		t.Fatalf("name message = %q", app.State.Message)
 	}
 
 	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "add sw")
-	if !strings.HasPrefix(app.State.Command, "add sw ") || !strings.Contains(app.State.Command, " external=uplink1") {
-		t.Fatalf("add sw command = %q", app.State.Command)
+	if len(app.Lab.Switches) != 2 || app.Lab.Switches[1].ExternalLink != "uplink1" {
+		t.Fatalf("switches after add sw = %#v", app.Lab.Switches)
 	}
 
 	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "add vm")
-	if !strings.Contains(app.State.Command, " switch=lan") {
-		t.Fatalf("switch add vm command = %q", app.State.Command)
+	foundSwitchVM := false
+	for _, vm := range app.Lab.VMs {
+		if vm.ID != "vm1" && len(vm.Networks) > 0 && vm.Networks[0].Switch == "lan" {
+			foundSwitchVM = true
+		}
+	}
+	if !foundSwitchVM {
+		t.Fatalf("vms after switch add vm = %#v", app.Lab.VMs)
 	}
 
+	vmNICsBefore := len(app.Lab.VMs[0].Networks)
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "add-nic")
-	if app.State.Command != "vm nic add vm1" {
-		t.Fatalf("vm add-nic command = %q", app.State.Command)
+	if len(app.Lab.VMs[0].Networks) != vmNICsBefore+1 {
+		t.Fatalf("vm nics after add-nic = %#v", app.Lab.VMs[0].Networks)
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
@@ -1639,17 +2947,18 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("vm shell did not set pending shell")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("vm shell started %q", got)
+	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+		t.Fatalf("vm shell started workload %d times", got)
 	}
 	if app.PendingShell.Console == nil || app.PendingShell.Display != "vm console /dev/pts/7" {
 		t.Fatalf("vm shell command = %#v", app.PendingShell)
 	}
 	app.PendingShell = nil
 
+	containerNICsBefore := len(app.Lab.Containers[0].Networks)
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "add-nic")
-	if app.State.Command != "container nic add web" {
-		t.Fatalf("container add-nic command = %q", app.State.Command)
+	if len(app.Lab.Containers[0].Networks) != containerNICsBefore+1 {
+		t.Fatalf("container nics after add-nic = %#v", app.Lab.Containers[0].Networks)
 	}
 
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
@@ -1662,8 +2971,8 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("container shell did not set pending shell")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).started; got != NodeKey(NodeContainer, "web") {
-		t.Fatalf("container shell started %q", got)
+	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+		t.Fatalf("container shell started workload %d times", got)
 	}
 	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-web") {
 		t.Fatalf("container shell command = %#v", app.PendingShell)
@@ -1827,6 +3136,47 @@ func TestConnectNICModeSelectsEndpoint(t *testing.T) {
 	}
 	if reloaded.VMs[0].Networks[0].Switch != "lan" {
 		t.Fatalf("vm networks = %#v", reloaded.VMs[0].Networks)
+	}
+}
+
+func TestConnectContainerNICModeSelectsExternalEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Containers:    []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{}}}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
+	if !app.State.ConnectMode {
+		t.Fatalf("connect mode not started: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	app.handleKey("enter")
+	if app.State.ConnectMode {
+		t.Fatal("connect mode did not finish after selecting external endpoint")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Containers[0].Networks[0].ExternalLink != "uplink1" {
+		t.Fatalf("container networks = %#v", reloaded.Containers[0].Networks)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeContainer, "web"), NodeKey(NodeExternal, "uplink1")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
 

@@ -11,10 +11,22 @@ func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
 	switch group {
 	case "create-menu":
-		return []string{"add vm", "add cont", "add sw", "create external"}
+		return []string{"add vm", "add cont", "add sw", "add disk", "create external"}
 	default:
-		return []string{"add >"}
+		return nil
 	}
+}
+
+func topRibbonRootItems() []string {
+	return []string{"add >", "exit"}
+}
+
+func topRibbonAddItems() []string {
+	return []string{"VM", "Container", "Switch", "Disk", "Link"}
+}
+
+func topRibbonAddActions() []string {
+	return []string{"add vm", "add cont", "add sw", "add disk", "link"}
 }
 
 func contextMenuSubmenuItems(node Node, hasNode bool, group string) []string {
@@ -51,8 +63,10 @@ func containerContextMenuItems(node Node, group string) []string {
 		}, node.Details)
 	case "nic-menu":
 		return nicMenuItems(node.Details)
+	case "disk-menu":
+		return nil
 	case "":
-		return []string{"Configuration >", "NIC >", "Move", "Shell", "Delete"}
+		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Shell", "Delete"}
 	default:
 		return nil
 	}
@@ -68,7 +82,6 @@ func vmContextMenuItems(node Node, group string) []string {
 			contextFieldItem("cpu", nodeDetailValue(node, "cpu", "cpus=?")),
 			contextFieldItem("mem", nodeDetailValue(node, "mem", "memory=?")),
 			contextCheckboxItem(vncDetail),
-			contextFieldItem("disk", nodeDetailValue(node, "disk", "disk=")),
 			contextFieldItem("iso", nodeDetailValue(node, "iso", "iso=")),
 		}
 		if vncEnabled(vncDetail) {
@@ -77,8 +90,10 @@ func vmContextMenuItems(node Node, group string) []string {
 		return configMenuItems(prefix, node.Details)
 	case "nic-menu":
 		return nicMenuItems(node.Details)
+	case "disk-menu":
+		return nil
 	case "":
-		return []string{"Configuration >", "NIC >", "Move", "Shell", "VNC", "Delete"}
+		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Shell", "VNC", "Delete"}
 	default:
 		return nil
 	}
@@ -105,12 +120,25 @@ func externalContextMenuItems(node Node, group string) []string {
 		return configMenuItems([]string{
 			contextFieldItem("name", node.Label),
 			contextFieldItem("interface", nodeDetailValue(node, "interface", "interface=?")),
+			contextFieldItem("mode", nodeDetailValue(node, "mode", "mode=nat")),
 		}, node.Details)
+	case "interface-menu":
+		return hostInterfaceMenuItems()
+	case "mode-menu":
+		return []string{lab.ExternalModeNAT, lab.ExternalModeDirect, lab.ExternalModeMacNAT}
 	case "":
 		return []string{"Configuration >", "Move", "Delete"}
 	default:
 		return nil
 	}
+}
+
+func hostInterfaceMenuItems() []string {
+	items := hostInterfaceNames()
+	if len(items) == 0 {
+		return []string{noInterfacesItem}
+	}
+	return items
 }
 
 func configMenuItems(prefix []string, details []string) []string {
@@ -160,7 +188,7 @@ func compactMenuItems(prefix []string, details []string, suffix []string) []stri
 func nonNICDetails(details []string) []string {
 	out := make([]string, 0, len(details))
 	for _, detail := range details {
-		if !isNICDetail(detail) && !isRuntimeDetail(detail) {
+		if !isNICDetail(detail) && !isRuntimeDetail(detail) && !isDiskDetail(detail) {
 			out = append(out, detail)
 		}
 	}
@@ -183,6 +211,40 @@ func isNICDetail(detail string) bool {
 
 func isRuntimeDetail(detail string) bool {
 	return strings.HasPrefix(strings.TrimSpace(detail), "vnc-port=")
+}
+
+func isDiskDetail(detail string) bool {
+	return strings.HasPrefix(strings.TrimSpace(detail), "disk=")
+}
+
+func isDiskMenuDetail(detail string) bool {
+	_, marker, ok := diskMenuParts(detail)
+	return ok && marker != "base"
+}
+
+func isDiskAttachMenuDetail(detail string) bool {
+	_, marker, ok := diskMenuParts(detail)
+	return ok && marker == "base"
+}
+
+func diskMenuParts(detail string) (string, string, bool) {
+	detail = strings.TrimLeft(strings.TrimRight(detail, " \t"), " \t")
+	if strings.HasPrefix(detail, strings.TrimSpace(diskMenuLayerTreePrefix)+" ") {
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, strings.TrimSpace(diskMenuLayerTreePrefix)+" "))
+		if !strings.Contains(detail, "|") {
+			return detail, detail, detail != ""
+		}
+	}
+	left, right, ok := strings.Cut(detail, "|")
+	if !ok {
+		return "", "", false
+	}
+	left = strings.TrimSpace(left)
+	fields := strings.Fields(strings.TrimSpace(right))
+	if left == "" || len(fields) == 0 {
+		return "", "", false
+	}
+	return left, fields[0], true
 }
 
 func containsContextItemKey(items []string, key string) bool {
@@ -222,6 +284,10 @@ func contextCheckboxItem(item string) string {
 func contextFieldItem(key, value string) string {
 	if _, parsedValue, ok := strings.Cut(strings.TrimSpace(value), "="); ok {
 		value = parsedValue
+	}
+	value = strings.TrimSpace(value)
+	if value == "" || value == "?" {
+		value = contextEditPlaceholder
 	}
 	return contextFieldLabel(key) + strings.Repeat(" ", max(1, 12-runeLen(contextFieldLabel(key)))) + value
 }
@@ -331,7 +397,8 @@ func vncPort(node Node) int {
 }
 
 func isContextInfoItem(item string) bool {
-	return strings.HasPrefix(strings.TrimSpace(item), "VNC:")
+	item = strings.TrimSpace(item)
+	return strings.HasPrefix(item, "VNC:") || item == noInterfacesItem
 }
 
 func vncNeedsRestart(state string) bool {
@@ -355,6 +422,10 @@ func contextMenuAction(label string) string {
 		return "run"
 	case "Stop":
 		return "stop"
+	case "Disk >":
+		return "disk-menu"
+	case "Add Disk":
+		return "add-disk"
 	case "Add NIC":
 		return "add-nic"
 	case "Shell":
@@ -365,14 +436,25 @@ func contextMenuAction(label string) string {
 		return "delete"
 	case "Move", "move":
 		return "move"
+	case "Link", "link":
+		return "link"
+	case "Exit", "exit":
+		return "exit"
 	}
 	label = strings.TrimSpace(label)
+	if key := contextItemKey(label); key == "disk" {
+		return "disk"
+	}
 	switch {
 	case isNICDetail(label):
 		if index, ok := nicDetailIndex(label); ok {
 			return "connect-nic:" + index
 		}
 		return label
+	case isDiskMenuDetail(label):
+		return "disk"
+	case isDiskAttachMenuDetail(label):
+		return "attach-disk"
 	case strings.HasPrefix(label, "name="):
 		return "rename"
 	case strings.HasPrefix(label, "cpu="), strings.HasPrefix(label, "cpus="), strings.HasPrefix(label, "mem="), strings.HasPrefix(label, "memory="), strings.HasPrefix(label, "mode="), strings.HasPrefix(label, "image="), strings.HasPrefix(label, "command="), strings.HasPrefix(label, "switch="):
@@ -425,19 +507,104 @@ func activeRootContextGroup(items []string, selected int) string {
 	return ""
 }
 
-func contextMenuWidth(items []string) int {
-	w := 0
+func contextGroupBelongsToRoot(rootGroup, group string) bool {
+	if rootGroup == "" || group == "" {
+		return false
+	}
+	return rootGroup == group || (rootGroup == "config-menu" && (group == "interface-menu" || group == "mode-menu"))
+}
+
+func topMenuLabel(item string) string {
+	label := strings.TrimSpace(item)
+	label = strings.TrimSpace(strings.TrimSuffix(label, ">"))
+	switch label {
+	case "add":
+		return "Add"
+	case "add vm":
+		return "Add VM"
+	case "add cont":
+		return "Add CT"
+	case "add sw":
+		return "Add SW"
+	case "add disk":
+		return "Add Disk"
+	case "create external":
+		return "External"
+	case "exit":
+		return "Exit"
+	default:
+		return label
+	}
+}
+
+func topMenuButtonRects(items []string, width int) []rect {
+	if width <= 0 || len(items) == 0 {
+		return nil
+	}
+	rects := make([]rect, 0, len(items))
+	x := 0
 	for _, item := range items {
+		w := runeLen(topMenuLabel(item)) + 2
+		if w <= 0 || x+w > width {
+			break
+		}
+		rects = append(rects, rect{X: x, Y: 0, W: w, H: 1})
+		x += w
+	}
+	return rects
+}
+
+func contextMenuWidth(items []string) int {
+	return contextMenuWidthWithKinds(items, nil)
+}
+
+func contextMenuWidthWithKinds(items []string, kinds []string) int {
+	w := 0
+	for i, item := range items {
 		extra := 3
+		kind := ""
+		if i < len(kinds) {
+			kind = kinds[i]
+		}
 		if isNICDetail(item) {
 			extra = 6
+		}
+		if kind == "layer" || isDiskMenuDetail(item) {
+			extra = 12
+		}
+		if kind == "base" || isDiskAttachMenuDetail(item) {
+			extra = 9
+		}
+		if kind == "data" {
+			extra = 9
 		}
 		w = max(w, runeLen(item)+extra)
 	}
 	return max(w, 10)
 }
 
+const (
+	contextEditPlaceholder = "empty"
+	noInterfacesItem       = "No interfaces"
+)
+
+func contextEditText(value string, cursor int) string {
+	runes := []rune(value)
+	cursor = clamp(cursor, 0, len(runes))
+	if len(runes) == 0 {
+		return "|" + contextEditPlaceholder
+	}
+	return string(runes[:cursor]) + "|" + string(runes[cursor:])
+}
+
 func contextEditLabel(item, value string, cursor int) string {
+	if item == "Add Disk" {
+		return "Add Disk " + contextEditText(value, cursor)
+	}
+	if isDiskAttachMenuDetail(item) {
+		diskID, _, _ := diskMenuParts(item)
+		return diskID + " | " + contextEditText(value, cursor)
+	}
 	key, _, ok := strings.Cut(item, "=")
 	if !ok {
 		_, ok = contextDisplayValue(item)
@@ -446,13 +613,15 @@ func contextEditLabel(item, value string, cursor int) string {
 		}
 		key = contextItemKey(item)
 	}
-	runes := []rune(value)
-	cursor = clamp(cursor, 0, len(runes))
 	if contextDisplayKeyValue, ok := contextDisplayKey(item); ok && contextDisplayKeyValue == key {
 		label := contextFieldLabel(key)
-		return label + strings.Repeat(" ", max(1, 12-runeLen(label))) + string(runes[:cursor]) + "|" + string(runes[cursor:])
+		return label + strings.Repeat(" ", max(1, 12-runeLen(label))) + contextEditText(value, cursor)
 	}
-	return key + "=" + string(runes[:cursor]) + "|" + string(runes[cursor:])
+	return key + "=" + contextEditText(value, cursor)
+}
+
+func contextDiskLayerEditLabel(item, value string, cursor int) string {
+	return item + " " + contextEditText(value, cursor)
 }
 
 func contextMenuStart(active, itemCount, visibleCount int) int {

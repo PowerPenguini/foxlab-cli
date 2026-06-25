@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd"
@@ -20,6 +22,8 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	if !ok {
 		return fmt.Errorf("container not found: %s", id)
 	}
+	setupCtx, cancelSetup := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelSetup()
 	address := r.Address
 	if address == "" {
 		address = DefaultAddress
@@ -34,30 +38,68 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	}
 	defer client.Close()
 
-	ctx = namespaces.WithNamespace(ctx, namespace)
-	container, err := client.LoadContainer(ctx, l.ManagedContainerName(ct))
+	setupCtx = namespaces.WithNamespace(setupCtx, namespace)
+	container, err := client.LoadContainer(setupCtx, l.ManagedContainerName(ct))
 	if err != nil {
 		return err
 	}
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(setupCtx, nil)
+	if err != nil {
+		return err
+	}
+	taskStatus, err := task.Status(setupCtx)
+	if err != nil {
+		return err
+	}
+	if taskStatus.Status != containerd.Running {
+		return fmt.Errorf("container task is %s, not running", taskStatus.Status)
+	}
+	spec, err := container.Spec(setupCtx)
 	if err != nil {
 		return err
 	}
 	execID := "foxlab-shell-" + strings.ToLower(id) + "-" + time.Now().Format("20060102150405.000000000")
-	process, err := task.Exec(ctx, execID, containerShellProcess(ct), cio.NewCreator(cio.WithStreams(in, out, nil), cio.WithTerminal))
+	exitC := make(chan struct{})
+	stdin := newShellExitReader(in, exitC)
+	process, err := task.Exec(setupCtx, execID, containerShellProcess(ct, spec.Process), cio.NewCreator(cio.WithStreams(stdin, out, out), cio.WithTerminal))
 	if err != nil {
 		return err
 	}
-	defer process.Delete(ctx)
+	if ioSet := process.IO(); ioSet != nil {
+		defer ioSet.Cancel()
+	}
+	defer deleteShellProcess(process)
 
-	statusC, err := process.Wait(ctx)
+	statusC, err := process.Wait(setupCtx)
 	if err != nil {
 		return err
 	}
-	if err := process.Start(ctx); err != nil {
+	if err := process.Start(setupCtx); err != nil {
 		return err
 	}
-	status := <-statusC
+	runCtx := namespaces.WithNamespace(ctx, namespace)
+	var status containerd.ExitStatus
+	select {
+	case <-exitC:
+		killShellProcess(process, syscall.SIGTERM)
+		select {
+		case <-statusC:
+		case <-runCtx.Done():
+			return runCtx.Err()
+		case <-time.After(2 * time.Second):
+			killShellProcess(process, syscall.SIGKILL)
+			select {
+			case <-statusC:
+			case <-runCtx.Done():
+				return runCtx.Err()
+			}
+		}
+		return nil
+	case status = <-statusC:
+	case <-runCtx.Done():
+		killShellProcess(process, syscall.SIGTERM)
+		return runCtx.Err()
+	}
 	code, _, err := status.Result()
 	if err != nil {
 		return err
@@ -68,19 +110,53 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	return nil
 }
 
-func containerShellProcess(ct lab.Container) *specs.Process {
-	return &specs.Process{
-		Terminal: true,
-		Cwd:      "/",
-		Args:     containerShellArgs(ct),
-		Env:      containerEnv(ct),
-	}
+func killShellProcess(process containerd.Process, signal syscall.Signal) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = process.Kill(ctx, signal)
 }
 
-func containerEnv(ct lab.Container) []string {
-	env := []string{"TERM=xterm-256color", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-	for key, value := range ct.Env {
-		env = append(env, key+"="+value)
+func deleteShellProcess(process containerd.Process) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = process.Delete(ctx)
+}
+
+type shellExitReader struct {
+	r    io.Reader
+	exit chan<- struct{}
+	once sync.Once
+}
+
+func newShellExitReader(r io.Reader, exit chan<- struct{}) io.Reader {
+	return &shellExitReader{r: r, exit: exit}
+}
+
+func (r *shellExitReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	for i := 0; i < n; i++ {
+		if p[i] != 0x1d {
+			continue
+		}
+		r.once.Do(func() { close(r.exit) })
+		if i > 0 {
+			return i, nil
+		}
+		return 0, io.EOF
 	}
-	return env
+	return n, err
+}
+
+func containerShellProcess(ct lab.Container, base *specs.Process) *specs.Process {
+	process := specs.Process{}
+	if base != nil {
+		process = *base
+	}
+	process.Terminal = true
+	if process.Cwd == "" {
+		process.Cwd = "/"
+	}
+	process.Args = containerShellArgs(ct)
+	process.Env = containerShellEnv(ct, process.Env)
+	return &process
 }

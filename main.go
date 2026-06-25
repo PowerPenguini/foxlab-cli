@@ -92,11 +92,10 @@ func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error)
 }
 
 func defaultLabPath() (string, bool, error) {
-	home, err := os.UserHomeDir()
+	dir, err := lab.FoxlabHome()
 	if err != nil {
 		return "", false, err
 	}
-	dir := filepath.Join(home, ".foxlab")
 	path := filepath.Join(dir, "default.lab")
 	if path, ok := regularFile(path); ok {
 		return path, true, nil

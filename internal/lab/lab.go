@@ -18,12 +18,17 @@ const (
 
 	DesiredStateRunning = "running"
 	DesiredStateStopped = "stopped"
+
+	ExternalModeNAT    = "nat"
+	ExternalModeDirect = "direct"
+	ExternalModeMacNAT = "macnat"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 type Lab struct {
-	ID            string            `json:"id" yaml:"id"`
+	ID            string            `json:"name" yaml:"name"`
+	LegacyID      string            `json:"id,omitempty" yaml:"id,omitempty"`
 	VMs           []VM              `json:"vms,omitempty" yaml:"vms,omitempty"`
 	Containers    []Container       `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Switches      []Switch          `json:"switches,omitempty" yaml:"switches,omitempty"`
@@ -38,10 +43,15 @@ type Lab struct {
 }
 
 type Disk struct {
-	ID     string `json:"id" yaml:"id"`
-	Path   string `json:"path" yaml:"path"`
-	SizeGB int    `json:"sizeGB,omitempty" yaml:"sizeGB,omitempty"`
-	Format string `json:"format,omitempty" yaml:"format,omitempty"`
+	ID           string `json:"id" yaml:"id"`
+	Path         string `json:"path" yaml:"path"`
+	SizeGB       int    `json:"sizeGB,omitempty" yaml:"sizeGB,omitempty"`
+	Format       string `json:"format,omitempty" yaml:"format,omitempty"`
+	Kind         string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Base         string `json:"base,omitempty" yaml:"base,omitempty"`
+	AttachedType string `json:"attachedType,omitempty" yaml:"attachedType,omitempty"`
+	AttachedTo   string `json:"attachedTo,omitempty" yaml:"attachedTo,omitempty"`
+	MountPath    string `json:"mountPath,omitempty" yaml:"mountPath,omitempty"`
 }
 
 type VM struct {
@@ -67,6 +77,7 @@ type Container struct {
 	Name         string             `json:"name,omitempty" yaml:"name,omitempty"`
 	DesiredState string             `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
 	Image        string             `json:"image" yaml:"image"`
+	Disk         string             `json:"disk,omitempty" yaml:"disk,omitempty"`
 	Command      []string           `json:"command,omitempty" yaml:"command,omitempty"`
 	Shell        string             `json:"shell,omitempty" yaml:"shell,omitempty"`
 	Env          map[string]string  `json:"env,omitempty" yaml:"env,omitempty"`
@@ -74,8 +85,9 @@ type Container struct {
 }
 
 type ContainerNetwork struct {
-	Switch string `json:"switch,omitempty" yaml:"switch,omitempty"`
-	MAC    string `json:"mac,omitempty" yaml:"mac,omitempty"`
+	Switch       string `json:"switch,omitempty" yaml:"switch,omitempty"`
+	ExternalLink string `json:"externalLink,omitempty" yaml:"externalLink,omitempty"`
+	MAC          string `json:"mac,omitempty" yaml:"mac,omitempty"`
 }
 
 type Switch struct {
@@ -89,6 +101,7 @@ type ExternalLink struct {
 	ID        string `json:"id" yaml:"id"`
 	Name      string `json:"name,omitempty" yaml:"name,omitempty"`
 	Interface string `json:"interface" yaml:"interface"`
+	Mode      string `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
 type NetworkLink struct {
@@ -196,6 +209,11 @@ func isLabFile(path string) bool {
 
 func (l *Lab) Normalize() {
 	l.ID = strings.TrimSpace(l.ID)
+	l.LegacyID = strings.TrimSpace(l.LegacyID)
+	if l.ID == "" {
+		l.ID = l.LegacyID
+		l.LegacyID = ""
+	}
 	for i := range l.VMs {
 		l.VMs[i].ID = strings.TrimSpace(l.VMs[i].ID)
 		l.VMs[i].Name = strings.TrimSpace(l.VMs[i].Name)
@@ -219,11 +237,13 @@ func (l *Lab) Normalize() {
 		l.Containers[i].Name = strings.TrimSpace(l.Containers[i].Name)
 		l.Containers[i].DesiredState = normalizeDesiredState(l.Containers[i].DesiredState)
 		l.Containers[i].Image = strings.TrimSpace(l.Containers[i].Image)
+		l.Containers[i].Disk = strings.TrimSpace(l.Containers[i].Disk)
 		for j := range l.Containers[i].Command {
 			l.Containers[i].Command[j] = strings.TrimSpace(l.Containers[i].Command[j])
 		}
 		for j := range l.Containers[i].Networks {
 			l.Containers[i].Networks[j].Switch = strings.TrimSpace(l.Containers[i].Networks[j].Switch)
+			l.Containers[i].Networks[j].ExternalLink = strings.TrimSpace(l.Containers[i].Networks[j].ExternalLink)
 			l.Containers[i].Networks[j].MAC = strings.TrimSpace(l.Containers[i].Networks[j].MAC)
 		}
 	}
@@ -243,6 +263,7 @@ func (l *Lab) Normalize() {
 		l.ExternalLinks[i].ID = strings.TrimSpace(l.ExternalLinks[i].ID)
 		l.ExternalLinks[i].Name = strings.TrimSpace(l.ExternalLinks[i].Name)
 		l.ExternalLinks[i].Interface = strings.TrimSpace(l.ExternalLinks[i].Interface)
+		l.ExternalLinks[i].Mode = normalizeExternalMode(l.ExternalLinks[i].Mode)
 	}
 	for i := range l.NetworkLinks {
 		l.NetworkLinks[i].From.Type = strings.ToLower(strings.TrimSpace(l.NetworkLinks[i].From.Type))
@@ -250,12 +271,25 @@ func (l *Lab) Normalize() {
 		l.NetworkLinks[i].To.Type = strings.ToLower(strings.TrimSpace(l.NetworkLinks[i].To.Type))
 		l.NetworkLinks[i].To.ID = strings.TrimSpace(l.NetworkLinks[i].To.ID)
 	}
+	for i := range l.Disks {
+		l.Disks[i].ID = strings.TrimSpace(l.Disks[i].ID)
+		l.Disks[i].Path = strings.TrimSpace(l.Disks[i].Path)
+		l.Disks[i].Format = strings.ToLower(strings.TrimSpace(l.Disks[i].Format))
+		l.Disks[i].Kind = strings.ToLower(strings.TrimSpace(l.Disks[i].Kind))
+		l.Disks[i].Base = strings.TrimSpace(l.Disks[i].Base)
+		l.Disks[i].AttachedType = strings.ToLower(strings.TrimSpace(l.Disks[i].AttachedType))
+		l.Disks[i].AttachedTo = strings.TrimSpace(l.Disks[i].AttachedTo)
+		l.Disks[i].MountPath = strings.TrimSpace(l.Disks[i].MountPath)
+	}
 }
 
 func (l *Lab) Validate() error {
 	var problems []string
+	if l.LegacyID != "" {
+		problems = append(problems, "lab must use name, not both name and id")
+	}
 	if !validID(l.ID) {
-		problems = append(problems, "lab id must start with a letter/number and contain only letters, numbers, '_' or '-'")
+		problems = append(problems, "lab name must start with a letter/number and contain only letters, numbers, '_' or '-'")
 	}
 
 	switchIDs := map[string]struct{}{}
@@ -286,6 +320,9 @@ func (l *Lab) Validate() error {
 		externalLinkIDs[link.ID] = struct{}{}
 		if link.Interface == "" {
 			problems = append(problems, fmt.Sprintf("external link %q interface is required", link.ID))
+		}
+		if !validExternalMode(link.Mode) {
+			problems = append(problems, fmt.Sprintf("external link %q uses unsupported mode %q; supported modes are nat, direct and macnat", link.ID, link.Mode))
 		}
 	}
 
@@ -352,12 +389,71 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ct.ID))
 		}
 		for _, nic := range ct.Networks {
-			if nic.Switch == "" {
+			switchRef := nic.Switch != ""
+			externalRef := nic.ExternalLink != ""
+			if switchRef && externalRef {
+				problems = append(problems, fmt.Sprintf("container %q network must not reference both switch and externalLink", ct.ID))
 				continue
 			}
-			if _, ok := switchIDs[nic.Switch]; !ok {
-				problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ct.ID, nic.Switch))
+			if switchRef {
+				if _, ok := switchIDs[nic.Switch]; !ok {
+					problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ct.ID, nic.Switch))
+				}
 			}
+			if externalRef {
+				if _, ok := externalLinkIDs[nic.ExternalLink]; !ok {
+					problems = append(problems, fmt.Sprintf("container %q references missing external link %q", ct.ID, nic.ExternalLink))
+				}
+			}
+		}
+	}
+
+	diskIDs := map[string]struct{}{}
+	for _, disk := range l.Disks {
+		if !validID(disk.ID) {
+			problems = append(problems, fmt.Sprintf("disk %q has invalid id", disk.ID))
+		}
+		if _, exists := diskIDs[disk.ID]; exists {
+			problems = append(problems, fmt.Sprintf("duplicate disk id %q", disk.ID))
+		}
+		diskIDs[disk.ID] = struct{}{}
+	}
+	for _, disk := range l.Disks {
+		if disk.Path == "" {
+			problems = append(problems, fmt.Sprintf("disk %q path is required", disk.ID))
+		}
+		if disk.Format != "" && disk.Format != "qcow2" && disk.Format != "raw" {
+			problems = append(problems, fmt.Sprintf("disk %q format must be qcow2 or raw", disk.ID))
+		}
+		if disk.Kind != "" && disk.Kind != "base" && disk.Kind != "layer" && disk.Kind != "data" {
+			problems = append(problems, fmt.Sprintf("disk %q kind must be base, layer or data", disk.ID))
+		}
+		if disk.Kind == "layer" && disk.Base == "" {
+			problems = append(problems, fmt.Sprintf("disk %q layer requires base", disk.ID))
+		}
+		if disk.Kind == "data" && disk.Base != "" {
+			problems = append(problems, fmt.Sprintf("disk %q data disk must not reference base", disk.ID))
+		}
+		if disk.Base != "" {
+			if _, ok := diskIDs[disk.Base]; !ok {
+				problems = append(problems, fmt.Sprintf("disk %q references missing base disk %q", disk.ID, disk.Base))
+			}
+		}
+		switch disk.AttachedType {
+		case "":
+		case "vm":
+			if _, ok := vmIDs[disk.AttachedTo]; !ok {
+				problems = append(problems, fmt.Sprintf("disk %q references missing vm %q", disk.ID, disk.AttachedTo))
+			}
+			if disk.Kind == "data" {
+				problems = append(problems, fmt.Sprintf("disk %q data disk cannot attach to vm", disk.ID))
+			}
+		case "container":
+			if _, ok := containerIDs[disk.AttachedTo]; !ok {
+				problems = append(problems, fmt.Sprintf("disk %q references missing container %q", disk.ID, disk.AttachedTo))
+			}
+		default:
+			problems = append(problems, fmt.Sprintf("disk %q attachedType must be vm or container", disk.ID))
 		}
 	}
 
@@ -399,7 +495,8 @@ func (l *Lab) Validate() error {
 					problems = append(problems, fmt.Sprintf("network link references missing container nic %q:%d", endpoint.ID, endpoint.NIC))
 					continue
 				}
-				if ct.Networks[endpoint.NIC].Switch != "" {
+				nic := ct.Networks[endpoint.NIC]
+				if nic.Switch != "" || nic.ExternalLink != "" {
 					problems = append(problems, fmt.Sprintf("network link endpoint container %q nic %d is already connected", endpoint.ID, endpoint.NIC))
 					continue
 				}
@@ -487,6 +584,10 @@ func (l *Lab) ManagedSwitchBridgeName(sw Switch) string {
 	return bridgeName(l.ManagedNetworkName(sw))
 }
 
+func (l *Lab) ManagedExternalBridgeName(link ExternalLink) string {
+	return bridgeName(managedName(l.ID, "uplink-"+link.ID))
+}
+
 func (l *Lab) ManagedContainerName(ct Container) string {
 	return managedName(l.ID, ct.ID)
 }
@@ -500,6 +601,13 @@ func (l *Lab) ManagedNetworkLinkBridgeName(link NetworkLink) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(l.ID + "|" + from + "|" + to))
 	return fmt.Sprintf("flp2p%08x", h.Sum32())
+}
+
+func (l *Lab) GeneratedNICMAC(typ, id string, index int) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(l.ID + "|" + typ + "|" + id + "|" + fmt.Sprintf("%d", index)))
+	sum := h.Sum32()
+	return fmt.Sprintf("02:00:%02x:%02x:%02x:%02x", byte(sum>>24), byte(sum>>16), byte(sum>>8), byte(sum))
 }
 
 func validID(id string) bool {
@@ -521,6 +629,23 @@ func normalizeDesiredState(value string) string {
 func validDesiredState(value string) bool {
 	switch normalizeDesiredState(value) {
 	case "", DesiredStateRunning, DesiredStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeExternalMode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ExternalModeDirect
+	}
+	return value
+}
+
+func validExternalMode(value string) bool {
+	switch normalizeExternalMode(value) {
+	case ExternalModeNAT, ExternalModeDirect, ExternalModeMacNAT:
 		return true
 	default:
 		return false

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -16,9 +16,12 @@ const (
 	ansiInverse        = "\x1b[7m"
 	ansiCyan           = "\x1b[36m"
 	ansiBrightCyan     = "\x1b[96m"
+	ansiBlack          = "\x1b[30m"
 	ansiWhite          = "\x1b[97m"
 	ansiBgCyan         = "\x1b[46m"
+	ansiBgGreen        = "\x1b[42m"
 	ansiBgRed          = "\x1b[41m"
+	ansiBgYellow       = "\x1b[43m"
 	ansiBgGray         = "\x1b[100m"
 	ansiYellow         = "\x1b[33m"
 	ansiDim            = "\x1b[2m"
@@ -29,6 +32,8 @@ const (
 	ansiMoveHome       = "\x1b[H"
 	ansiEnterAltScreen = "\x1b[?1049h"
 	ansiExitAltScreen  = "\x1b[?1049l"
+	ansiEnableMouse    = "\x1b[?1000h\x1b[?1006h"
+	ansiDisableMouse   = "\x1b[?1000l\x1b[?1006l"
 )
 
 func startAppTerminalSession(a *App) (func(), error) {
@@ -41,9 +46,9 @@ func startTerminalSession(inFD int, out io.Writer) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	_, _ = io.WriteString(out, ansiEnterAltScreen+ansiHide+ansiClear)
+	_, _ = io.WriteString(out, ansiEnterAltScreen+ansiEnableMouse+ansiHide+ansiClear)
 	return func() {
-		_, _ = io.WriteString(out, ansiShow+ansiReset+ansiExitAltScreen)
+		_, _ = io.WriteString(out, ansiDisableMouse+ansiShow+ansiReset+ansiExitAltScreen)
 		signal.Reset(syscall.SIGINT)
 		restoreRaw()
 	}, nil
@@ -100,8 +105,8 @@ func makeRawWithReadMode(fd int, min, timeout uint8) (func(), error) {
 		return nil, fmt.Errorf("raw terminal mode: %w", err)
 	}
 	return func() {
-	_ = unix.IoctlSetTermios(fd, unix.TCSETS, old)
-}, nil
+		_ = unix.IoctlSetTermios(fd, unix.TCSETS, old)
+	}, nil
 }
 
 func makeShellRawWithReadMode(fd int, min, timeout uint8) (func(), error) {

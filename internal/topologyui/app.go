@@ -45,6 +45,7 @@ type App struct {
 	RouteCacheRoutes  []visibleEdge
 	ReconcileInterval time.Duration
 	VMConsole         func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
+	pendingKeys       []string
 }
 
 func (a *App) Run() error {
@@ -70,6 +71,9 @@ func (a *App) ensureService() *topology.Service {
 	a.Service.Lab = a.Lab
 	if a.LabPath != "" {
 		a.Service.Path = a.LabPath
+	}
+	if a.WorkloadStates != nil {
+		a.Service.States = a.WorkloadStates
 	}
 	return a.Service
 }
@@ -145,7 +149,16 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		if key == "" {
 			continue
 		}
-		if a.handleKey(key) {
+		if strings.HasPrefix(key, "mouse:") && a.prepareMouseClickFeedback(key) {
+			_, _ = io.WriteString(a.Out, ansiMoveHome)
+			if err := a.render(a.Out, width, height, true); err != nil {
+				return err
+			}
+			time.Sleep(45 * time.Millisecond)
+			a.clearMouseClickFeedback()
+		}
+		quit := a.handleKey(key)
+		if quit {
 			return nil
 		}
 		if a.PendingShell != nil {
@@ -298,15 +311,17 @@ func (a *App) refreshWorkloadStates() {
 		return
 	}
 	defer closeRuntime()
-	states, err := runtime.States(context.Background(), a.Lab)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	states, err := runtime.States(ctx, a.Lab)
 	if err != nil {
 		a.State.Message = "runtime status failed: " + err.Error()
-		_ = a.refreshVNCPortsWithRuntime(context.Background(), runtime)
+		_ = a.refreshVNCPortsWithRuntime(ctx, runtime)
 		return
 	}
 	a.WorkloadStates = states
 	a.Service.States = states
-	if portErr := a.refreshVNCPortsWithRuntime(context.Background(), runtime); portErr != nil {
+	if portErr := a.refreshVNCPortsWithRuntime(ctx, runtime); portErr != nil {
 		a.State.Message = "vnc status failed: " + portErr.Error()
 	}
 	a.applyWorkloadStates()
@@ -327,7 +342,7 @@ func (a *App) applyWorkloadStates() {
 		node := &a.Model.Nodes[i]
 		key := NodeKey(node.Type, node.ID)
 		if state, ok := a.WorkloadStates[key]; ok {
-			node.State = state
+			node.State = displayWorkloadState(node.DesiredState, state)
 		}
 		if node.Type == NodeVM {
 			node.Details = withVNCDetailPort(node.Details, a.VNCPorts[key])
@@ -385,21 +400,23 @@ func (a *App) contextMenuSubmenuItems(node Node, ok bool) []string {
 	if !ok {
 		return globalContextMenuItems(a.State.ContextGroup)
 	}
+	if a.State.ContextGroup == "disk-menu" {
+		return a.State.DiskMenuItems
+	}
 	return contextMenuItems(node, a.State.ContextGroup)
 }
 
 func (a *App) openCommand(command string) {
-	a.State.ContextMenu = false
-	a.State.ContextGroup = ""
-	a.State.ContextInSubmenu = false
-	a.State.ContextSubSelected = 0
+	a.State.DiskMenuItems = nil
+	a.State.DiskMenuActions = nil
+	a.State.DiskMenuKinds = nil
 	a.State.ContextDeleteNIC = false
 	a.State.ContextEdit = false
 	a.State.ContextEditValue = ""
 	a.State.ContextEditCursor = 0
-	a.State.CommandMode = true
-	a.State.Command = command
-	a.HistoryIndex = len(a.CommandLog)
+	a.State.CommandMode = false
+	a.State.Command = ""
+	a.State.Message = "command bar removed; use the menu"
 }
 
 func (a *App) rememberCommand(command string) {

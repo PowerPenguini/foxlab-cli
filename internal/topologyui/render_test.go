@@ -381,6 +381,34 @@ func TestRenderSelectedNodeANSIHighlight(t *testing.T) {
 	}
 }
 
+func TestRenderTopFocusDoesNotHighlightSelectedNode(t *testing.T) {
+	m := MockModel()
+	g := renderGrid(m, ViewState{Selected: 1, Focus: FocusTop}, 100, 30)
+	nodeRect := layoutNodeRects(m, rect{X: 0, Y: 0, W: 100, H: 30})[m.Nodes[1].Key()]
+	for x := nodeRect.X; x < nodeRect.X+nodeRect.W; x++ {
+		if got := g.Cells[nodeRect.Y*g.Width+x].Style; got != "" {
+			t.Fatalf("top border style at x=%d = %q, want empty", x, got)
+		}
+		if got := g.Cells[(nodeRect.Y+nodeRect.H-1)*g.Width+x].Style; got != "" {
+			t.Fatalf("bottom border style at x=%d = %q, want empty", x, got)
+		}
+	}
+}
+
+func TestRenderSelectedOverlappingNodeStaysOnTop(t *testing.T) {
+	m := Model{Nodes: []Node{
+		{ID: "first", Type: NodeVM, Badge: "VM", Label: "first", State: "defined", X: 4, Y: 3},
+		{ID: "second", Type: NodeContainer, Badge: "CT", Label: "second", State: "missing", X: 4, Y: 3},
+	}}
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 60, 16, false)
+	if !strings.Contains(out, "[VM] first") {
+		t.Fatalf("selected overlapping node is not visible:\n%s", out)
+	}
+	if strings.Contains(out, "[CT] second") {
+		t.Fatalf("unselected overlapping node covered selected node:\n%s", out)
+	}
+}
+
 func TestLayoutNodeRectsUseFixedPlane(t *testing.T) {
 	base := Model{Nodes: []Node{
 		{ID: "top", Type: NodeVM, X: 4, Y: 2},
@@ -454,7 +482,9 @@ func TestRenderSkipsPartiallyVisibleNodes(t *testing.T) {
 func TestRenderContextMenuForSelectedNode(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true}, 100, 30, false)
 	for _, want := range []string{
-		" Configuration >",
+		" Configuration ",
+		" NIC ",
+		" Disk ",
 		" Move",
 		" Delete",
 	} {
@@ -482,7 +512,7 @@ func TestRenderContextSubmenuForSelectedNode(t *testing.T) {
 		ContextInSubmenu: true,
 	}, 100, 30, false)
 	for _, want := range []string{
-		" Configuration >",
+		" Configuration ",
 		" Run",
 	} {
 		if !strings.Contains(out, want) {
@@ -509,11 +539,23 @@ func TestRenderContextSubmenuHasNoGap(t *testing.T) {
 		ContextGroup:     "config-menu",
 		ContextInSubmenu: true,
 	}, 100, 30, false)
-	if !strings.Contains(out, "Configuration >   Run") {
-		t.Fatalf("expected submenu to sit directly next to root menu:\n%s", out)
+	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
+		t.Fatalf("expected global top ribbon:\n%s", out)
 	}
-	if strings.Contains(out, "Configuration >    Run") {
-		t.Fatalf("found extra margin between context menus:\n%s", out)
+	if !strings.Contains(out, "Configuration >   Run") {
+		t.Fatalf("expected context submenu to sit next to node menu:\n%s", out)
+	}
+}
+
+func TestRenderTopRibbonAddDropdown(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, TopMenuOpen: true}, 100, 30, false)
+	for _, want := range []string{" Add ", " VM", " Container", " Switch", " Disk", " Link"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing top add dropdown item %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "External") {
+		t.Fatalf("top add dropdown still contains External:\n%s", out)
 	}
 }
 
@@ -553,14 +595,13 @@ func TestRenderContextSubmenuIgnoresStaleGroupForRootAction(t *testing.T) {
 }
 
 func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	for _, want := range []string{
 		" Run",
 		" Name        client01",
 		" CPU         2",
 		" Memory      2048M",
 		" VNC         [ ]",
-		" Disk        labs/mock/disks/client01.img",
 		" ISO",
 	} {
 		if !strings.Contains(out, want) {
@@ -576,33 +617,102 @@ func TestRenderContextFormSubmenuForSelectedNode(t *testing.T) {
 	if strings.Contains(out, "nic0") {
 		t.Fatalf("render kept NIC detail in config submenu:\n%s", out)
 	}
+	if strings.Contains(out, "labs/mock/disks/client01.img") {
+		t.Fatalf("render kept disk detail in config submenu:\n%s", out)
+	}
 	if strings.Contains(out, "VNC:") {
 		t.Fatalf("render showed VNC info for disabled VNC:\n%s", out)
 	}
 }
 
-func TestRenderContextEditKeepsEmptyDiskValueEmpty(t *testing.T) {
+func TestRenderContextFormShowsEmptyPlaceholder(t *testing.T) {
+	model := Model{Nodes: []Node{{ID: "kali", Type: NodeContainer, Badge: "CT", Label: "kali"}}}
+	state := ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}
+	out := RenderString(model, state, 100, 30, false)
+	for _, want := range []string{
+		" Image       empty",
+		" Command     empty",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing empty placeholder %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "?") {
+		t.Fatalf("render still contains question fallback:\n%s", out)
+	}
+	ansiOut := RenderString(model, state, 100, 30, true)
+	if !strings.Contains(ansiOut, ansiBgGray+ansiWhite+ansiDim+"empty") {
+		t.Fatalf("ANSI render missing dim empty placeholder:\n%q", ansiOut)
+	}
+}
+
+func TestRenderDiskSubmenuShowsDiskItems(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Selected:         1,
+		Focus:            FocusGraph,
+		ContextMenu:      true,
+		ContextSelected:  2,
+		ContextGroup:     "disk-menu",
+		ContextInSubmenu: true,
+		DiskMenuItems:    []string{"Add Disk", "data 4G", diskMenuLayerTreePrefix + "data-layer"},
+		DiskMenuActions:  []string{diskMenuActionCreate, diskMenuActionAttach, diskMenuActionNone},
+		DiskMenuKinds:    []string{"", "base", "layer"},
+	}, 100, 30, false)
+	for _, want := range []string{" Disk ", " Add Disk", " data 4G", " L ", diskMenuLayerTreePrefix + "data-layer", " M ", " D ", " X "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing disk submenu item %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderDiskSubmenuMarksMergeButtonGreen(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{
 		Selected:           1,
 		Focus:              FocusGraph,
 		ContextMenu:        true,
-		ContextGroup:       "config-menu",
+		ContextSelected:    2,
+		ContextGroup:       "disk-menu",
 		ContextInSubmenu:   true,
-		ContextSubSelected: 5,
-		ContextEdit:        true,
-		ContextEditValue:   "",
-		ContextEditCursor:  0,
-	}, 100, 30, false)
-	if strings.Contains(out, "labs/mock/disks/client01.img") {
-		t.Fatalf("empty disk edit restored old path:\n%s", out)
+		ContextSubSelected: 2,
+		ContextMergeDisk:   true,
+		DiskMenuItems:      []string{"Add Disk", "data 4G", diskMenuLayerTreePrefix + "data-layer"},
+		DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionAttach, diskMenuActionNone},
+		DiskMenuKinds:      []string{"", "base", "layer"},
+	}, 100, 30, true)
+	if !strings.Contains(out, ansiBgGreen+ansiWhite+ansiBold+" M ") {
+		t.Fatalf("render did not mark selected merge M green:\n%q", out)
 	}
-	if !strings.Contains(out, "Disk        |") {
-		t.Fatalf("empty disk edit missing empty cursor field:\n%s", out)
+}
+
+func TestRenderDiskSubmenuShowsActiveBaseActions(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    2,
+		ContextGroup:       "disk-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 1,
+		ContextDetachDisk:  true,
+		DiskMenuItems:      []string{"Add Disk", "data 4G"},
+		DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionNone},
+		DiskMenuKinds:      []string{"", "base"},
+	}, 100, 30, true)
+	for _, want := range []string{" data 4G", " D ", " X "} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing active base disk item %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, " L ") || strings.Contains(out, " M ") {
+		t.Fatalf("render showed layer controls for active base:\n%s", out)
+	}
+	if !strings.Contains(out, ansiBgYellow+ansiBlack+ansiBold+" D ") {
+		t.Fatalf("render did not mark selected base detach D yellow:\n%q", out)
 	}
 }
 
 func TestRenderNICSubmenuShowsNICDetails(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextSelected: 1, ContextGroup: "nic-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextSelected: 1, ContextGroup: "nic-menu", ContextInSubmenu: true}, 100, 30, false)
 	for _, want := range []string{
 		" Add NIC",
 		" nic0 → lan",
@@ -638,19 +748,28 @@ func TestRenderNICSubmenuShowsNICDetails(t *testing.T) {
 		ContextSubSelected: 1,
 		ContextDeleteNIC:   true,
 	}, 100, 30)
-	node := MockModel().Nodes[1]
-	nodeRect := layoutNodeRects(MockModel(), rect{X: 0, Y: 0, W: 100, H: 30})[node.Key()]
-	rootItems := contextMenuItems(node, "")
-	rootMenuW := contextMenuWidth(rootItems)
-	rootX := nodeRect.X + nodeRect.W + 1
-	rootActive := normalizedMenuSelection(1, len(rootItems))
-	rootMenuH := min(len(rootItems), 30)
-	rootStart := contextMenuStart(rootActive, len(rootItems), rootMenuH)
-	subItems := contextMenuSubmenuItems(node, true, "nic-menu")
-	subMenuW := contextMenuWidth(subItems)
-	subX := rootX + rootMenuW
-	subY := nodeRect.Y + (rootActive - rootStart)
-	nicRowY := subY + 1
+	app := App{
+		Model: MockModel(),
+		State: ViewState{
+			Selected:           1,
+			Focus:              FocusGraph,
+			ContextMenu:        true,
+			ContextSelected:    1,
+			ContextGroup:       "nic-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: 1,
+			ContextDeleteNIC:   true,
+		},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	layout, _, _, ok := app.currentContextMenuLayout()
+	if !ok || !layout.hasSub {
+		t.Fatal("nic submenu layout missing")
+	}
+	subMenuW := layout.sub.rect.W
+	subX := layout.sub.rect.X
+	nicRowY := layout.sub.rect.Y + 1
 	if got := g.Cells[nicRowY*g.Width+subX+subMenuW-4].Ch; got != ' ' {
 		t.Fatalf("nic delete button gap = %q, want one blank cell before button", got)
 	}
@@ -670,7 +789,7 @@ func TestRenderNICSubmenuShowsNICDetails(t *testing.T) {
 }
 
 func TestRenderContainerConfigSubmenuDoesNotShowNICSwitch(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 2, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 2, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if strings.Contains(out, "Switch") || strings.Contains(out, "nic0") {
 		t.Fatalf("render kept NIC config in container submenu:\n%s", out)
 	}
@@ -727,7 +846,7 @@ func TestRenderConnectModeDrawsDashedPreview(t *testing.T) {
 }
 
 func TestRenderContextPowerActionUsesStopForRunningNode(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if !strings.Contains(out, "Stop") {
 		t.Fatalf("render missing stop action for running node:\n%s", out)
 	}
@@ -737,7 +856,7 @@ func TestRenderContextPowerActionUsesStopForRunningNode(t *testing.T) {
 }
 
 func TestRenderContextCheckboxUsesUppercaseX(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if !strings.Contains(out, "VNC         [X]") {
 		t.Fatalf("render missing checked checkbox with uppercase X:\n%s", out)
 	}
@@ -753,7 +872,7 @@ func TestRenderContextVNCInfoUsesRuntimePort(t *testing.T) {
 	m := MockModel()
 	m.Nodes[0].Details = append(m.Nodes[0].Details, "vnc-port=5903")
 
-	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if !strings.Contains(out, "VNC: 127.0.0.1:5903") {
 		t.Fatalf("render missing runtime VNC port:\n%s", out)
 	}
@@ -766,7 +885,7 @@ func TestRenderContextVNCInfoPromptsStartForStoppedVM(t *testing.T) {
 	m := MockModel()
 	m.Nodes[0].State = "shutoff"
 
-	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if !strings.Contains(out, "VNC: start VM") {
 		t.Fatalf("render missing VNC start prompt:\n%s", out)
 	}
@@ -792,8 +911,36 @@ func TestRenderContextInlineEditValue(t *testing.T) {
 	}
 }
 
+func TestRenderContextInlineEditEmptyPlaceholder(t *testing.T) {
+	state := ViewState{
+		Selected:           2,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextGroup:       "config-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 3,
+		ContextEdit:        true,
+		ContextEditValue:   "",
+		ContextEditCursor:  0,
+	}
+	out := RenderString(MockModel(), state, 100, 30, false)
+	if !strings.Contains(out, "Command     |empty") {
+		t.Fatalf("render missing empty placeholder:\n%s", out)
+	}
+	if strings.Contains(out, "?") {
+		t.Fatalf("render still contains question fallback:\n%s", out)
+	}
+	if strings.Contains(out, "Command     |empty  M") || strings.Contains(out, "Command     |empty  X") {
+		t.Fatalf("render leaked disk controls into config edit row:\n%s", out)
+	}
+	ansiOut := RenderString(MockModel(), state, 100, 30, true)
+	if !strings.Contains(ansiOut, ansiBgGray+ansiWhite+ansiBold+ansiDim+"empty") {
+		t.Fatalf("ANSI render missing dim empty placeholder:\n%q", ansiOut)
+	}
+}
+
 func TestRenderNoHooksMenuItem(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if strings.Contains(out, "hooks >") {
 		t.Fatalf("render contains removed hooks menu item: %q", out)
 	}
@@ -821,7 +968,39 @@ func TestContextMenuStartCalculatesVisibleWindow(t *testing.T) {
 	}
 }
 
-func TestRenderCommandConsole(t *testing.T) {
+func TestContextMenuLayoutClampsSubmenuInsideBounds(t *testing.T) {
+	m := Model{
+		Nodes: []Node{{
+			ID:      "right",
+			Type:    NodeExternal,
+			Badge:   "IF",
+			Label:   "uplink",
+			X:       82,
+			Y:       2,
+			Details: []string{"interface=eth0"},
+		}},
+	}
+	state := ViewState{
+		Focus:            FocusGraph,
+		Selected:         0,
+		ContextMenu:      true,
+		ContextGroup:     "config-menu",
+		ContextInSubmenu: true,
+	}
+	bounds := rect{X: 0, Y: 0, W: 100, H: 20}
+	layout, _, _, ok := contextMenuLayoutFor(m, state, layoutNodeRects(m, bounds), bounds)
+	if !ok || !layout.hasSub {
+		t.Fatalf("context submenu layout missing: ok=%t layout=%#v", ok, layout)
+	}
+	if layout.root.rect.X < bounds.X || layout.root.rect.X+layout.root.rect.W > bounds.X+bounds.W {
+		t.Fatalf("root menu outside bounds: %#v bounds=%#v", layout.root.rect, bounds)
+	}
+	if layout.sub.rect.X < bounds.X || layout.sub.rect.X+layout.sub.rect.W > bounds.X+bounds.W {
+		t.Fatalf("submenu outside bounds: %#v bounds=%#v", layout.sub.rect, bounds)
+	}
+}
+
+func TestRenderStatusBarIgnoresCommandConsole(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{
 		Focus:       FocusGraph,
 		CommandMode: true,
@@ -829,18 +1008,55 @@ func TestRenderCommandConsole(t *testing.T) {
 		Console:     []string{"help: :help :quit"},
 		Message:     "old message",
 	}, 100, 30, false)
-	for _, want := range []string{":help"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("render missing console text %q:\n%s", want, out)
-		}
+	if !strings.Contains(out, "old message") {
+		t.Fatalf("render missing status message:\n%s", out)
 	}
-	for _, notWant := range []string{"help: :help :quit", "old message"} {
+	for _, notWant := range []string{":help", "help: :help :quit"} {
 		if strings.Contains(out, notWant) {
-			t.Fatalf("command render contains non-input line %q:\n%s", notWant, out)
+			t.Fatalf("status render contains removed command console text %q:\n%s", notWant, out)
 		}
 	}
-	if count := strings.Count(out, ":help"); count != 1 {
-		t.Fatalf("command render contains %d input lines, want 1:\n%s", count, out)
+}
+
+func TestRenderAddDiskInlineNameEdit(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    2,
+		ContextGroup:       "disk-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 0,
+		ContextEdit:        true,
+		ContextEditValue:   "data",
+		ContextEditCursor:  4,
+		DiskMenuItems:      []string{"Add Disk", "data 4G"},
+	}, 100, 30, false)
+	if !strings.Contains(out, "Add Disk data|") {
+		t.Fatalf("render missing inline disk name edit:\n%s", out)
+	}
+}
+
+func TestRenderAddDiskEmptyInlineNameEditHasNoLayerActions(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{
+		Selected:           1,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    2,
+		ContextGroup:       "disk-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 0,
+		ContextEdit:        true,
+		ContextEditValue:   "",
+		ContextEditCursor:  0,
+		DiskMenuItems:      []string{"Add Disk", "No disks"},
+		DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionNone},
+	}, 100, 30, false)
+	if !strings.Contains(out, "Add Disk |empty") {
+		t.Fatalf("render missing empty inline disk name edit:\n%s", out)
+	}
+	if strings.Contains(out, "Add Disk |empty  M") || strings.Contains(out, "Add Disk |empty  X") {
+		t.Fatalf("render showed layer actions on empty Add Disk edit:\n%s", out)
 	}
 }
 
@@ -851,33 +1067,48 @@ func TestRenderStatusBarAlwaysVisible(t *testing.T) {
 	}
 }
 
-func TestRenderGlobalContextMenuForEmptyModel(t *testing.T) {
-	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true}, 80, 20, false)
-	for _, want := range []string{
-		"add >",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("render missing global context item %q:\n%s", want, out)
+func TestRenderMouseClickFeedback(t *testing.T) {
+	g := renderGrid(MockModel(), ViewState{
+		Focus:            FocusGraph,
+		MouseClickActive: true,
+		MouseClickX:      10,
+		MouseClickY:      5,
+		MouseClickW:      4,
+		MouseClickH:      2,
+	}, 100, 30)
+	style := ansiBgCyan + ansiWhite + ansiBold
+	for y := 5; y < 7; y++ {
+		for x := 10; x < 14; x++ {
+			if got := g.Cells[y*g.Width+x].Style; got != style {
+				t.Fatalf("click feedback style at (%d,%d) = %q, want %q", x, y, got, style)
+			}
 		}
 	}
-	if strings.Contains(out, "list") {
-		t.Fatalf("render contains removed global list item:\n%s", out)
+	if got := g.Cells[5*g.Width+9].Style; got == style {
+		t.Fatalf("click feedback leaked outside rect at (9,5)")
 	}
-	if strings.Contains(out, " help") {
-		t.Fatalf("render contains removed global help menu item:\n%s", out)
+}
+
+func TestRenderGlobalContextMenuForEmptyModel(t *testing.T) {
+	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true}, 80, 20, false)
+	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
+		t.Fatalf("render missing top add ribbon:\n%s", out)
+	}
+	for _, notWant := range []string{"add >", "add vm", "add cont", "add sw", "create external", " help", "list"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("render contains removed global context item %q:\n%s", notWant, out)
+		}
 	}
 }
 
 func TestRenderGlobalCreateSubmenuForEmptyModel(t *testing.T) {
 	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "create-menu"}, 80, 20, false)
-	for _, want := range []string{
-		"add vm",
-		"add cont",
-		"add sw",
-		"create external",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("render missing global create submenu item %q:\n%s", want, out)
+	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
+		t.Fatalf("render missing top add ribbon:\n%s", out)
+	}
+	for _, notWant := range []string{"add vm", "add cont", "add sw", "create external"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("render contains removed global create submenu item %q:\n%s", notWant, out)
 		}
 	}
 }
@@ -906,6 +1137,18 @@ func TestMoveSelectionUsesVisualNearestNeighbor(t *testing.T) {
 		if got := MoveSelection(m, 0, tt.key); got != tt.want {
 			t.Fatalf("%s selection = %d, want %d", tt.key, got, tt.want)
 		}
+	}
+}
+
+func TestMoveSelectionPrefersNearestDirectionalNodeBeforeAxisAlignment(t *testing.T) {
+	m := Model{Nodes: []Node{
+		{ID: "current", Type: NodeVM, X: 10, Y: 10},
+		{ID: "far-aligned", Type: NodeVM, X: 80, Y: 10},
+		{ID: "near-offset", Type: NodeVM, X: 18, Y: 14},
+	}}
+
+	if got := MoveSelection(m, 0, "right"); got != 2 {
+		t.Fatalf("right selection = %d, want near-offset", got)
 	}
 }
 
@@ -961,6 +1204,43 @@ func TestModelFromLabBuildsGraph(t *testing.T) {
 	}
 }
 
+func TestRenderExternalInterfaceChoiceMenu(t *testing.T) {
+	fakeHostInterfaces(t, "br0", "eth0")
+	m := ModelFromLab(&lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
+	})
+	out := RenderString(m, ViewState{
+		Focus:            FocusGraph,
+		Selected:         0,
+		ContextMenu:      true,
+		ContextGroup:     "interface-menu",
+		ContextInSubmenu: true,
+	}, 100, 30, false)
+	if !strings.Contains(out, "br0") || !strings.Contains(out, "eth0") {
+		t.Fatalf("render missing interface choices:\n%s", out)
+	}
+}
+
+func TestRenderExternalModeChoiceMenu(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+	})
+	out := RenderString(m, ViewState{
+		Focus:            FocusGraph,
+		Selected:         0,
+		ContextMenu:      true,
+		ContextGroup:     "mode-menu",
+		ContextInSubmenu: true,
+	}, 100, 30, false)
+	for _, want := range []string{"nat", "direct", "macnat"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing mode choice %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestModelFromLabOmitsEmptyDiskDetail(t *testing.T) {
 	m := ModelFromLab(&lab.Lab{
 		ID: "demo",
@@ -979,11 +1259,25 @@ func TestModelFromLabOmitsEmptyDiskDetail(t *testing.T) {
 	if strings.Contains(details, "disk=") {
 		t.Fatalf("empty disk leaked into details: %#v", m.Nodes[0].Details)
 	}
-	out := RenderString(m, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu"}, 100, 30, false)
+	out := RenderString(m, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true}, 100, 30, false)
 	if strings.Contains(out, "labs/") || strings.Contains(out, "qcow2") {
 		t.Fatalf("render kept disk path after disk clear:\n%s", out)
 	}
 	if !strings.Contains(out, "Disk") {
 		t.Fatalf("render should still allow disk editing:\n%s", out)
+	}
+}
+
+func TestModelFromLabShowsStartingForDesiredRunningContainer(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
+	})
+	node, ok := nodeByKey(m, NodeKey(NodeContainer, "kali"))
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "starting" {
+		t.Fatalf("container state = %q, want starting", node.State)
 	}
 }

@@ -200,6 +200,7 @@ func (s *Service) VMDelete(id string) string {
 	}
 	s.Lab.VMs = filtered
 	s.removeNetworkLinksForNode("vm", id)
+	s.detachDisksForNode("vm", id)
 	delete(s.Lab.Layout.Nodes, id)
 	if err := s.SaveAndRefresh(); err != nil {
 		return "delete failed: " + err.Error()
@@ -307,6 +308,7 @@ func (s *Service) ExternalCreate(id string, args map[string]string) string {
 		ID:        id,
 		Name:      args["name"],
 		Interface: args["interface"],
+		Mode:      firstNonEmpty(args["mode"], lab.ExternalModeNAT),
 	})
 	if s.Lab.Layout.Nodes == nil {
 		s.Lab.Layout.Nodes = map[string]lab.Position{}
@@ -331,6 +333,9 @@ func (s *Service) ExternalSet(id string, args map[string]string) string {
 		}
 		if value := args["interface"]; value != "" {
 			s.Lab.ExternalLinks[i].Interface = value
+		}
+		if value := args["mode"]; value != "" {
+			s.Lab.ExternalLinks[i].Mode = value
 		}
 		if err := s.SaveAndRefresh(); err != nil {
 			return "external config failed: " + err.Error()
@@ -375,6 +380,13 @@ func (s *Service) ExternalDelete(id string) string {
 			}
 		}
 	}
+	for i := range s.Lab.Containers {
+		for j := range s.Lab.Containers[i].Networks {
+			if s.Lab.Containers[i].Networks[j].ExternalLink == id {
+				s.Lab.Containers[i].Networks[j].ExternalLink = ""
+			}
+		}
+	}
 	delete(s.Lab.Layout.Nodes, id)
 	if err := s.SaveAndRefresh(); err != nil {
 		return "external delete failed: " + err.Error()
@@ -396,15 +408,20 @@ func (s *Service) ContainerCreate(id string, args map[string]string) string {
 		ID:      id,
 		Name:    firstNonEmpty(args["name"], id),
 		Image:   firstNonEmpty(args["image"], "?"),
+		Disk:    args["disk"],
 		Command: splitCommand(args["command"]),
 		Env:     parseEnv(args["env"]),
 	}
 	switchRef := args["switch"]
-	if switchRef == "" && len(s.Lab.Switches) > 0 {
+	externalRef := args["external"]
+	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
 		switchRef = s.Lab.Switches[0].ID
 	}
 	if switchRef != "" {
 		ct.Networks = append(ct.Networks, lab.ContainerNetwork{Switch: switchRef, MAC: args["mac"]})
+	}
+	if externalRef != "" {
+		ct.Networks = append(ct.Networks, lab.ContainerNetwork{ExternalLink: externalRef, MAC: args["mac"]})
 	}
 	s.Lab.Containers = append(s.Lab.Containers, ct)
 	if s.Lab.Layout.Nodes == nil {
@@ -434,7 +451,10 @@ func (s *Service) ContainerSet(id string, args map[string]string) string {
 		if value := args["image"]; value != "" {
 			s.Lab.Containers[i].Image = value
 		}
-		if value := args["command"]; value != "" {
+		if value, ok := args["disk"]; ok {
+			s.Lab.Containers[i].Disk = value
+		}
+		if value, ok := args["command"]; ok {
 			s.Lab.Containers[i].Command = splitCommand(value)
 		}
 		if value := args["env"]; value != "" {
@@ -443,6 +463,10 @@ func (s *Service) ContainerSet(id string, args map[string]string) string {
 		if value := args["switch"]; value != "" {
 			s.removeNetworkLinksForNode("container", id)
 			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: value, MAC: args["mac"]}}
+		}
+		if value := args["external"]; value != "" {
+			s.removeNetworkLinksForNode("container", id)
+			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: value, MAC: args["mac"]}}
 		} else if value := args["mac"]; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
 			s.Lab.Containers[i].Networks[0].MAC = value
 		}
@@ -485,7 +509,7 @@ func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]str
 	if !ok {
 		return "usage: container nic connect <id> <index> to=ID"
 	}
-	switchRef, err := s.resolveContainerNICEndpoint(args)
+	switchRef, externalRef, err := s.resolveContainerNICEndpoint(args)
 	if err != nil {
 		return err.Error()
 	}
@@ -498,6 +522,7 @@ func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]str
 		}
 		s.removeNetworkLinksForEndpoint(lab.NetworkEndpoint{Type: "container", ID: id, NIC: index})
 		s.Lab.Containers[i].Networks[index].Switch = switchRef
+		s.Lab.Containers[i].Networks[index].ExternalLink = externalRef
 		if value := args["mac"]; value != "" {
 			s.Lab.Containers[i].Networks[index].MAC = value
 		}
@@ -555,6 +580,7 @@ func (s *Service) ContainerDelete(id string) string {
 	}
 	s.Lab.Containers = containers
 	s.removeNetworkLinksForNode("container", id)
+	s.detachDisksForNode("container", id)
 	delete(s.Lab.Layout.Nodes, id)
 	if err := s.SaveAndRefresh(); err != nil {
 		return "container delete failed: " + err.Error()
@@ -725,10 +751,11 @@ func unexpectedContainerNICAddArgs(args map[string]string) []string {
 
 func unexpectedContainerNICConnectArgs(args map[string]string) []string {
 	valid := map[string]struct{}{
-		"to":     {},
-		"target": {},
-		"switch": {},
-		"mac":    {},
+		"to":       {},
+		"target":   {},
+		"switch":   {},
+		"external": {},
+		"mac":      {},
 	}
 	var invalid []string
 	for key := range args {
@@ -768,18 +795,33 @@ func (s *Service) resolveVMNICEndpoint(args map[string]string) (string, string, 
 	return switchRef, externalRef, nil
 }
 
-func (s *Service) resolveContainerNICEndpoint(args map[string]string) (string, error) {
-	target := firstNonEmpty(args["to"], args["target"], args["switch"])
+func (s *Service) resolveContainerNICEndpoint(args map[string]string) (string, string, error) {
+	target := firstNonEmpty(args["to"], args["target"])
+	switchRef := args["switch"]
+	externalRef := args["external"]
 	if target == "" {
-		return "", errors.New("container nic connect needs endpoint")
+		if (switchRef == "") == (externalRef == "") {
+			return "", "", errors.New("container nic connect needs exactly one endpoint")
+		}
+		if switchRef != "" && !s.HasLabSwitch(switchRef) {
+			return "", "", errors.New("switch not found: " + switchRef)
+		}
+		if externalRef != "" && !s.HasLabExternal(externalRef) {
+			return "", "", errors.New("external not found: " + externalRef)
+		}
+		return switchRef, externalRef, nil
 	}
-	if s.HasLabExternal(target) {
-		return "", errors.New("container nic connect needs switch endpoint: " + target)
+	if switchRef != "" || externalRef != "" {
+		return "", "", errors.New("container nic connect accepts to=ID or a compatibility alias, not both")
 	}
-	if !s.HasLabSwitch(target) {
-		return "", errors.New("endpoint not found: " + target)
+	switch {
+	case s.HasLabSwitch(target):
+		return target, "", nil
+	case s.HasLabExternal(target):
+		return "", target, nil
+	default:
+		return "", "", errors.New("endpoint not found: " + target)
 	}
-	return target, nil
 }
 
 func (s *Service) ensureDirectEndpointAvailable(endpoint lab.NetworkEndpoint) error {
@@ -795,7 +837,8 @@ func (s *Service) ensureDirectEndpointAvailable(endpoint lab.NetworkEndpoint) er
 		}
 	case "container":
 		ct, _ := s.LabContainer(endpoint.ID)
-		if ct.Networks[endpoint.NIC].Switch != "" || s.networkEndpointLinked(endpoint) {
+		nic := ct.Networks[endpoint.NIC]
+		if nic.Switch != "" || nic.ExternalLink != "" || s.networkEndpointLinked(endpoint) {
 			return errors.New("container nic already connected: " + endpoint.ID + ":" + strconv.Itoa(endpoint.NIC))
 		}
 	default:
@@ -849,6 +892,7 @@ func (s *Service) disconnectNICEndpoint(endpoint lab.NetworkEndpoint) error {
 				continue
 			}
 			s.Lab.Containers[i].Networks[endpoint.NIC].Switch = ""
+			s.Lab.Containers[i].Networks[endpoint.NIC].ExternalLink = ""
 			return nil
 		}
 	}
@@ -882,7 +926,7 @@ func (s *Service) firstAvailableDirectNIC(typ, id string, source lab.NetworkEndp
 			if sameNetworkEndpoint(endpoint, source) {
 				continue
 			}
-			if nic.Switch == "" && !s.networkEndpointLinked(endpoint) {
+			if nic.Switch == "" && nic.ExternalLink == "" && !s.networkEndpointLinked(endpoint) {
 				return i, nil
 			}
 		}
@@ -997,12 +1041,14 @@ func boolArg(value string, fallback bool) bool {
 
 func unexpectedContainerArgs(args map[string]string) []string {
 	valid := map[string]struct{}{
-		"name":    {},
-		"image":   {},
-		"command": {},
-		"env":     {},
-		"switch":  {},
-		"mac":     {},
+		"name":     {},
+		"image":    {},
+		"disk":     {},
+		"command":  {},
+		"env":      {},
+		"switch":   {},
+		"external": {},
+		"mac":      {},
 	}
 	var invalid []string
 	for key := range args {
