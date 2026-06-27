@@ -49,15 +49,14 @@ func (b *Bridge) AttachContainer(ctx context.Context, l *lab.Lab, ct lab.Contain
 			continue
 		}
 		hostIf, guestIf := vethNames(l, ct, index)
+		b.cleanupContainerNIC(ctx, pid, index, hostIf, guestIf)
 		containerIf := guestIf
 		if target.Interface != "" {
 			containerIf = hostIf
-			_ = b.Runner.Run(ctx, "ip", "link", "delete", hostIf)
 			if err := b.Runner.Run(ctx, "ip", "link", "add", "link", target.Interface, "name", hostIf, "type", "macvlan", "mode", "bridge"); err != nil {
 				return err
 			}
 		} else {
-			_ = b.Runner.Run(ctx, "ip", "link", "delete", hostIf)
 			if err := b.Runner.Run(ctx, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", guestIf); err != nil {
 				return err
 			}
@@ -102,6 +101,14 @@ func (b *Bridge) AttachContainer(ctx context.Context, l *lab.Lab, ct lab.Contain
 		return err
 	}
 	return nil
+}
+
+func (b *Bridge) cleanupContainerNIC(ctx context.Context, pid, index int, hostIf, guestIf string) {
+	target := fmt.Sprintf("%d", pid)
+	for _, name := range []string{fmt.Sprintf("eth%d", index), guestIf, hostIf} {
+		_ = b.Runner.Run(ctx, "nsenter", "-t", target, "-n", "ip", "link", "delete", name)
+	}
+	_ = b.Runner.Run(ctx, "ip", "link", "delete", hostIf)
 }
 
 func (b *Bridge) DetachContainer(ctx context.Context, l *lab.Lab, ct lab.Container) {

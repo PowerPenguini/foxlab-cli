@@ -29,6 +29,7 @@ const (
 	DefaultAddress   = "/run/containerd/containerd.sock"
 	DefaultNamespace = "foxlab"
 	configLabel      = "foxlab.config.sha256"
+	containerDNSMode = "host-resolvconf"
 )
 
 type Runtime struct {
@@ -239,6 +240,7 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 	if len(env) > 0 {
 		opts = append(opts, oci.WithEnv(env))
 	}
+	opts = append(opts, oci.WithHostResolvconf)
 	if diskMount.Source != "" {
 		opts = append(opts, oci.WithMounts([]specs.Mount{{
 			Type:        "bind",
@@ -326,6 +328,7 @@ func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string 
 	parts = append(parts, "disk="+ct.Disk)
 	parts = append(parts, "diskSource="+diskMount.Source)
 	parts = append(parts, "diskDestination="+diskMount.Destination)
+	parts = append(parts, "dns="+containerDNSMode)
 	parts = append(parts, "command="+strings.Join(containerProcessArgs(ct), "\x00"))
 	keys := make([]string, 0, len(ct.Env))
 	for key := range ct.Env {

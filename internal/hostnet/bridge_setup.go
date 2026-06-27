@@ -36,16 +36,47 @@ func (b *Bridge) ensureNATBridge(ctx context.Context, bridge, gateway, cidr, upl
 	if err := b.Runner.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 		return err
 	}
-	args := []string{"-t", "nat", "-C", "POSTROUTING", "-s", cidr}
+	forwardArgs := []string{"FORWARD", "-i", bridge}
 	if uplink != "" {
-		args = append(args, "-o", uplink)
+		forwardArgs = append(forwardArgs, "-o", uplink)
 	}
-	args = append(args, "-j", "MASQUERADE")
-	if err := b.Runner.Run(ctx, "iptables", args...); err == nil {
+	forwardArgs = append(forwardArgs, "-j", "ACCEPT")
+	if err := b.ensureIPTablesRule(ctx, "", forwardArgs); err != nil {
+		return err
+	}
+	returnArgs := []string{"FORWARD"}
+	if uplink != "" {
+		returnArgs = append(returnArgs, "-i", uplink)
+	}
+	returnArgs = append(returnArgs, "-o", bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+	if err := b.ensureIPTablesRule(ctx, "", returnArgs); err != nil {
+		return err
+	}
+	natArgs := []string{"POSTROUTING", "-s", cidr}
+	if uplink != "" {
+		natArgs = append(natArgs, "-o", uplink)
+	}
+	natArgs = append(natArgs, "-j", "MASQUERADE")
+	return b.ensureIPTablesRule(ctx, "nat", natArgs)
+}
+
+func (b *Bridge) ensureIPTablesRule(ctx context.Context, table string, rule []string) error {
+	checkArgs := []string{}
+	if table != "" {
+		checkArgs = append(checkArgs, "-t", table)
+	}
+	checkArgs = append(checkArgs, "-C")
+	checkArgs = append(checkArgs, rule...)
+	if err := b.Runner.Run(ctx, "iptables", checkArgs...); err == nil {
 		return nil
 	}
-	args[2] = "-A"
-	return b.Runner.Run(ctx, "iptables", args...)
+	addArgs := []string{}
+	if table != "" {
+		addArgs = append(addArgs, "-t", table)
+	}
+	addArgs = append(addArgs, "-A")
+	addArgs = append(addArgs, rule...)
+	return b.Runner.Run(ctx, "iptables", addArgs...)
 }
 
 func isLinuxBridge(name string) bool {

@@ -42,14 +42,13 @@ func (r *Reconciler) Step(ctx context.Context, l *lab.Lab) ReconcileResult {
 func (r *Reconciler) reconcileRef(ctx context.Context, l *lab.Lab, ref Ref, desired, actual string, result *ReconcileResult) {
 	switch desired {
 	case lab.DesiredStateRunning:
-		if actual == "running" {
-			return
-		}
 		if err := r.Runtime.Start(ctx, l, ref); err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("start %s: %w", Key(ref), err))
 			return
 		}
-		result.Actions = append(result.Actions, "started "+Key(ref))
+		if actual != "running" {
+			result.Actions = append(result.Actions, "started "+Key(ref))
+		}
 		result.States[Key(ref)] = "running"
 	case lab.DesiredStateStopped:
 		if actualStopped(actual) {

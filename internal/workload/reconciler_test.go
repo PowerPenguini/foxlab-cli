@@ -33,7 +33,7 @@ func (f *fakeRuntime) Stop(_ context.Context, _ *lab.Lab, ref Ref) error {
 
 func (f *fakeRuntime) Close() error { return nil }
 
-func TestReconcilerStartsOnlyWorkloadsNeedingRun(t *testing.T) {
+func TestReconcilerStartsDesiredRunningWorkloads(t *testing.T) {
 	l := &lab.Lab{
 		ID: "demo",
 		VMs: []lab.VM{
@@ -53,7 +53,7 @@ func TestReconcilerStartsOnlyWorkloadsNeedingRun(t *testing.T) {
 	if len(result.Errors) != 0 {
 		t.Fatalf("unexpected reconcile errors: %v", result.Errors)
 	}
-	wantStarted := []string{"vm:vm2", "container:web"}
+	wantStarted := []string{"vm:vm1", "vm:vm2", "container:web"}
 	if len(runtime.started) != len(wantStarted) {
 		t.Fatalf("started = %#v, want %#v", runtime.started, wantStarted)
 	}
@@ -64,6 +64,15 @@ func TestReconcilerStartsOnlyWorkloadsNeedingRun(t *testing.T) {
 	}
 	if len(runtime.stopped) != 0 {
 		t.Fatalf("stopped = %#v, want none", runtime.stopped)
+	}
+	wantActions := []string{"started vm:vm2", "started container:web"}
+	if len(result.Actions) != len(wantActions) {
+		t.Fatalf("actions = %#v, want %#v", result.Actions, wantActions)
+	}
+	for i, want := range wantActions {
+		if result.Actions[i] != want {
+			t.Fatalf("actions[%d] = %q, want %q", i, result.Actions[i], want)
+		}
 	}
 }
 

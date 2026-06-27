@@ -89,8 +89,8 @@ func TestContainerProcessArgsDefaultKeepsContainerRunning(t *testing.T) {
 func TestContainerSpecOptsMountsDataDiskOverImageRootFS(t *testing.T) {
 	diskMount := containerDiskMount{Source: "/host/rootfs", Destination: "/data"}
 	opts := containerSpecOpts(nil, lab.Container{}, diskMount)
-	if len(opts) != 3 {
-		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, and data mount", len(opts))
+	if len(opts) != 4 {
+		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, resolv.conf, and data mount", len(opts))
 	}
 	var spec coci.Spec
 	if err := opts[len(opts)-1](context.Background(), nil, &cdocontainers.Container{}, &spec); err != nil {
@@ -107,6 +107,27 @@ func TestContainerSpecOptsMountsDataDiskOverImageRootFS(t *testing.T) {
 		t.Fatalf("spec mount = %#v, want bind %s to %s", mount, diskMount.Source, diskMount.Destination)
 	}
 	if !reflect.DeepEqual(mount.Options, []string{"rbind", "rw"}) {
+		t.Fatalf("spec mount options = %#v", mount.Options)
+	}
+}
+
+func TestContainerSpecOptsMountsHostResolvconf(t *testing.T) {
+	opts := containerSpecOpts(nil, lab.Container{}, containerDiskMount{})
+	if len(opts) != 3 {
+		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, and resolv.conf", len(opts))
+	}
+	var spec coci.Spec
+	if err := opts[len(opts)-1](context.Background(), nil, &cdocontainers.Container{}, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Mounts) != 1 {
+		t.Fatalf("spec mounts = %#v, want one resolv.conf mount", spec.Mounts)
+	}
+	mount := spec.Mounts[0]
+	if mount.Type != "bind" || mount.Source != "/etc/resolv.conf" || mount.Destination != "/etc/resolv.conf" {
+		t.Fatalf("spec mount = %#v, want host resolv.conf bind mount", mount)
+	}
+	if !reflect.DeepEqual(mount.Options, []string{"rbind", "ro"}) {
 		t.Fatalf("spec mount options = %#v", mount.Options)
 	}
 }
