@@ -22,13 +22,63 @@ func rectFullyVisible(r rect, bounds rect) bool {
 		r.Y+r.H <= bounds.Y+bounds.H
 }
 
-func drawNode(g *grid, node Node, r rect, selected, graphFocused bool) {
+func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int) {
 	stateStyleValue := stateStyle(node.State)
 	clearRect(g, r)
-	drawBox(g, r, "", selectedBorderStyle(selected, graphFocused))
+	drawNodeBox(g, r, selectedBorderStyle(selected, graphFocused))
 	kind := "[" + firstNonEmpty(node.Badge, NodeKind(node.Type)) + "]"
-	g.Text(r.X+1, r.Y+1, fit(kind+" "+node.Label, r.W-2), "")
-	g.Text(r.X+1, r.Y+2, fit(node.State, r.W-2), stateStyleValue)
+	fullLabel := kind + " " + node.Label
+	contentX := r.X + 1
+	contentWidth := r.W - 2
+	labelWidth := contentWidth - runeLen(kind) - 1
+	if labelWidth > 0 {
+		g.Text(contentX, r.Y+1, kind, nodeBadgeStyle(node.Type))
+		g.Text(contentX+runeLen(kind)+1, r.Y+1, fit(node.Label, labelWidth), nodeLabelStyle(node.Type))
+	} else {
+		g.Text(contentX, r.Y+1, fit(fullLabel, contentWidth), nodeLabelStyle(node.Type))
+	}
+	g.Text(r.X+1, r.Y+2, fit(displayNodeState(node.State, frame), r.W-2), stateStyleValue)
+}
+
+func drawNodeBox(g *grid, r rect, style string) {
+	if r.W < 2 || r.H < 2 {
+		return
+	}
+	for x := r.X + 1; x < r.X+r.W-1; x++ {
+		g.Set(x, r.Y, lineHorizontal, style)
+		g.Set(x, r.Y+r.H-1, lineHorizontal, style)
+	}
+	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
+		g.Set(r.X, y, lineVertical, style)
+		g.Set(r.X+r.W-1, y, lineVertical, style)
+	}
+	g.Set(r.X, r.Y, '╭', style)
+	g.Set(r.X+r.W-1, r.Y, '╮', style)
+	g.Set(r.X, r.Y+r.H-1, '╰', style)
+	g.Set(r.X+r.W-1, r.Y+r.H-1, '╯', style)
+}
+
+func displayNodeState(state string, frame int) string {
+	if animatedState(state) {
+		return spinner(frame) + " " + state
+	}
+	if glyph := stateGlyph(state); glyph != "" {
+		return glyph + " " + state
+	}
+	return state
+}
+
+func stateGlyph(state string) string {
+	switch state {
+	case "running", "link":
+		return "●"
+	case "defined", "stopped", "shutoff", "created":
+		return "◌"
+	case "missing", "error", "failed":
+		return "!"
+	default:
+		return ""
+	}
 }
 
 func selectedBorderStyle(selected, graphFocused bool) string {
@@ -76,25 +126,26 @@ func drawMenuColumn(g *grid, column menuColumnLayout, isActive bool, editing boo
 	drawContextMenuItems(g, column.rect, menuItemLabels(column.items), menuItemActions(column.items), menuItemKinds(column.items), column.selected, column.start, isActive, editing, editValue, editCursor, deleteButtonSelected, mergeButtonSelected, detachButtonSelected, addLayerButtonSelected, diskMenu)
 }
 
-func drawTopRibbon(g *grid, bounds rect, state ViewState) {
+func drawTopRibbon(g *grid, m Model, bounds rect, state ViewState) {
 	items := topRibbonRootItems()
 	buttons := topMenuButtonRects(items, bounds.W)
-	fillRow(g, 0, 0, g.Width, ansiBgGray+ansiWhite)
+	fillRow(g, 0, 0, g.Width, themeChrome)
 	activeRoot := normalizedMenuSelection(state.TopMenuRootSelected, len(items))
 	addRoot := topRibbonAddRootIndex(items)
 	for i, button := range buttons {
-		style := ansiBgGray + ansiWhite
+		style := themeChrome
 		enabled := topRibbonRootEnabled(items[i], state)
 		if !enabled {
-			style = ansiBgGray + ansiWhite + ansiDim
+			style = themeChrome + themeMuted
 		} else if state.Focus == FocusTop && i == activeRoot {
-			style = ansiBgCyan + ansiWhite + ansiBold
+			style = themeChromeActive
 		}
 		if state.TopMenuOpen && i == addRoot {
-			style = ansiBgCyan + ansiWhite + ansiBold
+			style = themeChromeActive
 		}
 		g.Text(button.X, button.Y, fit(" "+topMenuLabel(items[i])+" ", button.W), style)
 	}
+	drawTopRibbonContext(g, m, bounds, state, buttons)
 	if !state.TopMenuOpen || len(buttons) == 0 {
 		return
 	}
@@ -110,6 +161,55 @@ func drawTopRibbon(g *grid, bounds rect, state ViewState) {
 		return
 	}
 	drawMenuColumn(g, menu, true, false, "", 0, false, false, false, false, false)
+}
+
+func drawTopRibbonContext(g *grid, m Model, bounds rect, state ViewState, buttons []rect) {
+	if bounds.W < 72 {
+		return
+	}
+	leftLimit := 0
+	if len(buttons) > 0 {
+		last := buttons[len(buttons)-1]
+		leftLimit = last.X + last.W + 1
+	}
+	context := topRibbonContext(m, state)
+	if state.StatusRefreshing {
+		context = spinner(state.AnimationFrame) + " " + context
+	}
+	if context == "" {
+		return
+	}
+	width := runeLen(context) + 2
+	x := bounds.X + bounds.W - width
+	if x <= leftLimit {
+		return
+	}
+	g.Text(x, bounds.Y, fit(" "+context+" ", width), themeChrome+themeMuted)
+}
+
+func topRibbonContext(m Model, state ViewState) string {
+	mode := "graph"
+	switch {
+	case state.CommandMode:
+		mode = "command"
+	case state.MoveMode:
+		mode = "move"
+	case state.ConnectMode:
+		mode = "connect"
+	case state.ContextMenu:
+		mode = "menu"
+	case state.Focus == FocusTop:
+		mode = "top"
+	}
+	parts := []string{}
+	if m.ID != "" {
+		parts = append(parts, "lab "+m.ID)
+	}
+	if node, ok := selectedNode(m, state.Selected); ok {
+		parts = append(parts, NodeKind(node.Type)+" "+firstNonEmpty(node.Label, node.ID))
+	}
+	parts = append(parts, "mode:"+mode)
+	return strings.Join(parts, " | ")
 }
 
 func drawConnectTargetMenu(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect) {
@@ -194,10 +294,10 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 				item = contextEditLabel(item, editValue, editCursor)
 			}
 		}
-		rowStyle := ansiBgGray + ansiWhite
+		rowStyle := themeMenuRow
 		indicatorStyle := rowStyle
 		if isActive && i == active {
-			rowStyle += ansiBold
+			rowStyle = themeMenuActive
 			indicatorStyle = ansiBgCyan
 		}
 		fillRow(g, menu.X, menu.Y+row, menu.W, rowStyle)
@@ -315,11 +415,33 @@ func drawContextPlaceholder(g *grid, x, y int, item, rowStyle string) {
 }
 
 func drawConsole(g *grid, state ViewState, width, height int) {
-	line := state.Message
-	if line == "" {
-		line = "Space/menu click opens actions"
+	drawConsoleLines(g, []string{consoleLine(state)}, width, height, state.CommandMode)
+}
+
+func consoleLine(state ViewState) string {
+	if state.Message != "" {
+		if animatedStateFromMessage(state.Message) {
+			return spinner(state.AnimationFrame) + " " + state.Message
+		}
+		return state.Message
 	}
-	drawConsoleLines(g, []string{line}, width, height, false)
+	if state.StatusRefreshing {
+		return spinner(state.AnimationFrame) + " refreshing runtime status"
+	}
+	switch {
+	case state.CommandMode:
+		return ": command | Enter run | Esc cancel"
+	case state.MoveMode:
+		return "move: arrows/hjkl reposition | Enter save | Esc cancel"
+	case state.ConnectMode:
+		return "connect: choose target | Enter/click confirm | Esc cancel"
+	case state.ContextMenu:
+		return "menu: arrows/hjkl navigate | Enter/click select | Esc close"
+	case state.Focus == FocusTop:
+		return "top: arrows choose | Enter open | Tab graph | Space/menu click opens actions"
+	default:
+		return "graph: arrows/hjkl select | Space/menu click opens actions | : commands"
+	}
 }
 
 func drawConsoleLines(g *grid, lines []string, width, height int, commandMode bool) {
@@ -327,9 +449,9 @@ func drawConsoleLines(g *grid, lines []string, width, height int, commandMode bo
 	y := height - maxLines
 	for i := 0; i < maxLines; i++ {
 		line := lines[len(lines)-maxLines+i]
-		style := ansiBgGray + ansiWhite
+		style := themeFooter
 		if commandMode && i == maxLines-1 {
-			style += ansiBold
+			style = themeFooterActive
 		}
 		fillRow(g, 0, y+i, width, style)
 		g.Text(1, y+i, fit(line, width-2), style)
@@ -347,16 +469,5 @@ func drawMouseClickFeedback(g *grid, state ViewState) {
 		for x := state.MouseClickX; x < state.MouseClickX+w; x++ {
 			g.SetStyle(x, y, style)
 		}
-	}
-}
-
-func stateStyle(state string) string {
-	switch state {
-	case "running", "link":
-		return ansiCyan
-	case "nat", "bridge", "direct", "macnat", "macnat-bridge":
-		return ansiYellow
-	default:
-		return ansiDim
 	}
 }

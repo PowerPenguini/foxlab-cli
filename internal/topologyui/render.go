@@ -52,11 +52,11 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 			continue
 		}
 		planner.reserve(visible.route)
-		drawRoutedEdge(g, visible.route, ansiDim)
+		drawRoutedEdge(g, visible.route, routeStyle(m, state, visible.edge))
 	}
 	moveRoutes := movingNodeRoutes(m, state, nodeRects, graph)
 	for _, visible := range moveRoutes {
-		drawRoutedEdge(g, visible.route, ansiDim)
+		drawRoutedEdge(g, visible.route, routeStyle(m, state, visible.edge))
 	}
 	drawConnectPreview(g, m, state, nodeRects, graph, planner)
 	selectedIndex := normalizedSelected(m, state.Selected)
@@ -66,24 +66,24 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 		}
 		nodeRect := nodeRects[node.Key()]
 		if rectFullyVisible(nodeRect, graph) {
-			drawNode(g, node, nodeRect, false, state.Focus == FocusGraph)
+			drawNode(g, node, nodeRect, false, state.Focus == FocusGraph, state.AnimationFrame)
 		}
 	}
 	if len(m.Nodes) > 0 {
 		node := m.Nodes[selectedIndex]
 		nodeRect := nodeRects[node.Key()]
 		if rectFullyVisible(nodeRect, graph) {
-			drawNode(g, node, nodeRect, true, state.Focus == FocusGraph)
+			drawNode(g, node, nodeRect, true, state.Focus == FocusGraph, state.AnimationFrame)
 		}
 	}
 	for _, visible := range visibleEdges {
 		if routeTouchesMovingNode(visible.edge, state) {
 			continue
 		}
-		drawRoutedEdgePorts(g, visible.route)
+		drawRoutedEdgePortsStyled(g, visible.route, routeStyle(m, state, visible.edge))
 	}
 	for _, visible := range moveRoutes {
-		drawRoutedEdgePorts(g, visible.route)
+		drawRoutedEdgePortsStyled(g, visible.route, routeStyle(m, state, visible.edge))
 	}
 	for i, node := range m.Nodes {
 		if i == selectedIndex {
@@ -101,10 +101,25 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 			styleBoxBorder(g, nodeRect, selectedBorderStyle(true, state.Focus == FocusGraph))
 		}
 	}
-	drawTopRibbon(g, graph, state)
+	drawTopRibbon(g, m, graph, state)
 	drawContextMenu(g, m, state, nodeRects, graph)
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)
 	drawConsole(g, state, width, height)
 	drawMouseClickFeedback(g, state)
 	return g
+}
+
+func routeStyle(m Model, state ViewState, edge Edge) string {
+	if state.Focus != FocusGraph {
+		return themeRoute
+	}
+	node, ok := selectedNode(m, state.Selected)
+	if !ok {
+		return themeRoute
+	}
+	key := node.Key()
+	if edge.From == key || edge.To == key {
+		return themeRouteActive
+	}
+	return themeRoute
 }

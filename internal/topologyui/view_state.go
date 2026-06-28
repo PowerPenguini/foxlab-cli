@@ -39,6 +39,8 @@ type ViewState struct {
 	TopMenuOpen         bool
 	TopMenuSelected     int
 	ApplyLabDisabled    bool
+	StatusRefreshing     bool
+	AnimationFrame      int
 	MouseClickActive    bool
 	MouseClickX         int
 	MouseClickY         int

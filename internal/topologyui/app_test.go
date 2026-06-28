@@ -2102,12 +2102,13 @@ func TestInteractiveRunEntersAltScreenBeforeRendering(t *testing.T) {
 	}
 
 	got := outputFileString(t, app.Out)
-	frameStart := strings.Index(got, "[VM] router")
+	frameStart := strings.Index(got, "[VM]")
+	labelStart := strings.Index(got, "router")
 	altStart := strings.Index(got, ansiEnterAltScreen)
 	if altStart == -1 {
 		t.Fatalf("interactive output missing enter alt-screen sequence: %q", got)
 	}
-	if frameStart == -1 {
+	if frameStart == -1 || labelStart == -1 {
 		t.Fatalf("interactive output missing rendered frame: %q", got)
 	}
 	if altStart > frameStart {
@@ -2755,6 +2756,24 @@ func TestReadAppKeyQueuesPastedText(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("readAppKey after queue = %q, want empty", got)
+	}
+}
+
+func TestReadAppKeyTimesOutForAnimationTick(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	app := App{In: r}
+	got, err := readAppKey(&app)
+	if err != nil {
+		t.Fatalf("readAppKey err=%v", err)
+	}
+	if got != "" {
+		t.Fatalf("readAppKey = %q, want empty timeout key", got)
 	}
 }
 

@@ -125,6 +125,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	}()
 	dirty := true
 	lastWidth, lastHeight := 0, 0
+	lastAnimation := time.Now()
 	statusRefreshInterval := a.statusRefreshInterval()
 	nextStatusRefresh := time.Now().Add(statusRefreshInterval)
 	statusRefreshActive := false
@@ -133,10 +134,18 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		if a.drainStatusUpdates(statusUpdates, &statusRefreshActive) {
 			dirty = true
 		}
+		a.State.StatusRefreshing = statusRefreshActive
 		if !statusRefreshActive && a.Lab != nil && time.Now().After(nextStatusRefresh) {
 			nextStatusRefresh = time.Now().Add(statusRefreshInterval)
 			statusRefreshActive = true
+			a.State.StatusRefreshing = true
 			a.startStatusRefresh(ctx, statusUpdates)
+			dirty = true
+		}
+		if a.animationActive() && time.Since(lastAnimation) >= spinnerInterval {
+			a.State.AnimationFrame++
+			lastAnimation = time.Now()
+			dirty = true
 		}
 		width, height := size(a)
 		a.ViewWidth = width
@@ -208,6 +217,29 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		dirty = true
 	}
+}
+
+func (a *App) animationActive() bool {
+	if a.State.StatusRefreshing {
+		return true
+	}
+	if animatedStateFromMessage(a.State.Message) {
+		return true
+	}
+	for _, node := range a.Model.Nodes {
+		if animatedState(node.State) {
+			return true
+		}
+	}
+	return false
+}
+
+func animatedStateFromMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.HasPrefix(message, "applying ") ||
+		strings.HasPrefix(message, "loading ") ||
+		strings.HasPrefix(message, "pulling ") ||
+		strings.HasPrefix(message, "refreshing ")
 }
 
 func (a *App) statusRefreshInterval() time.Duration {

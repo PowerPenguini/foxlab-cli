@@ -13,7 +13,7 @@ func TestRenderMockFrame(t *testing.T) {
 		"[VM] router",
 		"[SW] edge",
 		"[IF] wlp0s20f3",
-		"┌",
+		"╭",
 		"─",
 		"│",
 	} {
@@ -105,8 +105,8 @@ func TestDrawRoutePortUsesCornerWhereEdgeTurnsIntoNodeStub(t *testing.T) {
 	g.SetLine(fromLeft.entry.X, fromLeft.entry.Y, lineLeft, ansiDim)
 	g.SetLine(fromRight.entry.X, fromRight.entry.Y, lineRight, ansiDim)
 
-	drawRoutePort(g, fromLeft)
-	drawRoutePort(g, fromRight)
+	drawRoutePort(g, fromLeft, themeRoute)
+	drawRoutePort(g, fromRight, themeRoute)
 
 	if got := g.Cells[fromLeft.entry.Y*g.Width+fromLeft.entry.X].Ch; got != boxTopRight {
 		t.Fatalf("entry reached from left = %q, want corner %q", got, boxTopRight)
@@ -167,7 +167,7 @@ func TestRenderAvoidsCrossingNearSharedTarget(t *testing.T) {
 	g := renderGrid(m, ViewState{Focus: FocusGraph}, 90, 22)
 	rects := layoutNodeRects(m, rect{X: 0, Y: 0, W: 90, H: 22})
 	hello := rects[NodeKey(NodeVM, "hello")]
-	if got := g.Cells[hello.Y*g.Width+hello.X].Ch; got != boxTopLeft {
+	if got := g.Cells[hello.Y*g.Width+hello.X].Ch; got != '╭' {
 		t.Fatalf("hello top-left corner was used as a connection: %q\n%s", got, g.String(false))
 	}
 }
@@ -315,6 +315,21 @@ func TestRenderSelectedRouteKeepsBorderStyle(t *testing.T) {
 	}
 }
 
+func TestRenderSelectedRouteUsesActiveStyle(t *testing.T) {
+	m := MockModel()
+	g := renderGrid(m, ViewState{Selected: 0, Focus: FocusGraph}, 100, 30)
+	found := false
+	for _, cell := range g.Cells {
+		if cell.Line != 0 && cell.Style == themeRouteActive {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("selected route was not rendered with active style:\n%s", g.String(true))
+	}
+}
+
 func TestRenderNodeBordersKeepUniformStyleAfterEdges(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
@@ -395,6 +410,31 @@ func TestRenderTopFocusDoesNotHighlightSelectedNode(t *testing.T) {
 	}
 }
 
+func TestRenderTopRibbonShowsContextOnWideTerminals(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 100, 30, false)
+	if !strings.Contains(out, "lab mock | VM router | mode:graph") {
+		t.Fatalf("render missing top context:\n%s", out)
+	}
+}
+
+func TestRenderShowsModernSpinnersForProgressStates(t *testing.T) {
+	m := Model{
+		ID:    "demo",
+		Nodes: []Node{{ID: "vm1", Type: NodeVM, Badge: "VM", Label: "vm1", State: "starting", X: 4, Y: 3}},
+	}
+	state := ViewState{Selected: 0, Focus: FocusGraph, StatusRefreshing: true, AnimationFrame: 1}
+	out := RenderString(m, state, 100, 20, false)
+	for _, want := range []string{
+		spinner(1) + " starting",
+		spinner(1) + " lab demo | VM vm1 | mode:graph",
+		spinner(1) + " refreshing runtime status",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing spinner text %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderSelectedOverlappingNodeStaysOnTop(t *testing.T) {
 	m := Model{Nodes: []Node{
 		{ID: "first", Type: NodeVM, Badge: "VM", Label: "first", State: "defined", X: 4, Y: 3},
@@ -462,9 +502,9 @@ func TestRenderSkipsEdgesWithOffscreenEndpoints(t *testing.T) {
 	}
 	if strings.Contains(out, "─") || strings.Contains(out, "│") {
 		clean := strings.ReplaceAll(out, "│[VM] visible  │", "")
-		clean = strings.ReplaceAll(clean, "│defined       │", "")
-		clean = strings.ReplaceAll(clean, "┌──────────────┐", "")
-		clean = strings.ReplaceAll(clean, "└──────────────┘", "")
+		clean = strings.ReplaceAll(clean, "│◌ defined     │", "")
+		clean = strings.ReplaceAll(clean, "╭──────────────╮", "")
+		clean = strings.ReplaceAll(clean, "╰──────────────╯", "")
 		if strings.Contains(clean, "─") || strings.Contains(clean, "│") {
 			t.Fatalf("render drew edge to offscreen endpoint:\n%s", out)
 		}

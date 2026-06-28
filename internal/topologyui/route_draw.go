@@ -6,7 +6,7 @@ func drawEdge(g *grid, from, to rect, bounds rect) (edgeRoute, bool) {
 	if !ok {
 		return edgeRoute{}, false
 	}
-	drawRoutedEdge(g, route, ansiDim)
+	drawRoutedEdge(g, route, themeRoute)
 	return route, true
 }
 
@@ -20,13 +20,17 @@ func drawRoutedEdge(g *grid, route edgeRoute, style string) {
 }
 
 func drawRoutedEdgePorts(g *grid, route edgeRoute) {
-	drawRoutePort(g, route.start)
-	drawRoutePort(g, route.end)
+	drawRoutedEdgePortsStyled(g, route, themeRoute)
 }
 
-func drawRoutePort(g *grid, port routePort) {
-	g.SetLine(port.border.X, port.border.Y, maskBetween(port.border, port.entry), ansiDim)
-	g.SetLine(port.entry.X, port.entry.Y, maskBetween(port.entry, port.border), ansiDim)
+func drawRoutedEdgePortsStyled(g *grid, route edgeRoute, style string) {
+	drawRoutePort(g, route.start, style)
+	drawRoutePort(g, route.end, style)
+}
+
+func drawRoutePort(g *grid, port routePort, style string) {
+	g.SetLine(port.border.X, port.border.Y, maskBetween(port.border, port.entry), style)
+	g.SetLine(port.entry.X, port.entry.Y, maskBetween(port.entry, port.border), style)
 }
 
 func drawDashedRoute(g *grid, route edgeRoute) {
@@ -39,7 +43,7 @@ func drawDashedRoute(g *grid, route edgeRoute) {
 		if mask&(lineUp|lineDown) != 0 && mask&(lineLeft|lineRight) == 0 {
 			ch = previewLineVertical
 		}
-		g.Set(point.X, point.Y, ch, ansiDim+ansiBrightCyan)
+		g.Set(point.X, point.Y, ch, themeRoutePreview)
 	}
 }
 

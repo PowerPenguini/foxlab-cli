@@ -3,6 +3,7 @@ package topologyui
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -19,6 +20,9 @@ func readAppKey(a *App) (string, error) {
 		a.pendingKeys = a.pendingKeys[1:]
 		return key, nil
 	}
+	if ok, err := waitReadable(int(a.In.Fd()), spinnerInterval); err != nil || !ok {
+		return "", err
+	}
 	keys, err := readKeys(int(a.In.Fd()), a.State.ContextEdit)
 	if err != nil || len(keys) == 0 {
 		return "", err
@@ -27,6 +31,25 @@ func readAppKey(a *App) (string, error) {
 		a.pendingKeys = append(a.pendingKeys, keys[1:]...)
 	}
 	return keys[0], nil
+}
+
+func waitReadable(fd int, timeout time.Duration) (bool, error) {
+	ms := int(timeout / time.Millisecond)
+	if ms < 0 {
+		ms = 0
+	}
+	pollFDs := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	n, err := unix.Poll(pollFDs, ms)
+	if err != nil {
+		if err == unix.EINTR {
+			return false, nil
+		}
+		return false, err
+	}
+	if n <= 0 {
+		return false, nil
+	}
+	return pollFDs[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0, nil
 }
 
 func readKey(fd int, commandMode bool) (string, error) {
