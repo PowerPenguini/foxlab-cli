@@ -44,6 +44,7 @@ func (a *App) handleKey(key string) bool {
 			a.State.ContextGroup = ""
 			a.State.ContextInSubmenu = false
 			a.State.ContextSelected = 0
+			a.State.closeContextSelectMenu()
 		}
 	}
 	return false

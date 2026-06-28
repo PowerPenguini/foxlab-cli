@@ -30,7 +30,7 @@ func planRenderRoutes(m Model, width, height int) (map[string]rect, []visibleEdg
 	if height < minHeight {
 		height = minHeight
 	}
-	graph := rect{X: 0, Y: 0, W: width, H: height}
+	graph := graphBounds(width, height)
 	nodeRects := layoutNodeRects(m, graph)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
 	return nodeRects, planVisibleRoutes(planner, m.Edges, nodeRects, graph)
@@ -44,7 +44,8 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 		height = minHeight
 	}
 	g := newGrid(width, height)
-	graph := rect{X: 0, Y: 0, W: width, H: height}
+	canvas := rect{X: 0, Y: 0, W: width, H: height}
+	graph := graphBounds(width, height)
 	nodeRects := layoutNodeRects(m, graph)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
 	for _, visible := range visibleEdges {
@@ -101,12 +102,29 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 			styleBoxBorder(g, nodeRect, selectedBorderStyle(true, state.Focus == FocusGraph))
 		}
 	}
-	drawTopRibbon(g, m, graph, state)
+	drawInspector(g, m, state, inspectorBounds(width, height))
+	drawTopRibbon(g, m, canvas, state)
 	drawContextMenu(g, m, state, nodeRects, graph)
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)
 	drawConsole(g, state, width, height)
 	drawMouseClickFeedback(g, state)
 	return g
+}
+
+func graphBounds(width, height int) rect {
+	bounds := rect{X: 0, Y: 0, W: width, H: height}
+	if panel := inspectorBounds(width, height); panel.W > 0 {
+		bounds.W = max(minWidth, panel.X-1)
+	}
+	return bounds
+}
+
+func inspectorBounds(width, height int) rect {
+	if width < 112 || height < 18 {
+		return rect{}
+	}
+	panelW := min(32, max(28, width/4))
+	return rect{X: width - panelW, Y: 1, W: panelW, H: height - 2}
 }
 
 func routeStyle(m Model, state ViewState, edge Edge) string {

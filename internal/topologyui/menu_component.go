@@ -25,9 +25,11 @@ type menuColumnLayout struct {
 }
 
 type menuLayout struct {
-	root   menuColumnLayout
-	sub    menuColumnLayout
-	hasSub bool
+	root      menuColumnLayout
+	sub       menuColumnLayout
+	hasSub    bool
+	selectBox menuColumnLayout
+	hasSelect bool
 }
 
 func menuItemsFromLabels(labels []string) []MenuItem {
@@ -150,6 +152,36 @@ func layoutSubmenu(bounds rect, root menuColumnLayout, items []MenuItem, selecte
 	}, true
 }
 
+func layoutSelectMenu(bounds rect, anchor menuColumnLayout, items []MenuItem, selected int) (menuColumnLayout, bool) {
+	if len(items) == 0 {
+		return menuColumnLayout{}, false
+	}
+	labels := menuItemLabels(items)
+	menuH := min(len(items), max(1, bounds.H))
+	active := normalizedMenuSelection(selected, len(items))
+	start := contextMenuStart(active, len(items), menuH)
+	menuW := contextMenuWidthWithKinds(labels, menuItemKinds(items))
+	x := anchor.rect.X + anchor.rect.W
+	if x+menuW > bounds.X+bounds.W {
+		x = anchor.rect.X - menuW
+	}
+	x = clamp(x, bounds.X, bounds.X+bounds.W-menuW)
+	y := anchor.rect.Y + (anchor.selected - anchor.start)
+	if y < bounds.Y {
+		y = bounds.Y
+	}
+	if y+menuH > bounds.Y+bounds.H {
+		y = bounds.Y + bounds.H - menuH
+	}
+	y = clamp(y, bounds.Y, bounds.Y+bounds.H-menuH)
+	return menuColumnLayout{
+		rect:     rect{X: x, Y: y, W: menuW, H: menuH},
+		start:    start,
+		selected: active,
+		items:    items,
+	}, true
+}
+
 func layoutDropdownMenu(bounds, anchor rect, items []MenuItem, selected int) (menuColumnLayout, bool) {
 	if len(items) == 0 {
 		return menuColumnLayout{}, false
@@ -227,7 +259,32 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 	}
 	layout.sub = sub
 	layout.hasSub = true
+	if state.ContextSelectGroup == "" || !contextSelectGroupBelongsToSub(node, subLabels, sub.selected, state.ContextSelectGroup) {
+		return layout, node, hasNode, true
+	}
+	selectLabels := contextMenuItems(node, state.ContextSelectGroup)
+	selectBox, ok := layoutSelectMenu(bounds, sub, menuItemsFromLabels(selectLabels), state.ContextSelectSelected)
+	if !ok {
+		return layout, node, hasNode, true
+	}
+	layout.selectBox = selectBox
+	layout.hasSelect = true
 	return layout, node, hasNode, true
+}
+
+func contextSelectGroupBelongsToSub(node Node, subItems []string, selected int, selectGroup string) bool {
+	if len(subItems) == 0 {
+		return false
+	}
+	item := subItems[normalizedMenuSelection(selected, len(subItems))]
+	switch selectGroup {
+	case "interface-menu":
+		return isExternalInterfaceField(node, item)
+	case "mode-menu":
+		return isExternalModeField(node, item)
+	default:
+		return false
+	}
 }
 
 func contextMenuEditWidth(state ViewState, contextGroup string, subItems, subKinds []string) int {

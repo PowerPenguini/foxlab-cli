@@ -25,6 +25,8 @@ func (s *ViewState) closeContextMenu() {
 	s.ContextGroup = ""
 	s.ContextInSubmenu = false
 	s.ContextSubSelected = 0
+	s.ContextSelectGroup = ""
+	s.ContextSelectSelected = 0
 	s.clearContextEditState()
 	s.clearContextRowState()
 	s.clearContextMenuCache()
@@ -34,6 +36,12 @@ func (s *ViewState) closeContextSubmenu() {
 	s.ContextGroup = ""
 	s.ContextInSubmenu = false
 	s.ContextSubSelected = 0
+	s.closeContextSelectMenu()
 	s.clearContextRowState()
 	s.clearContextMenuCache()
+}
+
+func (s *ViewState) closeContextSelectMenu() {
+	s.ContextSelectGroup = ""
+	s.ContextSelectSelected = 0
 }

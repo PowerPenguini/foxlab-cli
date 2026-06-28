@@ -39,27 +39,42 @@ func (a *App) handleMouseKey(key string) bool {
 	if a.State.ConnectTargetMenu {
 		return a.handleConnectTargetMouse(event)
 	}
-	if event.y == 0 || a.State.TopMenuOpen {
+	if event.y == 0 {
 		return a.handleTopMenuMouse(event)
 	}
+	if a.State.TopMenuOpen && a.mouseInTopMenuDropdown(event) {
+		return a.handleTopMenuMouse(event)
+	}
+	if a.State.TopMenuOpen {
+		a.State.TopMenuOpen = false
+	}
 	if a.State.ContextMenu {
-		return a.handleContextMenuMouse(event)
+		if a.mouseInContextMenu(event) {
+			return a.handleContextMenuMouse(event)
+		}
+		a.State.closeContextMenu()
 	}
 	if a.State.ConnectMode {
 		if index, ok := a.nodeIndexAt(event.x, event.y); ok {
+			a.State.Focus = FocusGraph
 			a.State.Selected = index
 			return a.handleConnectKey("enter")
 		}
 		return false
 	}
 	if index, ok := a.nodeIndexAt(event.x, event.y); ok {
+		a.State.Focus = FocusGraph
 		a.State.Selected = index
 		a.State.ContextMenu = true
 		a.State.ContextGroup = ""
 		a.State.ContextInSubmenu = false
 		a.State.ContextSelected = 0
 		a.State.ContextSubSelected = 0
+		a.State.closeContextSelectMenu()
 		return false
+	}
+	if xyInRect(event.x, event.y, a.graphBounds()) {
+		a.State.Focus = FocusGraph
 	}
 	return false
 }
@@ -112,7 +127,7 @@ func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
 		}
 	}
 	if index, ok := a.nodeIndexAt(event.x, event.y); ok {
-		nodeRects := layoutNodeRects(a.Model, rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight})
+		nodeRects := layoutNodeRects(a.Model, a.graphBounds())
 		if r, rectOK := nodeRects[a.Model.Nodes[index].Key()]; rectOK {
 			return r, true
 		}
@@ -154,10 +169,18 @@ func (a *App) topMenuDropdownLayout() (menuColumnLayout, bool) {
 	return layoutDropdownMenu(rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}, rootRects[addIndex], menuItemsFromLabels(items), a.State.TopMenuSelected)
 }
 
+func (a *App) mouseInTopMenuDropdown(event mouseEvent) bool {
+	menu, ok := a.topMenuDropdownLayout()
+	return ok && xyInRect(event.x, event.y, menu.rect)
+}
+
 func (a *App) contextMenuFeedbackRect(event mouseEvent) (rect, bool) {
 	layout, _, _, ok := a.currentContextMenuLayout()
 	if !ok {
 		return rect{}, false
+	}
+	if layout.hasSelect && xyInRect(event.x, event.y, layout.selectBox.rect) {
+		return rect{X: layout.selectBox.rect.X, Y: event.y, W: layout.selectBox.rect.W, H: 1}, true
 	}
 	if layout.hasSub && xyInRect(event.x, event.y, layout.sub.rect) {
 		if r, ok := a.contextSubmenuActionButtonRect(layout, event); ok {
@@ -215,7 +238,7 @@ func (a *App) connectTargetFeedbackRect(event mouseEvent) (rect, bool) {
 }
 
 func (a *App) connectTargetMenuLayout() (menuColumnLayout, bool) {
-	bounds := rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}
+	bounds := a.graphBounds()
 	nodeRects := layoutNodeRects(a.Model, bounds)
 	node, ok := a.connectTargetNode()
 	if !ok {
@@ -233,7 +256,7 @@ func (a *App) connectTargetMenuLayout() (menuColumnLayout, bool) {
 }
 
 func (a *App) nodeIndexAt(x, y int) (int, bool) {
-	bounds := rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}
+	bounds := a.graphBounds()
 	nodeRects := layoutNodeRects(a.Model, bounds)
 	for i, node := range a.Model.Nodes {
 		r, ok := nodeRects[node.Key()]
@@ -249,12 +272,29 @@ func xyInRect(x, y int, r rect) bool {
 }
 
 func (a *App) currentContextMenuLayout() (menuLayout, Node, bool, bool) {
-	bounds := rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}
+	bounds := a.graphBounds()
 	nodeRects := layoutNodeRects(a.Model, bounds)
 	return contextMenuLayoutFor(a.Model, a.State, nodeRects, bounds)
 }
 
+func (a *App) mouseInContextMenu(event mouseEvent) bool {
+	layout, _, _, ok := a.currentContextMenuLayout()
+	if !ok {
+		return false
+	}
+	return xyInRect(event.x, event.y, layout.root.rect) ||
+		(layout.hasSub && xyInRect(event.x, event.y, layout.sub.rect)) ||
+		(layout.hasSelect && xyInRect(event.x, event.y, layout.selectBox.rect))
+}
+
+func (a *App) graphBounds() rect {
+	return graphBounds(a.ViewWidth, a.ViewHeight)
+}
+
 func (a *App) handleTopMenuMouse(event mouseEvent) bool {
+	if event.y == 0 {
+		a.State.Focus = FocusTop
+	}
 	rootItems := topRibbonRootItems()
 	rootRects := topMenuButtonRects(rootItems, a.ViewWidth)
 	for i, button := range rootRects {

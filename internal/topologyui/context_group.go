@@ -2,6 +2,7 @@ package topologyui
 
 func (a *App) setContextGroup(group string, node Node, ok bool) {
 	a.State.ContextGroup = group
+	a.State.closeContextSelectMenu()
 	a.State.clearContextRowState()
 	if group == "disk-menu" && ok {
 		a.State.DiskMenuItems = a.diskMenuItems(node)
@@ -10,4 +11,10 @@ func (a *App) setContextGroup(group string, node Node, ok bool) {
 		return
 	}
 	a.State.clearContextMenuCache()
+}
+
+func (a *App) setContextSelectGroup(group string) {
+	a.State.ContextSelectGroup = group
+	a.State.ContextSelectSelected = 0
+	a.State.clearContextRowState()
 }

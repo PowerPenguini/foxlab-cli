@@ -427,11 +427,13 @@ func TestRenderShowsModernSpinnersForProgressStates(t *testing.T) {
 	for _, want := range []string{
 		spinner(1) + " starting",
 		spinner(1) + " lab demo | VM vm1 | mode:graph",
-		spinner(1) + " refreshing runtime status",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing spinner text %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "refreshing runtime status") {
+		t.Fatalf("render shows refresh text in bottom console:\n%s", out)
 	}
 }
 
@@ -584,6 +586,48 @@ func TestRenderContextSubmenuHasNoGap(t *testing.T) {
 	}
 	if !strings.Contains(out, "Configuration >   Run") {
 		t.Fatalf("expected context submenu to sit next to node menu:\n%s", out)
+	}
+}
+
+func TestRenderWideInspectorShowsSelectedNodeDetails(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
+	for _, want := range []string{
+		"[VM] router",
+		"state  ● running",
+		"cpu    2",
+		"mem    2G",
+		"actions Space menu",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("wide render missing inspector detail %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderInspectorSeparatesNodeTypeAndName(t *testing.T) {
+	m := Model{
+		ID: "demo",
+		Nodes: []Node{{
+			ID:      "kali",
+			Type:    NodeContainer,
+			Badge:   "CT",
+			Label:   "Kali",
+			State:   "running",
+			X:       4,
+			Y:       3,
+			Details: []string{"image=docker.io/kalilinux/kali-rolling:latest"},
+		}},
+	}
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
+	if !strings.Contains(out, "[CT] Kali") {
+		t.Fatalf("render missing separated inspector header:\n%s", out)
+	}
+	ansiOut := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, true)
+	if !strings.Contains(ansiOut, nodeBadgeStyle(NodeContainer)+"[CT]") {
+		t.Fatalf("ANSI render missing CT badge style:\n%q", ansiOut)
+	}
+	if !strings.Contains(ansiOut, nodeLabelStyle(NodeContainer)+"Kali") {
+		t.Fatalf("ANSI render missing separate container label style:\n%q", ansiOut)
 	}
 }
 
@@ -997,6 +1041,9 @@ func TestRenderContextMenuANSIStyle(t *testing.T) {
 			t.Fatalf("ANSI render missing context menu style %q:\n%q", want, out)
 		}
 	}
+	if strings.Contains(out, ansiBrightCyan+"Configuration") || strings.Contains(out, "▸") {
+		t.Fatalf("ANSI render contains unwanted menu accent:\n%q", out)
+	}
 }
 
 func TestContextMenuStartCalculatesVisibleWindow(t *testing.T) {
@@ -1250,14 +1297,18 @@ func TestRenderExternalInterfaceChoiceMenu(t *testing.T) {
 		ID:            "demo",
 		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
 	})
+	node := m.Nodes[0]
 	out := RenderString(m, ViewState{
-		Focus:            FocusGraph,
-		Selected:         0,
-		ContextMenu:      true,
-		ContextGroup:     "interface-menu",
-		ContextInSubmenu: true,
+		Focus:                 FocusGraph,
+		Selected:              0,
+		ContextMenu:           true,
+		ContextGroup:          "config-menu",
+		ContextInSubmenu:      true,
+		ContextSubSelected:    externalInterfaceFieldIndex(node),
+		ContextSelectGroup:    "interface-menu",
+		ContextSelectSelected: 0,
 	}, 100, 30, false)
-	if !strings.Contains(out, "br0") || !strings.Contains(out, "eth0") {
+	if !strings.Contains(out, "Interface   eth0") || !strings.Contains(out, "br0") || !strings.Contains(out, "eth0") {
 		t.Fatalf("render missing interface choices:\n%s", out)
 	}
 }
@@ -1267,13 +1318,20 @@ func TestRenderExternalModeChoiceMenu(t *testing.T) {
 		ID:            "demo",
 		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT}},
 	})
+	node := m.Nodes[0]
 	out := RenderString(m, ViewState{
-		Focus:            FocusGraph,
-		Selected:         0,
-		ContextMenu:      true,
-		ContextGroup:     "mode-menu",
-		ContextInSubmenu: true,
+		Focus:                 FocusGraph,
+		Selected:              0,
+		ContextMenu:           true,
+		ContextGroup:          "config-menu",
+		ContextInSubmenu:      true,
+		ContextSubSelected:    externalModeFieldIndex(node),
+		ContextSelectGroup:    "mode-menu",
+		ContextSelectSelected: 0,
 	}, 100, 30, false)
+	if !strings.Contains(out, "Mode        nat") {
+		t.Fatalf("render missing config mode row:\n%s", out)
+	}
 	for _, want := range []string{"nat", "direct", "macnat"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing mode choice %q:\n%s", want, out)

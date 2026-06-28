@@ -371,13 +371,13 @@ func TestExternalInterfaceFieldOpensChoiceMenu(t *testing.T) {
 
 	app.handleKey("enter")
 
-	if app.State.ContextGroup != "interface-menu" || !app.State.ContextInSubmenu {
-		t.Fatalf("context group = %q submenu=%t, want interface-menu submenu", app.State.ContextGroup, app.State.ContextInSubmenu)
+	if app.State.ContextGroup != "config-menu" || app.State.ContextSelectGroup != "interface-menu" || !app.State.ContextInSubmenu {
+		t.Fatalf("context group = %q select=%q submenu=%t, want config-menu/interface-menu submenu", app.State.ContextGroup, app.State.ContextSelectGroup, app.State.ContextInSubmenu)
 	}
 	if app.State.ContextEdit {
 		t.Fatal("interface choice opened inline edit")
 	}
-	items := app.contextMenuSubmenuItems(node, true)
+	items := app.contextMenuSelectItems(node, true)
 	if !reflect.DeepEqual(items, []string{"br0", "eth0"}) {
 		t.Fatalf("interface items = %#v", items)
 	}
@@ -402,12 +402,14 @@ func TestExternalInterfaceChoiceAppliesSelectedInterface(t *testing.T) {
 		Lab:     loaded,
 		LabPath: path,
 		State: ViewState{
-			Focus:              FocusGraph,
-			Selected:           0,
-			ContextMenu:        true,
-			ContextGroup:       "interface-menu",
-			ContextInSubmenu:   true,
-			ContextSubSelected: 0,
+			Focus:                 FocusGraph,
+			Selected:              0,
+			ContextMenu:           true,
+			ContextGroup:          "config-menu",
+			ContextInSubmenu:      true,
+			ContextSubSelected:    externalInterfaceFieldIndex(ModelFromLab(loaded).Nodes[0]),
+			ContextSelectGroup:    "interface-menu",
+			ContextSelectSelected: 0,
 		},
 	}
 
@@ -422,6 +424,55 @@ func TestExternalInterfaceChoiceAppliesSelectedInterface(t *testing.T) {
 	}
 	if app.State.ContextMenu {
 		t.Fatal("interface choice did not close context menu")
+	}
+}
+
+func TestExternalModeFieldOpensThirdMenuAndAppliesChoice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := ModelFromLab(loaded)
+	app := App{
+		Model:   model,
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:              FocusGraph,
+			Selected:           0,
+			ContextMenu:        true,
+			ContextGroup:       "config-menu",
+			ContextInSubmenu:   true,
+			ContextSubSelected: externalModeFieldIndex(model.Nodes[0]),
+		},
+	}
+
+	app.handleKey("enter")
+
+	if app.State.ContextGroup != "config-menu" || app.State.ContextSelectGroup != "mode-menu" {
+		t.Fatalf("context group = %q select=%q, want config-menu/mode-menu", app.State.ContextGroup, app.State.ContextSelectGroup)
+	}
+
+	app.handleKey("down")
+	app.handleKey("enter")
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].Mode != lab.ExternalModeDirect {
+		t.Fatalf("external links = %#v, want direct mode", reloaded.ExternalLinks)
+	}
+	if app.State.ContextMenu {
+		t.Fatal("mode choice did not close context menu")
 	}
 }
 
@@ -2461,6 +2512,62 @@ func TestTabClosesContextMenuAndTogglesFocus(t *testing.T) {
 	}
 	if app.State.ContextDeleteDisk || app.State.DiskMenuItems != nil || app.State.DiskMenuActions != nil || app.State.DiskMenuKinds != nil {
 		t.Fatalf("context menu flags/cache after tab = %#v, want cleared", app.State)
+	}
+}
+
+func TestMouseClickNodeMovesFocusToGraph(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		State:      ViewState{Focus: FocusTop, Selected: 0},
+		ViewWidth:  120,
+		ViewHeight: 30,
+	}
+	rects := layoutNodeRects(app.Model, app.graphBounds())
+	nodeRect := rects[NodeKey(NodeVM, "client01")]
+
+	app.handleKey("mouse:" + strconv.Itoa(nodeRect.X+1) + ":" + strconv.Itoa(nodeRect.Y+1) + ":0")
+
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after node click = %d, want graph", app.State.Focus)
+	}
+	if app.State.Selected != 1 {
+		t.Fatalf("selected after node click = %d, want client01 index 1", app.State.Selected)
+	}
+	if !app.State.ContextMenu {
+		t.Fatal("node click did not open context menu")
+	}
+}
+
+func TestMouseClickWorkspaceMovesFocusToGraph(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		State:      ViewState{Focus: FocusTop, TopMenuOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("mouse:1:2:0")
+
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after workspace click = %d, want graph", app.State.Focus)
+	}
+	if app.State.TopMenuOpen {
+		t.Fatal("workspace click did not close top menu")
+	}
+}
+
+func TestMouseClickTopRowMovesFocusToRibbon(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("mouse:70:0:0")
+
+	if app.State.Focus != FocusTop {
+		t.Fatalf("focus after top row click = %d, want top", app.State.Focus)
 	}
 }
 

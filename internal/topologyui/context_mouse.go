@@ -5,6 +5,16 @@ func (a *App) handleContextMenuMouse(event mouseEvent) bool {
 	if !ok {
 		return false
 	}
+	if layout.hasSelect && xyInRect(event.x, event.y, layout.selectBox.rect) {
+		row, rowOK := menuRowAt(layout.selectBox, event.x, event.y)
+		if !rowOK {
+			return false
+		}
+		a.State.ContextSelectSelected = row
+		selectItems := a.contextMenuSelectItems(node, hasNode)
+		a.handleContextSelectEnter(node, hasNode, selectItems)
+		return false
+	}
 	if layout.hasSub && xyInRect(event.x, event.y, layout.sub.rect) {
 		row, rowOK := menuRowAt(layout.sub, event.x, event.y)
 		if !rowOK {
@@ -12,6 +22,7 @@ func (a *App) handleContextMenuMouse(event mouseEvent) bool {
 		}
 		a.State.ContextInSubmenu = true
 		a.State.ContextSubSelected = row
+		a.State.closeContextSelectMenu()
 		a.applyMouseButtonState(node, layout.sub.rect, event.x)
 		return a.handleContextMenuKey("enter")
 	}

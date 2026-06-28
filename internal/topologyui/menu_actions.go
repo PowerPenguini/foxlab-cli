@@ -105,5 +105,5 @@ func contextGroupBelongsToRoot(rootGroup, group string) bool {
 	if rootGroup == "" || group == "" {
 		return false
 	}
-	return rootGroup == group || (rootGroup == "config-menu" && (group == "interface-menu" || group == "mode-menu"))
+	return rootGroup == group
 }

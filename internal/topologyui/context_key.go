@@ -4,14 +4,18 @@ func (a *App) handleContextMenuKey(key string) bool {
 	node, ok := selectedNode(a.Model, a.State.Selected)
 	rootItems := a.contextMenuRootItems(node, ok)
 	subItems := a.contextMenuSubmenuItems(node, ok)
+	selectItems := a.contextMenuSelectItems(node, ok)
 	if a.State.ContextEdit {
 		return a.handleContextEditKey(key, node, ok, subItems)
 	}
 	switch key {
 	case "up", "down":
 		a.State.clearContextRowState()
-		if a.State.ContextInSubmenu {
+		if a.State.ContextSelectGroup != "" {
+			a.State.ContextSelectSelected = MoveContextSelection(a.State.ContextSelectSelected, len(selectItems), key)
+		} else if a.State.ContextInSubmenu {
 			a.State.ContextSubSelected = MoveContextSelection(a.State.ContextSubSelected, len(subItems), key)
+			a.State.closeContextSelectMenu()
 		} else {
 			a.State.ContextSelected = MoveContextSelection(a.State.ContextSelected, len(rootItems), key)
 			a.setContextGroup("", node, ok)
@@ -20,7 +24,9 @@ func (a *App) handleContextMenuKey(key string) bool {
 	case "space", "escape", "tab":
 		a.State.closeContextMenu()
 	case "enter":
-		if a.State.ContextInSubmenu {
+		if a.State.ContextSelectGroup != "" {
+			a.handleContextSelectEnter(node, ok, selectItems)
+		} else if a.State.ContextInSubmenu {
 			a.handleContextSubmenuEnter(node, ok, subItems)
 		} else {
 			a.handleContextRootEnter(node, ok, rootItems)
@@ -58,14 +64,6 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		a.State.closeContextMenu()
 		return
 	}
-	if ok && a.State.ContextGroup == "interface-menu" {
-		a.selectExternalInterface(node, subItems[selected])
-		return
-	}
-	if ok && a.State.ContextGroup == "mode-menu" {
-		a.selectExternalMode(node, subItems[selected])
-		return
-	}
 	if ok && isBoolContextItem(subItems[selected]) {
 		a.applyContextEdit(node, subItems[selected], toggledBoolValue(contextItemValue(subItems[selected])))
 		return
@@ -79,13 +77,11 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		return
 	}
 	if ok && isExternalInterfaceField(node, subItems[selected]) {
-		a.setContextGroup("interface-menu", node, ok)
-		a.State.ContextSubSelected = 0
+		a.setContextSelectGroup("interface-menu")
 		return
 	}
 	if ok && isExternalModeField(node, subItems[selected]) {
-		a.setContextGroup("mode-menu", node, ok)
-		a.State.ContextSubSelected = 0
+		a.setContextSelectGroup("mode-menu")
 		return
 	}
 	if ok && isEditableContextItem(subItems[selected]) {
@@ -100,6 +96,19 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		a.runGlobalMenuAction(action)
 	}
 	a.State.closeContextMenu()
+}
+
+func (a *App) handleContextSelectEnter(node Node, ok bool, selectItems []string) {
+	if !ok || len(selectItems) == 0 {
+		return
+	}
+	selected := normalizedMenuSelection(a.State.ContextSelectSelected, len(selectItems))
+	switch a.State.ContextSelectGroup {
+	case "interface-menu":
+		a.selectExternalInterface(node, selectItems[selected])
+	case "mode-menu":
+		a.selectExternalMode(node, selectItems[selected])
+	}
 }
 
 func (a *App) handleContextRootEnter(node Node, ok bool, rootItems []string) {
@@ -124,22 +133,27 @@ func (a *App) handleContextRootEnter(node Node, ok bool, rootItems []string) {
 }
 
 func (a *App) handleContextHorizontalKey(node Node, ok bool, key string, rootItems, subItems []string) {
+	if key == "left" && a.State.ContextSelectGroup != "" {
+		a.State.closeContextSelectMenu()
+		return
+	}
 	if a.handleContextHorizontalActionKey(node, key, subItems) {
-		return
-	}
-	if key == "left" && a.State.ContextInSubmenu && a.State.ContextGroup == "interface-menu" {
-		a.setContextGroup("config-menu", node, ok)
-		a.State.ContextSubSelected = externalInterfaceFieldIndex(node)
-		return
-	}
-	if key == "left" && a.State.ContextInSubmenu && a.State.ContextGroup == "mode-menu" {
-		a.setContextGroup("config-menu", node, ok)
-		a.State.ContextSubSelected = externalModeFieldIndex(node)
 		return
 	}
 	if key == "left" && a.State.ContextInSubmenu {
 		a.State.closeContextSubmenu()
 		return
+	}
+	if key == "right" && a.State.ContextInSubmenu && len(subItems) > 0 {
+		selected := normalizedMenuSelection(a.State.ContextSubSelected, len(subItems))
+		if ok && isExternalInterfaceField(node, subItems[selected]) {
+			a.setContextSelectGroup("interface-menu")
+			return
+		}
+		if ok && isExternalModeField(node, subItems[selected]) {
+			a.setContextSelectGroup("mode-menu")
+			return
+		}
 	}
 	if key == "right" && !a.State.ContextInSubmenu {
 		a.setContextGroup(activeRootContextGroup(rootItems, a.State.ContextSelected), node, ok)
@@ -153,4 +167,11 @@ func (a *App) handleContextHorizontalKey(node Node, ok bool, key string, rootIte
 	if ok {
 		a.State.Selected = MoveSelection(a.Model, a.State.Selected, key)
 	}
+}
+
+func (a *App) contextMenuSelectItems(node Node, ok bool) []string {
+	if !ok || a.State.ContextSelectGroup == "" {
+		return nil
+	}
+	return contextMenuItems(node, a.State.ContextSelectGroup)
 }

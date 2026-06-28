@@ -37,7 +37,7 @@ func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int
 	} else {
 		g.Text(contentX, r.Y+1, fit(fullLabel, contentWidth), nodeLabelStyle(node.Type))
 	}
-	g.Text(r.X+1, r.Y+2, fit(displayNodeState(node.State, frame), r.W-2), stateStyleValue)
+	g.Text(r.X+1, r.Y+2, fit(nodeCardLine(node, frame, r.W-2), r.W-2), stateStyleValue)
 }
 
 func drawNodeBox(g *grid, r rect, style string) {
@@ -119,7 +119,10 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 	mergeActionSelected := contextGroup == "disk-menu" && state.ContextMergeDisk
 	detachActionSelected := contextGroup == "disk-menu" && state.ContextDetachDisk
 	addLayerActionSelected := contextGroup == "disk-menu" && state.ContextAddDiskLayer
-	drawMenuColumn(g, layout.sub, state.ContextInSubmenu, state.ContextEdit, state.ContextEditValue, state.ContextEditCursor, deleteActionSelected, mergeActionSelected, detachActionSelected, addLayerActionSelected, contextGroup == "disk-menu")
+	drawMenuColumn(g, layout.sub, state.ContextInSubmenu && !layout.hasSelect, state.ContextEdit, state.ContextEditValue, state.ContextEditCursor, deleteActionSelected, mergeActionSelected, detachActionSelected, addLayerActionSelected, contextGroup == "disk-menu")
+	if layout.hasSelect {
+		drawMenuColumn(g, layout.selectBox, true, false, "", 0, false, false, false, false, false)
+	}
 }
 
 func drawMenuColumn(g *grid, column menuColumnLayout, isActive bool, editing bool, editValue string, editCursor int, deleteButtonSelected bool, mergeButtonSelected bool, detachButtonSelected bool, addLayerButtonSelected bool, diskMenu bool) {
@@ -294,14 +297,23 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 				item = contextEditLabel(item, editValue, editCursor)
 			}
 		}
+		itemAction := action
+		if itemAction == "" {
+			itemAction = contextMenuAction(item)
+		}
 		rowStyle := themeMenuRow
-		indicatorStyle := rowStyle
+		textStyle := rowStyle
+		if isContextInfoItem(item) {
+			textStyle += themeMuted
+		}
 		if isActive && i == active {
 			rowStyle = themeMenuActive
-			indicatorStyle = ansiBgCyan
+			textStyle = rowStyle
 		}
 		fillRow(g, menu.X, menu.Y+row, menu.W, rowStyle)
-		g.Set(menu.X, menu.Y+row, ' ', indicatorStyle)
+		if isActive && i == active {
+			g.Set(menu.X, menu.Y+row, ' ', ansiBgCyan)
+		}
 		textWidth := menu.W - 3
 		if isNICDetail(item) || layerRow {
 			textWidth = max(0, menu.W-6)
@@ -313,7 +325,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			textWidth = max(0, menu.W-12)
 		}
 		renderedItem := fit(item, textWidth)
-		g.Text(menu.X+2, menu.Y+row, renderedItem, rowStyle)
+		g.Text(menu.X+2, menu.Y+row, renderedItem, textStyle)
 		if editing && i == active && editValue == "" {
 			drawContextEditPlaceholder(g, menu.X+2, menu.Y+row, renderedItem, rowStyle)
 		} else if isContextPlaceholderItem(renderedItem) {
@@ -424,9 +436,6 @@ func consoleLine(state ViewState) string {
 			return spinner(state.AnimationFrame) + " " + state.Message
 		}
 		return state.Message
-	}
-	if state.StatusRefreshing {
-		return spinner(state.AnimationFrame) + " refreshing runtime status"
 	}
 	switch {
 	case state.CommandMode:
