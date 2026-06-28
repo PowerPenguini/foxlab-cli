@@ -60,7 +60,11 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
 			return containerNICAttachTarget{}, err
 		}
-		return containerNICAttachTarget{Bridge: l.ManagedSwitchBridgeName(sw)}, nil
+		target := containerNICAttachTarget{Bridge: l.ManagedSwitchBridgeName(sw)}
+		if switchUsesMacNAT(l, sw) {
+			target.Mode = lab.ExternalModeMacNAT
+		}
+		return target, nil
 	}
 	if nic.ExternalLink != "" {
 		link, ok := findExternalLink(l, nic.ExternalLink)

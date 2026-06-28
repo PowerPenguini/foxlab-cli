@@ -44,7 +44,7 @@ func (a *App) vncCommand(node Node) (shellCommand, error) {
 	}
 	port := a.vncPortForVM(node.ID)
 	if port == 0 {
-		if err := a.ensureVNCWorkloadRunning(node); err != nil {
+		if err := a.refreshVNCWorkloadStatus(node); err != nil {
 			return shellCommand{}, err
 		}
 		port = a.vncPortForVM(node.ID)
@@ -105,22 +105,30 @@ func vncViewerUserEnv(u *user.User) []string {
 	return env
 }
 
-func (a *App) ensureVNCWorkloadRunning(node Node) error {
+func (a *App) refreshVNCWorkloadStatus(node Node) error {
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
 		return err
 	}
 	defer closeRuntime()
-	if err := runtime.Start(context.Background(), a.Lab, workloadRef(node.Type, node.ID)); err != nil {
-		return err
-	}
-	if states, err := runtime.States(context.Background(), a.Lab); err == nil {
-		a.WorkloadStates = states
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
+	defer cancel()
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
+	var statesErr error
+	if states, err := runtime.States(ctx, a.Lab); err == nil {
+		a.WorkloadStates = cloneRuntimeStateMap(states)
 		if a.Service != nil {
-			a.Service.States = states
+			a.Service.States = a.WorkloadStates
 		}
+		a.applyWorkloadStates()
+	} else {
+		statesErr = err
 	}
-	if err := a.refreshVNCPortsWithRuntime(context.Background(), runtime); err != nil {
+	if err := a.refreshVNCPortsWithRuntime(ctx, runtime); err != nil {
+		if statesErr != nil {
+			return fmt.Errorf("runtime status unavailable: %w", statesErr)
+		}
 		return err
 	}
 	return nil

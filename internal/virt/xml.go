@@ -289,6 +289,24 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
+func xmlText(value string) string {
+	var buf bytes.Buffer
+	_ = xml.EscapeText(&buf, []byte(value))
+	return buf.String()
+}
+
+func xmlAttr(value string) string {
+	return xmlAttrEscaper.Replace(value)
+}
+
+var xmlAttrEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&apos;",
+)
+
 func natIPv4Range(labID, switchID string) (address, start, end string) {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(labID + "/" + switchID))
@@ -297,11 +315,16 @@ func natIPv4Range(labID, switchID string) (address, start, end string) {
 	return prefix + ".1", prefix + ".100", prefix + ".254"
 }
 
-var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="1.0"?>
+var xmlTemplateFuncs = template.FuncMap{
+	"xmltext": xmlText,
+	"xmlattr": xmlAttr,
+}
+
+var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs).Parse(`<?xml version="1.0"?>
 <domain type="kvm">
-  <name>{{ .Name }}</name>
+  <name>{{ xmltext .Name }}</name>
   <metadata>
-    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ .LabID }}" id="{{ .VMID }}" kind="domain"/>
+    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ xmlattr .LabID }}" id="{{ xmlattr .VMID }}" kind="domain"/>
   </metadata>
   <memory unit="MiB">{{ .MemoryMB }}</memory>
   <currentMemory unit="MiB">{{ .MemoryMB }}</currentMemory>
@@ -323,28 +346,28 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     {{- if .HasDisk }}
     <disk type="file" device="disk">
-      <driver name="qemu" type="{{ .DiskType }}"/>
-      <source file="{{ .DiskPath }}"/>
+      <driver name="qemu" type="{{ xmlattr .DiskType }}"/>
+      <source file="{{ xmlattr .DiskPath }}"/>
       <target dev="vda" bus="virtio"/>
     </disk>
     {{- end }}
     {{- if .HasISO }}
     <disk type="file" device="cdrom">
       <driver name="qemu" type="raw"/>
-      <source file="{{ .ISO }}"/>
+      <source file="{{ xmlattr .ISO }}"/>
       <target dev="sda" bus="sata"/>
       <readonly/>
     </disk>
     {{- end }}
     {{- range .Networks }}
-    <interface type="{{ .Kind }}">
+    <interface type="{{ xmlattr .Kind }}">
       {{- if eq .Kind "bridge" }}
-      <source bridge="{{ .SourceName }}"/>
+      <source bridge="{{ xmlattr .SourceName }}"/>
       {{- else if eq .Kind "direct" }}
-      <source dev="{{ .SourceName }}" mode="bridge"/>
+      <source dev="{{ xmlattr .SourceName }}" mode="bridge"/>
       {{- end }}
       {{- if .MAC }}
-      <mac address="{{ .MAC }}"/>
+      <mac address="{{ xmlattr .MAC }}"/>
       {{- end }}
       <model type="virtio"/>
     </interface>
@@ -367,32 +390,32 @@ var domainTemplate = template.Must(template.New("domain").Parse(`<?xml version="
   <on_crash>destroy</on_crash>
 </domain>`))
 
-var networkTemplate = template.Must(template.New("network").Parse(`<?xml version="1.0"?>
+var networkTemplate = template.Must(template.New("network").Funcs(xmlTemplateFuncs).Parse(`<?xml version="1.0"?>
 <network>
-  <name>{{ .Name }}</name>
+  <name>{{ xmltext .Name }}</name>
   <metadata>
-    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ .LabID }}" id="{{ .ID }}" kind="network"/>
+    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ xmlattr .LabID }}" id="{{ xmlattr .ID }}" kind="network"/>
   </metadata>
   {{- if .HostBridge }}
   <forward mode="bridge"/>
-  <bridge name="{{ .HostBridge }}"/>
+  <bridge name="{{ xmlattr .HostBridge }}"/>
   {{- else if .UplinkInterface }}
   <forward mode="bridge">
-    <interface dev="{{ .UplinkInterface }}"/>
+    <interface dev="{{ xmlattr .UplinkInterface }}"/>
   </forward>
   {{- else if .NAT }}
   {{- if .NATInterface }}
-  <forward mode="nat" dev="{{ .NATInterface }}"/>
+  <forward mode="nat" dev="{{ xmlattr .NATInterface }}"/>
   {{- else }}
   <forward mode="nat"/>
   {{- end }}
-  <bridge name="{{ .Bridge }}" stp="on" delay="0"/>
-  <ip address="{{ .NATAddress }}" netmask="{{ .NATNetmask }}">
+  <bridge name="{{ xmlattr .Bridge }}" stp="on" delay="0"/>
+  <ip address="{{ xmlattr .NATAddress }}" netmask="{{ xmlattr .NATNetmask }}">
     <dhcp>
-      <range start="{{ .DHCPStart }}" end="{{ .DHCPEnd }}"/>
+      <range start="{{ xmlattr .DHCPStart }}" end="{{ xmlattr .DHCPEnd }}"/>
     </dhcp>
   </ip>
   {{- else }}
-  <bridge name="{{ .Bridge }}" stp="on" delay="0"/>
+  <bridge name="{{ xmlattr .Bridge }}" stp="on" delay="0"/>
   {{- end }}
 </network>`))

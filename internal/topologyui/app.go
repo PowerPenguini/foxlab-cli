@@ -4,13 +4,15 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	containerdruntime "foxlab-cli/internal/containerd"
+	"foxlab-cli/internal/daemonstatus"
+	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
-	"foxlab-cli/internal/virt"
 	"foxlab-cli/internal/workload"
 )
 
@@ -22,31 +24,38 @@ type WorkloadRuntime interface {
 }
 
 type App struct {
-	Model             Model
-	State             ViewState
-	Lab               *lab.Lab
-	LabPath           string
-	Service           *topology.Service
-	LibvirtURI        string
-	ContainerdAddress string
-	Runtime           WorkloadRuntime
-	WorkloadStates    map[string]string
-	VNCPorts          map[string]int
-	VNCViewer         string
-	CommandLog        []string
-	HistoryIndex      int
-	PendingShell      *shellCommand
-	PendingVNC        *shellCommand
-	In                *os.File
-	Out               *os.File
-	ViewWidth         int
-	ViewHeight        int
-	RouteCacheKey     string
-	RouteCacheRoutes  []visibleEdge
-	ReconcileInterval time.Duration
-	VMConsole         func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
-	pendingKeys       []string
+	Model                 Model
+	State                 ViewState
+	Lab                   *lab.Lab
+	LabPath               string
+	Service               *topology.Service
+	LibvirtURI            string
+	ContainerdAddress     string
+	Runtime               WorkloadRuntime
+	WorkloadStates        map[string]string
+	VNCPorts              map[string]int
+	VNCViewer             string
+	StatusSocket          string
+	StatusQuery           func(context.Context, string) (daemonstatus.Snapshot, error)
+	CommandLog            []string
+	HistoryIndex          int
+	PendingShell          *shellCommand
+	PendingVNC            *shellCommand
+	In                    *os.File
+	Out                   *os.File
+	ViewWidth             int
+	ViewHeight            int
+	RouteCacheKey         string
+	RouteCacheRoutes      []visibleEdge
+	StatusRefreshInterval time.Duration
+	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
+	DaemonController      DaemonController
+	runtimeMu             sync.Mutex
+	pendingKeys           []string
 }
+
+const runtimeStatusTimeout = 5 * time.Second
+const daemonApplyTimeout = 90 * time.Second
 
 func (a *App) Run() error {
 	if a.In == nil {
@@ -59,8 +68,10 @@ func (a *App) Run() error {
 		a.Model = MockModel()
 	}
 	a.resetRouteCache()
+	a.ensureDaemonController()
 	a.ensureService()
 	a.refreshWorkloadStates()
+	a.refreshApplyLabState()
 	return a.runInteractive(startAppTerminalSession, readAppKey, appTerminalSize)
 }
 
@@ -114,13 +125,18 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	}()
 	dirty := true
 	lastWidth, lastHeight := 0, 0
-	reconcileInterval := a.reconcileInterval()
-	nextReconcile := time.Now().Add(reconcileInterval)
-	reconcileActive := false
-	reconcileUpdates := make(chan reconcileUpdate, 1)
+	statusRefreshInterval := a.statusRefreshInterval()
+	nextStatusRefresh := time.Now().Add(statusRefreshInterval)
+	statusRefreshActive := false
+	statusUpdates := make(chan statusUpdate, 1)
 	for {
-		if a.drainReconcileUpdates(reconcileUpdates, &reconcileActive) {
+		if a.drainStatusUpdates(statusUpdates, &statusRefreshActive) {
 			dirty = true
+		}
+		if !statusRefreshActive && a.Lab != nil && time.Now().After(nextStatusRefresh) {
+			nextStatusRefresh = time.Now().Add(statusRefreshInterval)
+			statusRefreshActive = true
+			a.startStatusRefresh(ctx, statusUpdates)
 		}
 		width, height := size(a)
 		a.ViewWidth = width
@@ -136,11 +152,6 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 				return err
 			}
 			dirty = false
-		}
-		if !reconcileActive && a.Lab != nil && time.Now().After(nextReconcile) {
-			reconcileActive = true
-			nextReconcile = time.Now().Add(reconcileInterval)
-			a.startReconcile(ctx, reconcileUpdates)
 		}
 		key, err := read(a)
 		if err != nil {
@@ -199,72 +210,100 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	}
 }
 
-type reconcileUpdate struct {
-	states   map[string]string
-	vncPorts map[string]int
-	message  string
-}
-
-func (a *App) reconcileInterval() time.Duration {
-	if a.ReconcileInterval > 0 {
-		return a.ReconcileInterval
+func (a *App) statusRefreshInterval() time.Duration {
+	if a.StatusRefreshInterval > 0 {
+		return a.StatusRefreshInterval
 	}
 	return time.Second
 }
 
-func (a *App) startReconcile(ctx context.Context, updates chan<- reconcileUpdate) {
+type statusUpdate struct {
+	lab                 *lab.Lab
+	states              map[string]string
+	vncPorts            map[string]int
+	message             string
+	applyStatus         DaemonStatus
+	applyStatusReceived bool
+}
+
+func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdate) {
 	l := a.Lab
+	snapshot := lab.Clone(l)
 	go func() {
-		runtime, closeRuntime, err := a.runtime()
+		statusCtx, cancel := context.WithTimeout(ctx, runtimeStatusTimeout)
+		defer cancel()
+		if daemonSnapshot, ok := a.queryDaemonSnapshot(statusCtx); ok {
+			update := a.statusUpdateFromDaemonSnapshot(l, daemonSnapshot)
+			sendStatusUpdate(ctx, updates, update)
+			return
+		}
+		runtime, closeRuntime, err := a.runtimeForLab(snapshot)
 		if err != nil {
-			sendReconcileUpdate(ctx, updates, reconcileUpdate{message: "runtime connection failed: " + err.Error()})
+			sendStatusUpdate(ctx, updates, statusUpdate{lab: l, message: "runtime connection failed: " + err.Error()})
 			return
 		}
 		defer closeRuntime()
-		result := (&workload.Reconciler{Runtime: runtime}).Step(ctx, l)
-		update := reconcileUpdate{states: result.States}
-		if ports, err := runtimeVNCPorts(ctx, runtime, l); err == nil {
-			update.vncPorts = ports
-		} else if len(result.Errors) == 0 {
+		a.runtimeMu.Lock()
+		states, err := runtime.States(statusCtx, snapshot)
+		if err != nil {
+			update := statusUpdate{lab: l, message: "runtime status failed: " + err.Error()}
+			if ports, portErr := runtimeVNCPorts(statusCtx, runtime, snapshot); portErr == nil {
+				update.vncPorts = cloneRuntimePortMap(ports)
+			}
+			a.runtimeMu.Unlock()
+			sendStatusUpdate(ctx, updates, update)
+			return
+		}
+		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states)}
+		if ports, err := runtimeVNCPorts(statusCtx, runtime, snapshot); err == nil {
+			update.vncPorts = cloneRuntimePortMap(ports)
+		} else {
 			update.message = "vnc status failed: " + err.Error()
 		}
-		if len(result.Errors) > 0 {
-			update.message = "reconcile failed: " + result.Errors[0].Error()
-		} else if len(result.Actions) > 0 {
-			update.message = strings.Join(result.Actions, ", ")
+		if status, err := a.daemonStatus(statusCtx); err == nil {
+			update.applyStatus = status
+			update.applyStatusReceived = true
 		}
-		sendReconcileUpdate(ctx, updates, update)
+		a.runtimeMu.Unlock()
+		sendStatusUpdate(ctx, updates, update)
 	}()
 }
 
-func sendReconcileUpdate(ctx context.Context, updates chan<- reconcileUpdate, update reconcileUpdate) {
+func sendStatusUpdate(ctx context.Context, updates chan<- statusUpdate, update statusUpdate) {
 	select {
 	case updates <- update:
 	case <-ctx.Done():
 	}
 }
 
-func (a *App) drainReconcileUpdates(updates <-chan reconcileUpdate, active *bool) bool {
+func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool {
 	changed := false
 	for {
 		select {
 		case update := <-updates:
 			*active = false
-			if update.states != nil && !sameStringMap(a.WorkloadStates, update.states) {
-				a.WorkloadStates = update.states
+			if update.lab != nil && update.lab != a.Lab {
+				continue
+			}
+			if update.states != nil {
+				a.WorkloadStates = cloneRuntimeStateMap(update.states)
 				if a.Service != nil {
-					a.Service.States = update.states
+					a.Service.States = a.WorkloadStates
 				}
 				a.applyWorkloadStates()
 				changed = true
 			}
-			if update.vncPorts != nil && !sameIntMap(a.VNCPorts, update.vncPorts) {
-				a.VNCPorts = update.vncPorts
+			if update.vncPorts != nil {
+				a.VNCPorts = cloneRuntimePortMap(update.vncPorts)
 				a.applyWorkloadStates()
 				changed = true
 			}
-			if update.message != "" && a.State.Message != update.message {
+			if update.message != "" {
 				a.State.Message = update.message
+				changed = true
+			}
+			if update.applyStatusReceived {
+				a.updateApplyLabState(update.applyStatus)
 				changed = true
 			}
 		default:
@@ -286,43 +325,168 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 }
 
 func (a *App) runtime() (WorkloadRuntime, func(), error) {
+	return a.runtimeForLab(a.Lab)
+}
+
+func (a *App) runtimeForLab(l *lab.Lab) (WorkloadRuntime, func(), error) {
 	if a.Runtime != nil {
 		return a.Runtime, func() {}, nil
 	}
-	vmRuntime, err := virt.NewLibvirtRuntime(a.LibvirtURI)
+	runtime, err := foxruntime.New(a.LibvirtURI, a.ContainerdAddress, l)
 	if err != nil {
 		return nil, func() {}, err
-	}
-	runtime := &workload.Composite{
-		VM:        vmRuntime,
-		Container: containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, a.containerdAddressFromLab())),
 	}
 	return runtime, func() { _ = runtime.Close() }, nil
 }
 
-func (a *App) refreshWorkloadStates() {
+func (a *App) ensureDaemonController() {
+	if a.DaemonController == nil {
+		a.DaemonController = newSystemdDaemonController()
+	}
+}
+
+func (a *App) daemonStatus(ctx context.Context) (DaemonStatus, error) {
+	if a.DaemonController == nil {
+		return DaemonStatus{}, nil
+	}
+	return a.DaemonController.Status(ctx)
+}
+
+func (a *App) currentLabAbsPath() (string, error) {
+	if strings.TrimSpace(a.LabPath) == "" {
+		return "", os.ErrNotExist
+	}
+	return filepath.Abs(a.LabPath)
+}
+
+func (a *App) refreshApplyLabState() bool {
+	if _, err := a.currentLabAbsPath(); err != nil {
+		a.State.ApplyLabDisabled = true
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
+	defer cancel()
+	status, err := a.daemonStatus(ctx)
+	if err != nil {
+		a.State.ApplyLabDisabled = false
+		return false
+	}
+	a.updateApplyLabState(status)
+	return true
+}
+
+func (a *App) updateApplyLabState(status DaemonStatus) {
+	current, err := a.currentLabAbsPath()
+	if err != nil {
+		a.State.ApplyLabDisabled = true
+		return
+	}
+	a.State.ApplyLabDisabled = status.Active && sameLabPath(status.LabPath, current)
+}
+
+func (a *App) applyOpenLab() {
+	current, err := a.currentLabAbsPath()
+	if err != nil {
+		a.State.Message = "apply lab failed: no open lab file"
+		a.State.ApplyLabDisabled = true
+		return
+	}
+	a.ensureDaemonController()
+	ctx, cancel := context.WithTimeout(context.Background(), daemonApplyTimeout)
+	defer cancel()
+	if status, err := a.daemonStatus(ctx); err == nil && status.Active && sameLabPath(status.LabPath, current) {
+		a.State.Message = "lab already applied " + filepath.Base(current)
+		a.State.ApplyLabDisabled = true
+		return
+	}
+	if err := a.DaemonController.Apply(ctx, DaemonApplyRequest{
+		LabPath:           current,
+		LibvirtURI:        a.LibvirtURI,
+		ContainerdAddress: a.ContainerdAddress,
+	}); err != nil {
+		a.State.Message = "apply lab failed: " + err.Error()
+		a.refreshApplyLabState()
+		return
+	}
+	a.State.Message = "applied lab " + filepath.Base(current)
+	a.State.ApplyLabDisabled = true
+	a.refreshWorkloadStates()
+}
+
+func (a *App) refreshWorkloadStates() bool {
 	a.ensureService()
 	if a.Lab == nil {
-		return
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
+	defer cancel()
+	if snapshot, ok := a.queryDaemonSnapshot(ctx); ok {
+		a.applyDaemonSnapshot(snapshot)
+		return true
 	}
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
 		a.State.Message = "runtime connection failed: " + err.Error()
-		return
+		return true
 	}
 	defer closeRuntime()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
 	states, err := runtime.States(ctx, a.Lab)
 	if err != nil {
 		a.State.Message = "runtime status failed: " + err.Error()
 		_ = a.refreshVNCPortsWithRuntime(ctx, runtime)
-		return
+		return true
 	}
-	a.WorkloadStates = states
-	a.Service.States = states
+	a.WorkloadStates = cloneRuntimeStateMap(states)
+	a.Service.States = a.WorkloadStates
 	if portErr := a.refreshVNCPortsWithRuntime(ctx, runtime); portErr != nil {
 		a.State.Message = "vnc status failed: " + portErr.Error()
+	}
+	a.applyWorkloadStates()
+	return true
+}
+
+func (a *App) queryDaemonSnapshot(ctx context.Context) (daemonstatus.Snapshot, bool) {
+	current, err := a.currentLabAbsPath()
+	if err != nil {
+		return daemonstatus.Snapshot{}, false
+	}
+	query := daemonstatus.Query
+	if a.StatusQuery != nil {
+		query = a.StatusQuery
+	}
+	snapshot, err := query(ctx, a.StatusSocket)
+	if err != nil {
+		return daemonstatus.Snapshot{}, false
+	}
+	if !sameLabPath(snapshot.LabPath, current) {
+		return daemonstatus.Snapshot{}, false
+	}
+	return snapshot, true
+}
+
+func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.Snapshot) statusUpdate {
+	update := statusUpdate{
+		lab:                 l,
+		states:              cloneRuntimeStateMap(snapshot.States),
+		vncPorts:            cloneRuntimePortMap(snapshot.VNCPorts),
+		applyStatus:         DaemonStatus{Active: true, LabPath: snapshot.LabPath},
+		applyStatusReceived: true,
+	}
+	if len(snapshot.Errors) > 0 {
+		update.message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
+	}
+	return update
+}
+
+func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
+	a.WorkloadStates = cloneRuntimeStateMap(snapshot.States)
+	a.Service.States = a.WorkloadStates
+	a.VNCPorts = cloneRuntimePortMap(snapshot.VNCPorts)
+	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
+	if len(snapshot.Errors) > 0 {
+		a.State.Message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
 	}
 	a.applyWorkloadStates()
 }
@@ -332,9 +496,35 @@ func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime WorkloadRu
 	if err != nil {
 		return err
 	}
-	a.VNCPorts = ports
+	a.VNCPorts = cloneRuntimePortMap(ports)
 	a.applyWorkloadStates()
 	return nil
+}
+
+func cloneRuntimeStateMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = normalizeRuntimeState(value)
+	}
+	return out
+}
+
+func normalizeRuntimeState(state string) string {
+	return strings.ToLower(strings.TrimSpace(state))
+}
+
+func cloneRuntimePortMap(in map[string]int) map[string]int {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func (a *App) applyWorkloadStates() {
@@ -356,37 +546,6 @@ func runtimeVNCPorts(ctx context.Context, runtime WorkloadRuntime, l *lab.Lab) (
 		return map[string]int{}, nil
 	}
 	return vncRuntime.VNCPorts(ctx, l)
-}
-
-func sameStringMap(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for key, value := range a {
-		if b[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func sameIntMap(a, b map[string]int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for key, value := range a {
-		if b[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func (a *App) containerdAddressFromLab() string {
-	if a.Lab == nil || a.Lab.Meta == nil {
-		return ""
-	}
-	return a.Lab.Meta["containerd.address"]
 }
 
 func (a *App) contextMenuRootItems(node Node, ok bool) []string {

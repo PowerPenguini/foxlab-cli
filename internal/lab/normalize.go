@@ -1,6 +1,9 @@
 package lab
 
-import "strings"
+import (
+	"net"
+	"strings"
+)
 
 func (l *Lab) Normalize() {
 	l.ID = strings.TrimSpace(l.ID)
@@ -18,7 +21,7 @@ func (l *Lab) Normalize() {
 		for j := range l.VMs[i].Networks {
 			l.VMs[i].Networks[j].Switch = strings.TrimSpace(l.VMs[i].Networks[j].Switch)
 			l.VMs[i].Networks[j].ExternalLink = strings.TrimSpace(l.VMs[i].Networks[j].ExternalLink)
-			l.VMs[i].Networks[j].MAC = strings.TrimSpace(l.VMs[i].Networks[j].MAC)
+			l.VMs[i].Networks[j].MAC = normalizeMAC(l.VMs[i].Networks[j].MAC)
 		}
 		if l.VMs[i].MemoryMB == 0 {
 			l.VMs[i].MemoryMB = 2048
@@ -39,7 +42,7 @@ func (l *Lab) Normalize() {
 		for j := range l.Containers[i].Networks {
 			l.Containers[i].Networks[j].Switch = strings.TrimSpace(l.Containers[i].Networks[j].Switch)
 			l.Containers[i].Networks[j].ExternalLink = strings.TrimSpace(l.Containers[i].Networks[j].ExternalLink)
-			l.Containers[i].Networks[j].MAC = strings.TrimSpace(l.Containers[i].Networks[j].MAC)
+			l.Containers[i].Networks[j].MAC = normalizeMAC(l.Containers[i].Networks[j].MAC)
 		}
 	}
 	for i := range l.Switches {
@@ -65,6 +68,12 @@ func (l *Lab) Normalize() {
 		l.NetworkLinks[i].From.ID = strings.TrimSpace(l.NetworkLinks[i].From.ID)
 		l.NetworkLinks[i].To.Type = strings.ToLower(strings.TrimSpace(l.NetworkLinks[i].To.Type))
 		l.NetworkLinks[i].To.ID = strings.TrimSpace(l.NetworkLinks[i].To.ID)
+	}
+	for i := range l.Layout.Links {
+		l.Layout.Links[i].From.Type = strings.ToLower(strings.TrimSpace(l.Layout.Links[i].From.Type))
+		l.Layout.Links[i].From.ID = strings.TrimSpace(l.Layout.Links[i].From.ID)
+		l.Layout.Links[i].To.Type = strings.ToLower(strings.TrimSpace(l.Layout.Links[i].To.Type))
+		l.Layout.Links[i].To.ID = strings.TrimSpace(l.Layout.Links[i].To.ID)
 	}
 	for i := range l.Disks {
 		l.Disks[i].ID = strings.TrimSpace(l.Disks[i].ID)
@@ -96,4 +105,21 @@ func normalizeExternalMode(value string) string {
 		return ExternalModeDirect
 	}
 	return value
+}
+
+func normalizeMAC(value string) string {
+	value = strings.TrimSpace(value)
+	if mac, ok := parseNICMAC(value); ok {
+		return mac.String()
+	}
+	return value
+}
+
+func parseNICMAC(value string) (net.HardwareAddr, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, false
+	}
+	mac, err := net.ParseMAC(value)
+	return mac, err == nil && len(mac) == 6
 }

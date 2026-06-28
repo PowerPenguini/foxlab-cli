@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"foxlab-cli/internal/lab"
@@ -14,25 +15,35 @@ type Composite struct {
 
 func (c *Composite) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
 	out := map[string]string{}
-	if c.VM != nil && l != nil && len(l.VMs) > 0 {
+	var errs []error
+	if l == nil {
+		return out, nil
+	}
+	if len(l.VMs) > 0 && c.VM == nil {
+		errs = append(errs, runtimeNotConfiguredError(TypeVM))
+	}
+	if c.VM != nil && len(l.VMs) > 0 {
 		states, err := c.VM.States(ctx, l)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
 		}
 		for key, state := range states {
 			out[key] = state
 		}
 	}
-	if c.Container != nil && l != nil && len(l.Containers) > 0 {
+	if len(l.Containers) > 0 && c.Container == nil {
+		errs = append(errs, runtimeNotConfiguredError(TypeContainer))
+	}
+	if c.Container != nil && len(l.Containers) > 0 {
 		states, err := c.Container.States(ctx, l)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
 		}
 		for key, state := range states {
 			out[key] = state
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 func (c *Composite) VNCPorts(ctx context.Context, l *lab.Lab) (map[string]int, error) {
@@ -62,17 +73,28 @@ func (c *Composite) Stop(ctx context.Context, l *lab.Lab, ref Ref) error {
 	return runtime.Stop(ctx, l, ref)
 }
 
+func (c *Composite) Destroy(ctx context.Context, l *lab.Lab, ref Ref) error {
+	runtime, err := c.runtimeFor(ref)
+	if err != nil {
+		return err
+	}
+	if destroyer, ok := runtime.(Destroyer); ok {
+		return destroyer.Destroy(ctx, l, ref)
+	}
+	return runtime.Stop(ctx, l, ref)
+}
+
 func (c *Composite) Close() error {
-	var first error
+	var errs []error
 	for _, runtime := range []Runtime{c.VM, c.Container} {
 		if runtime == nil {
 			continue
 		}
-		if err := runtime.Close(); err != nil && first == nil {
-			first = err
+		if err := runtime.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return first
+	return errors.Join(errs...)
 }
 
 func (c *Composite) runtimeFor(ref Ref) (Runtime, error) {
@@ -86,5 +108,9 @@ func (c *Composite) runtimeFor(ref Ref) (Runtime, error) {
 			return c.Container, nil
 		}
 	}
-	return nil, fmt.Errorf("runtime not configured for workload type %q", ref.Type)
+	return nil, runtimeNotConfiguredError(ref.Type)
+}
+
+func runtimeNotConfiguredError(typ string) error {
+	return fmt.Errorf("runtime not configured for workload type %q", typ)
 }

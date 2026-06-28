@@ -2,6 +2,7 @@ package hostnet
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -12,10 +13,15 @@ import (
 
 type fakeRunner struct {
 	commands []string
+	failAt   string
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) error {
-	f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+	command := name + " " + strings.Join(args, " ")
+	f.commands = append(f.commands, command)
+	if f.failAt != "" && strings.Contains(command, f.failAt) {
+		return fmt.Errorf("forced failure: %s", command)
+	}
 	return nil
 }
 
@@ -43,6 +49,96 @@ func TestAttachContainerPlansBridgeAndVethCommands(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
 		}
+	}
+}
+
+func TestAttachContainerCleansCreatedVethsAfterAttachFailure(t *testing.T) {
+	l := &lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		Containers: []lab.Container{{
+			ID:       "web",
+			Image:    "nginx",
+			Networks: []lab.ContainerNetwork{{Switch: "lan"}, {Switch: "lan"}},
+		}},
+	}
+	firstHostIf, _ := vethNames(l, l.Containers[0], 0)
+	secondHostIf, _ := vethNames(l, l.Containers[0], 1)
+	runner := &fakeRunner{failAt: "ip link set " + secondHostIf + " master"}
+	bridge := &Bridge{Runner: runner}
+
+	if err := bridge.AttachContainer(context.Background(), l, l.Containers[0], 1234); err == nil {
+		t.Fatal("AttachContainer returned nil error")
+	}
+	for _, hostIf := range []string{firstHostIf, secondHostIf} {
+		deleteHostIf := "ip link delete " + hostIf
+		if got := commandCount(runner.commands, deleteHostIf); got != 2 {
+			t.Fatalf("host interface cleanup count for %s = %d, want 2; commands=%#v", hostIf, got, runner.commands)
+		}
+	}
+}
+
+func commandCount(commands []string, want string) int {
+	count := 0
+	for _, command := range commands {
+		if command == want {
+			count++
+		}
+	}
+	return count
+}
+
+func TestGeneratedInterfaceNamesAreShortAndUniqueWhenTruncated(t *testing.T) {
+	l := &lab.Lab{ID: "demo"}
+	vmA := lab.VM{ID: "very-long-workload-alpha"}
+	vmB := lab.VM{ID: "very-long-workload-beta"}
+	ctA := lab.Container{ID: "very-long-container-alpha"}
+	ctB := lab.Container{ID: "very-long-container-beta"}
+
+	ctAHost, ctAGuest := vethNames(l, ctA, 0)
+	ctBHost, ctBGuest := vethNames(l, ctB, 0)
+	names := []string{
+		VMTapName(l, vmA, 0),
+		VMTapName(l, vmB, 0),
+		ctAHost,
+		ctAGuest,
+		ctBHost,
+		ctBGuest,
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if len(name) > 15 {
+			t.Fatalf("generated interface name %q exceeds Linux IFNAMSIZ limit", name)
+		}
+		if seen[name] {
+			t.Fatalf("generated interface name %q was reused for distinct endpoints: %#v", name, names)
+		}
+		seen[name] = true
+	}
+}
+
+func TestGeneratedInterfaceNamesStayShortWithLargeNICIndex(t *testing.T) {
+	l := &lab.Lab{ID: "demo"}
+	vm := lab.VM{ID: "router"}
+	ct := lab.Container{ID: "web"}
+	hostIf, guestIf := vethNames(l, ct, 123456789012345)
+	names := []string{
+		VMTapName(l, vm, 123456789012345),
+		hostIf,
+		guestIf,
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if len(name) > 15 {
+			t.Fatalf("generated interface name %q exceeds Linux IFNAMSIZ limit", name)
+		}
+		if name == "" {
+			t.Fatal("generated empty interface name")
+		}
+		if seen[name] {
+			t.Fatalf("generated interface name %q was reused: %#v", name, names)
+		}
+		seen[name] = true
 	}
 }
 
@@ -169,6 +265,52 @@ func TestAttachContainerPlansMacNATExternalCommands(t *testing.T) {
 	for _, want := range []string{
 		"configure labID=demo switchID=external-uplink1 bridge=" + managed + " uplink=eth0",
 		"mac=" + l.GeneratedNICMAC("container", "web", 0),
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected macnat command fragment %q in:\n%s", want, string(data))
+		}
+	}
+}
+
+func TestAttachContainerSwitchMacNATUsesGeneratedMAC(t *testing.T) {
+	device, err := os.CreateTemp(t.TempDir(), "macnat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := device.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeMacNAT}},
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge", ExternalLink: "uplink1"}},
+		Containers:    []lab.Container{{ID: "web", Image: "nginx", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+	}
+	runner := &fakeRunner{}
+	ctrl := macnat.NewController(device.Name())
+	bridge := &Bridge{Runner: runner, MacNAT: &ctrl}
+
+	if err := bridge.AttachContainer(context.Background(), l, l.Containers[0], 1234); err != nil {
+		t.Fatal(err)
+	}
+
+	generatedMAC := l.GeneratedNICMAC("container", "web", 0)
+	joined := strings.Join(runner.commands, "\n")
+	for _, want := range []string{
+		"master " + l.ManagedSwitchBridgeName(l.Switches[0]),
+		"address " + generatedMAC,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
+		}
+	}
+	data, err := os.ReadFile(device.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"configure labID=demo switchID=lan bridge=" + l.ManagedSwitchBridgeName(l.Switches[0]) + " uplink=eth0",
+		"mac=" + generatedMAC,
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("expected macnat command fragment %q in:\n%s", want, string(data))

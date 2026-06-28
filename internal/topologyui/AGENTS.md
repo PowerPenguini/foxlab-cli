@@ -7,7 +7,7 @@
 
 ## Ownership
 
-- `app.go` owns app lifecycle, terminal loop, runtime reconciliation, service synchronization, and pending external shell/VNC execution.
+- `app.go` owns app lifecycle, terminal loop, runtime status refresh, service synchronization, and pending external shell/VNC execution. Desired-state reconciliation belongs to `foxlabd`/`internal/workload`.
 - `model.go` maps `.lab` topology into graph nodes, edges, details, desired state, and layout positions.
 - `render.go` and `inventory*.go` style files own visible terminal output and route rendering.
 - `input.go`, `commands.go`, `actions.go`, `menu.go`, `connect.go`, and `move.go` own interaction behavior.
@@ -34,6 +34,6 @@
 - Focused package test:
   - `GOCACHE=/tmp/foxlab-cli-go-build go test ./internal/topologyui`
 - Smoke render for visual changes:
-  - `GOCACHE=/tmp/foxlab-cli-go-build go run . --no-raw --width 90 --height 24`
+  - `GOCACHE=/tmp/foxlab-cli-go-build go run ./cmd/foxlab --no-raw --width 90 --height 24`
 - Full regression when behavior crosses packages:
   - `GOCACHE=/tmp/foxlab-cli-go-build go test ./...`

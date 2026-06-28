@@ -116,6 +116,9 @@ func (a *App) connectSelectedTargetNIC(target Node, item string) {
 			a.State.Message = "target must be vm or container"
 			return
 		}
+		if !strings.HasPrefix(a.State.Message, "added nic to ") {
+			return
+		}
 		if !a.hasNICIndex(target, targetIndex) {
 			a.State.Message = "target nic create failed: " + target.ID
 			return

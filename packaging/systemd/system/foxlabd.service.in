@@ -1,0 +1,15 @@
+[Unit]
+Description=FoxLab reconciliator
+After=containerd.service libvirtd.service
+Wants=containerd.service libvirtd.service
+
+[Service]
+Type=simple
+Environment=FOXLAB_LAB=/root/.foxlab/default.lab
+Environment=FOXLAB_STATUS_SOCKET=/run/foxlab/foxlabd.sock
+ExecStart=@BINDIR@/foxlabd --lab ${FOXLAB_LAB} --status-socket ${FOXLAB_STATUS_SOCKET}
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

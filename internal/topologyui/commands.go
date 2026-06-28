@@ -16,8 +16,15 @@ func (a *App) executeCommand(command string) bool {
 	}
 	switch fields[0] {
 	case "q", "quit":
+		if !a.requireExactCommandArgs(fields, 1, "usage: quit") {
+			return false
+		}
 		return true
 	case "help", "h":
+		if len(fields) > 2 {
+			a.State.Message = "usage: help [topic]"
+			return false
+		}
 		a.State.Console = helpLines(commandArg(fields, 1))
 		a.State.Message = ""
 	case "add":
@@ -82,11 +89,17 @@ func (a *App) executeDiskCommand(fields []string) {
 		}
 		a.diskDetach(fields[2], args)
 	case "merge":
-		a.diskMerge(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: disk merge <id>") {
+			return
+		}
+		a.diskMerge(fields[2])
 	case "delete", "rm":
-		a.diskDelete(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: disk delete <id>") {
+			return
+		}
+		a.diskDelete(fields[2])
 	case "layer":
-		if len(fields) >= 4 && (fields[2] == "delete" || fields[2] == "rm") {
+		if len(fields) == 4 && (fields[2] == "delete" || fields[2] == "rm") {
 			a.diskLayerDelete(fields[3])
 			return
 		}
@@ -176,7 +189,7 @@ func (a *App) executeLinkAddCommand(fields []string) {
 }
 
 func (a *App) executeLinkDeleteCommand(fields []string) {
-	if len(fields) < 3 {
+	if len(fields) != 3 {
 		a.State.Message = "usage: link delete <vm|container>:<id>:<nic>"
 		return
 	}
@@ -217,12 +230,18 @@ func (a *App) executeContainerCommand(fields []string) {
 		}
 		a.containerSet(fields[2], args)
 	case "start", "run":
-		a.runWorkload(NodeContainer, commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: container start <id>") {
+			return
+		}
+		a.runWorkload(NodeContainer, fields[2])
 	case "stop":
-		a.stopWorkload(NodeContainer, commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: container stop <id>") {
+			return
+		}
+		a.stopWorkload(NodeContainer, fields[2])
 	case "nic":
 		if len(fields) < 3 {
-			a.State.Message = "usage: container nic <add|connect> ..."
+			a.State.Message = "usage: container nic <add|connect|delete> ..."
 			return
 		}
 		switch fields[2] {
@@ -248,11 +267,19 @@ func (a *App) executeContainerCommand(fields []string) {
 				return
 			}
 			a.containerNICConnect(fields[3], fields[4], args)
+		case "delete", "rm":
+			if !a.requireExactCommandArgs(fields, 5, "usage: container nic delete <id> <index>") {
+				return
+			}
+			a.containerNICDelete(fields[3], fields[4])
 		default:
 			a.State.Message = "unknown container nic command: " + fields[2]
 		}
 	case "delete", "rm":
-		a.containerDelete(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: container delete <id>") {
+			return
+		}
+		a.containerDelete(fields[2])
 	default:
 		a.State.Message = "unknown container command: " + fields[1]
 	}
@@ -287,7 +314,10 @@ func (a *App) executeSwitchCommand(fields []string) {
 		}
 		a.switchSet(fields[2], args)
 	case "delete", "rm":
-		a.switchDelete(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: switch delete <id>") {
+			return
+		}
+		a.switchDelete(fields[2])
 	default:
 		a.State.Message = "unknown switch command: " + fields[1]
 	}
@@ -322,7 +352,10 @@ func (a *App) executeExternalCommand(fields []string) {
 		}
 		a.externalSet(fields[2], args)
 	case "delete", "rm":
-		a.externalDelete(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: external delete <id>") {
+			return
+		}
+		a.externalDelete(fields[2])
 	default:
 		a.State.Message = "unknown external command: " + fields[1]
 	}
@@ -357,12 +390,18 @@ func (a *App) executeVMCommand(fields []string) {
 		}
 		a.vmSet(fields[2], args)
 	case "start", "run":
-		a.runWorkload(NodeVM, commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: vm start <id>") {
+			return
+		}
+		a.runWorkload(NodeVM, fields[2])
 	case "stop":
-		a.stopWorkload(NodeVM, commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: vm stop <id>") {
+			return
+		}
+		a.stopWorkload(NodeVM, fields[2])
 	case "nic":
 		if len(fields) < 3 {
-			a.State.Message = "usage: vm nic <add|connect> ..."
+			a.State.Message = "usage: vm nic <add|connect|delete> ..."
 			return
 		}
 		switch fields[2] {
@@ -388,12 +427,36 @@ func (a *App) executeVMCommand(fields []string) {
 				return
 			}
 			a.vmNICConnect(fields[3], fields[4], args)
+		case "delete", "rm":
+			if !a.requireExactCommandArgs(fields, 5, "usage: vm nic delete <id> <index>") {
+				return
+			}
+			a.vmNICDelete(fields[3], fields[4])
 		default:
 			a.State.Message = "unknown vm nic command: " + fields[2]
 		}
 	case "delete", "rm":
-		a.vmDelete(commandArg(fields, 2))
+		if !a.requireExactCommandArgs(fields, 3, "usage: vm delete <id>") {
+			return
+		}
+		a.vmDelete(fields[2])
 	default:
 		a.State.Message = "unknown vm command: " + fields[1]
 	}
+}
+
+func (a *App) requireCommandArgs(fields []string, min int, usage string) bool {
+	if len(fields) >= min {
+		return true
+	}
+	a.State.Message = usage
+	return false
+}
+
+func (a *App) requireExactCommandArgs(fields []string, count int, usage string) bool {
+	if len(fields) == count {
+		return true
+	}
+	a.State.Message = usage
+	return false
 }

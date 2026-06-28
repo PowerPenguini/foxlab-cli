@@ -16,7 +16,7 @@
 - Default containerd address is `/run/containerd/containerd.sock`; default namespace is `foxlab`.
 - Container runtime state is runtime truth and must not be written into `.lab`.
 - Desired state is reconciled through `internal/workload`; containerd should implement runtime actions, not policy.
-- Disk-backed containers mount managed layer paths from `internal/lab` and must clean qemu-nbd/mount state on stop.
+- Disk-backed containers mount the explicitly attached qcow2 path from `internal/lab` and must clean qemu-nbd/mount state on stop.
 - Host networking should go through `internal/hostnet` so VM and container interface naming stays consistent.
 - Return concrete containerd, image, mount, qemu-nbd, and network errors to callers.
 

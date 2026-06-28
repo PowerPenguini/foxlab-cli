@@ -1,8 +1,6 @@
 package topologyui
 
 import (
-	"context"
-
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/workload"
 )
@@ -42,34 +40,6 @@ func workloadRef(typ, id string) workload.Ref {
 		return workload.Ref{Type: workload.TypeContainer, ID: id}
 	default:
 		return workload.Ref{Type: workload.TypeVM, ID: id}
-	}
-}
-
-func (a *App) reconcileRunningWorkload(typ, id string) {
-	if a.Runtime == nil || a.Lab == nil {
-		return
-	}
-	if !a.labWorkloadDesiredRunning(typ, id) {
-		return
-	}
-	ref := workloadRef(typ, id)
-	if err := a.Runtime.Start(context.Background(), a.Lab, ref); err != nil {
-		a.State.Message = "reconcile failed: start " + workload.Key(ref) + ": " + err.Error()
-		return
-	}
-	a.refreshWorkloadStates()
-}
-
-func (a *App) labWorkloadDesiredRunning(typ, id string) bool {
-	switch typ {
-	case NodeContainer:
-		ct, ok := a.labContainer(id)
-		return ok && lab.DesiredState(ct.DesiredState) == lab.DesiredStateRunning
-	case NodeVM:
-		vm, ok := a.labVM(id)
-		return ok && lab.DesiredState(vm.DesiredState) == lab.DesiredStateRunning
-	default:
-		return false
 	}
 }
 

@@ -11,9 +11,11 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"foxlab-cli/internal/daemonstatus"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/workload"
 )
@@ -64,6 +66,7 @@ func (closedPipeReader) Read([]byte) (int, error) {
 }
 
 type fakeVMRuntime struct {
+	mu        sync.Mutex
 	states    map[string]string
 	vncPorts  map[string]int
 	statesErr error
@@ -73,18 +76,40 @@ type fakeVMRuntime struct {
 	stops     int
 }
 
+type fakeDaemonController struct {
+	status     DaemonStatus
+	statusErr  error
+	applyErr   error
+	applyCalls int
+}
+
+func (f *fakeDaemonController) Status(context.Context) (DaemonStatus, error) {
+	return f.status, f.statusErr
+}
+
+func (f *fakeDaemonController) Apply(context.Context, DaemonApplyRequest) error {
+	f.applyCalls++
+	return f.applyErr
+}
+
 func (f *fakeVMRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.statesErr != nil {
 		return nil, f.statesErr
 	}
-	return f.states, nil
+	return copyStringMap(f.states), nil
 }
 
 func (f *fakeVMRuntime) VNCPorts(context.Context, *lab.Lab) (map[string]int, error) {
-	return f.vncPorts, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return copyIntMap(f.vncPorts), nil
 }
 
 func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.starts++
 	f.started = workload.Key(ref)
 	if f.states == nil {
@@ -95,6 +120,8 @@ func (f *fakeVMRuntime) Start(_ context.Context, _ *lab.Lab, ref workload.Ref) e
 }
 
 func (f *fakeVMRuntime) Stop(_ context.Context, _ *lab.Lab, ref workload.Ref) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.stops++
 	f.stopped = workload.Key(ref)
 	if f.states == nil {
@@ -105,6 +132,158 @@ func (f *fakeVMRuntime) Stop(_ context.Context, _ *lab.Lab, ref workload.Ref) er
 }
 
 func (f *fakeVMRuntime) Close() error { return nil }
+
+func (f *fakeVMRuntime) setState(key, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.states == nil {
+		f.states = map[string]string{}
+	}
+	f.states[key] = state
+}
+
+type blockingStatusRuntime struct {
+	entered         chan struct{}
+	release         chan struct{}
+	seenLab         *lab.Lab
+	seenContainerID string
+}
+
+func (r *blockingStatusRuntime) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
+	r.seenLab = l
+	close(r.entered)
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if len(l.Containers) > 0 {
+		r.seenContainerID = l.Containers[0].ID
+	}
+	return map[string]string{}, nil
+}
+
+func (r *blockingStatusRuntime) Start(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *blockingStatusRuntime) Stop(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *blockingStatusRuntime) Close() error {
+	return nil
+}
+
+type serialRuntime struct {
+	mu        sync.Mutex
+	states    int
+	entered   chan struct{}
+	release   chan struct{}
+	enterOnce sync.Once
+}
+
+func (r *serialRuntime) States(ctx context.Context, _ *lab.Lab) (map[string]string, error) {
+	r.mu.Lock()
+	r.states++
+	first := r.states == 1
+	r.mu.Unlock()
+	if first {
+		r.enterOnce.Do(func() { close(r.entered) })
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return map[string]string{NodeKey(NodeVM, "vm1"): "running"}, nil
+}
+
+func (r *serialRuntime) Start(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *serialRuntime) Stop(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *serialRuntime) Close() error {
+	return nil
+}
+
+type directMapRuntime struct {
+	states   map[string]string
+	vncPorts map[string]int
+}
+
+func (r *directMapRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
+	return r.states, nil
+}
+
+func (r *directMapRuntime) VNCPorts(context.Context, *lab.Lab) (map[string]int, error) {
+	return r.vncPorts, nil
+}
+
+func (r *directMapRuntime) Start(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *directMapRuntime) Stop(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *directMapRuntime) Close() error {
+	return nil
+}
+
+type deadlineRuntime struct {
+	statesCtx context.Context
+	vncCtx    context.Context
+}
+
+func (r *deadlineRuntime) States(ctx context.Context, _ *lab.Lab) (map[string]string, error) {
+	r.statesCtx = ctx
+	return map[string]string{NodeKey(NodeVM, "vm1"): "running"}, nil
+}
+
+func (r *deadlineRuntime) VNCPorts(ctx context.Context, _ *lab.Lab) (map[string]int, error) {
+	r.vncCtx = ctx
+	return map[string]int{NodeKey(NodeVM, "vm1"): 5908}, nil
+}
+
+func (r *deadlineRuntime) Start(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *deadlineRuntime) Stop(context.Context, *lab.Lab, workload.Ref) error {
+	return nil
+}
+
+func (r *deadlineRuntime) Close() error {
+	return nil
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func copyIntMap(in map[string]int) map[string]int {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
 
 func TestHandleKeyContextMenuFlow(t *testing.T) {
 	app := App{
@@ -424,6 +603,37 @@ func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
 	}
 }
 
+func TestRefreshWorkloadStatesCopiesRuntimeMaps(t *testing.T) {
+	stateKey := NodeKey(NodeVM, "vm1")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	runtime := &directMapRuntime{
+		states:   map[string]string{stateKey: "running"},
+		vncPorts: map[string]int{stateKey: 5903},
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		Runtime: runtime,
+	}
+
+	app.refreshWorkloadStates()
+	runtime.states[stateKey] = "shutoff"
+	runtime.vncPorts[stateKey] = 5999
+
+	if app.WorkloadStates[stateKey] != "running" {
+		t.Fatalf("app workload state = %q, want copied running state", app.WorkloadStates[stateKey])
+	}
+	if app.Service.States[stateKey] != "running" {
+		t.Fatalf("service workload state = %q, want copied running state", app.Service.States[stateKey])
+	}
+	if app.VNCPorts[stateKey] != 5903 {
+		t.Fatalf("app VNC port = %d, want copied 5903", app.VNCPorts[stateKey])
+	}
+}
+
 func TestRefreshWorkloadStatesShowsStartingForDesiredRunningMissingContainer(t *testing.T) {
 	loaded := &lab.Lab{
 		ID:         "demo",
@@ -444,6 +654,116 @@ func TestRefreshWorkloadStatesShowsStartingForDesiredRunningMissingContainer(t *
 	}
 	if node.State != "starting" {
 		t.Fatalf("container state = %q, want starting", node.State)
+	}
+}
+
+func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", DesiredState: lab.DesiredStateRunning}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := daemonstatus.Snapshot{
+		LabPath: path,
+		LabName: "demo",
+		States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
+			return snapshot, nil
+		},
+		Runtime: &fakeVMRuntime{
+			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
+		},
+	}
+
+	app.refreshWorkloadStates()
+
+	node, ok := nodeByKey(app.Model, NodeKey(NodeContainer, "web"))
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "running" {
+		t.Fatalf("container state = %q, want daemon running", node.State)
+	}
+}
+
+func TestRefreshWorkloadStatesFallsBackWhenFoxlabdSnapshotIsForAnotherLab(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", DesiredState: lab.DesiredStateRunning}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := daemonstatus.Snapshot{
+		LabPath: filepath.Join(t.TempDir(), "other.lab"),
+		LabName: "other",
+		States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
+			return snapshot, nil
+		},
+		Runtime: &fakeVMRuntime{
+			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
+		},
+	}
+
+	app.refreshWorkloadStates()
+
+	node, ok := nodeByKey(app.Model, NodeKey(NodeContainer, "web"))
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "starting" {
+		t.Fatalf("container state = %q, want fallback starting", node.State)
+	}
+}
+
+func TestRefreshWorkloadStatesNormalizesRuntimeStates(t *testing.T) {
+	key := NodeKey(NodeContainer, "kali")
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		Runtime: &fakeVMRuntime{
+			states: map[string]string{key: " Missing "},
+		},
+	}
+
+	app.refreshWorkloadStates()
+
+	if app.WorkloadStates[key] != "missing" {
+		t.Fatalf("workload state = %q, want normalized missing", app.WorkloadStates[key])
+	}
+	node, ok := nodeByKey(app.Model, key)
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "starting" {
+		t.Fatalf("container state = %q, want starting from normalized missing", node.State)
 	}
 }
 
@@ -643,6 +963,44 @@ func TestNormalModeMStartsMoveAndSavesLayout(t *testing.T) {
 	}
 }
 
+func TestMoveSaveFailureRestoresLabLayout(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
+		Layout: lab.Layout{Nodes: map[string]lab.Position{
+			"vm1": {X: 80, Y: 72},
+		}},
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: filepath.Join(blocker, "demo.lab"),
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.handleKey("char:m")
+	app.handleKey("right")
+	app.handleKey("down")
+	app.handleKey("enter")
+
+	if !app.State.MoveMode {
+		t.Fatal("move mode ended after failed save")
+	}
+	if !strings.HasPrefix(app.State.Message, "move failed:") {
+		t.Fatalf("message = %q, want move failed", app.State.Message)
+	}
+	if got := app.Lab.Layout.Nodes["vm1"]; got != (lab.Position{X: 80, Y: 72}) {
+		t.Fatalf("lab layout after failed save = %#v, want original", got)
+	}
+	if app.Model.Nodes[0].X != 6 || app.Model.Nodes[0].Y != 4 {
+		t.Fatalf("move preview = (%d,%d), want (6,4)", app.Model.Nodes[0].X, app.Model.Nodes[0].Y)
+	}
+}
+
 func TestContextMenuMoveEscapeCancels(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 
@@ -714,6 +1072,217 @@ func TestRunInteractiveSkipsRenderOnEmptyKeyTimeout(t *testing.T) {
 	got := outputFileString(t, app.Out)
 	if count := strings.Count(got, ansiMoveHome); count != 1 {
 		t.Fatalf("render count = %d, want 1; output=%q", count, got)
+	}
+}
+
+func TestRunInteractiveRefreshesRuntimeStatusWithoutReconciling(t *testing.T) {
+	key := NodeKey(NodeContainer, "web")
+	loaded := &lab.Lab{
+		ID: "demo",
+		Containers: []lab.Container{{
+			ID:           "web",
+			Image:        "docker.io/library/nginx:latest",
+			DesiredState: lab.DesiredStateRunning,
+		}},
+	}
+	runtime := &fakeVMRuntime{states: map[string]string{key: "missing"}}
+	app := App{
+		Model:                 ModelFromLab(loaded),
+		Lab:                   loaded,
+		Runtime:               runtime,
+		StatusRefreshInterval: time.Millisecond,
+		State:                 ViewState{Focus: FocusGraph},
+		Out:                   tempOutputFile(t),
+	}
+	start := func(*App) (func(), error) { return func() {}, nil }
+	reads := 0
+	read := func(*App) (string, error) {
+		reads++
+		if reads == 1 {
+			runtime.setState(key, "running")
+			time.Sleep(2 * time.Millisecond)
+			return "", nil
+		}
+		if reads < 6 {
+			time.Sleep(time.Millisecond)
+			return "", nil
+		}
+		return "quit", nil
+	}
+	size := func(*App) (int, int) { return 80, 20 }
+
+	if err := app.runInteractive(start, read, size); err != nil {
+		t.Fatal(err)
+	}
+
+	node, ok := nodeByKey(app.Model, key)
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "running" {
+		t.Fatalf("container state = %q, want refreshed running", node.State)
+	}
+	if runtime.starts != 0 || runtime.stops != 0 {
+		t.Fatalf("runtime starts/stops = %d/%d, want status-only refresh", runtime.starts, runtime.stops)
+	}
+}
+
+func TestDrainStatusUpdatesIgnoresStaleLabUpdate(t *testing.T) {
+	oldLab := &lab.Lab{
+		ID:         "old",
+		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
+	}
+	currentLab := &lab.Lab{
+		ID:         "current",
+		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
+	}
+	app := App{
+		Model: ModelFromLab(currentLab),
+		Lab:   currentLab,
+		State: ViewState{Focus: FocusGraph},
+	}
+	updates := make(chan statusUpdate, 1)
+	updates <- statusUpdate{
+		lab:    oldLab,
+		states: map[string]string{NodeKey(NodeContainer, "web"): "running"},
+	}
+	active := true
+
+	if changed := app.drainStatusUpdates(updates, &active); changed {
+		t.Fatal("stale update changed app state")
+	}
+	if active {
+		t.Fatal("stale update did not clear active refresh flag")
+	}
+	node, ok := nodeByKey(app.Model, NodeKey(NodeContainer, "web"))
+	if !ok {
+		t.Fatal("container node not found")
+	}
+	if node.State != "starting" {
+		t.Fatalf("container state = %q, want unchanged starting", node.State)
+	}
+}
+
+func TestDrainStatusUpdatesCopiesUpdateMaps(t *testing.T) {
+	stateKey := NodeVM + ":vm1"
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", MemoryMB: 512, CPUs: 1, Disk: "vm1.qcow2"}},
+	}
+	states := map[string]string{stateKey: "running"}
+	ports := map[string]int{stateKey: 5903}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		State: ViewState{Focus: FocusGraph},
+	}
+	updates := make(chan statusUpdate, 1)
+	updates <- statusUpdate{lab: loaded, states: states, vncPorts: ports}
+	active := true
+
+	if changed := app.drainStatusUpdates(updates, &active); !changed {
+		t.Fatal("status update did not change app")
+	}
+	states[stateKey] = "shutoff"
+	ports[stateKey] = 5999
+
+	if app.WorkloadStates[stateKey] != "running" {
+		t.Fatalf("app workload state = %q, want copied running state", app.WorkloadStates[stateKey])
+	}
+	if app.VNCPorts[stateKey] != 5903 {
+		t.Fatalf("app VNC port = %d, want copied 5903", app.VNCPorts[stateKey])
+	}
+}
+
+func TestStartStatusRefreshUsesLabSnapshot(t *testing.T) {
+	loaded := &lab.Lab{
+		ID: "demo",
+		Containers: []lab.Container{{
+			ID:           "web",
+			Image:        "docker.io/library/nginx:latest",
+			DesiredState: lab.DesiredStateRunning,
+		}},
+	}
+	runtime := &blockingStatusRuntime{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	app := App{Lab: loaded, Runtime: runtime}
+	updates := make(chan statusUpdate, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app.startStatusRefresh(ctx, updates)
+	select {
+	case <-runtime.entered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime States was not called")
+	}
+	loaded.Containers[0].ID = "changed"
+	close(runtime.release)
+
+	var update statusUpdate
+	select {
+	case update = <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("status update was not sent")
+	}
+	if update.lab != loaded {
+		t.Fatal("status update did not keep original lab marker")
+	}
+	if runtime.seenLab == loaded {
+		t.Fatal("runtime received mutable app lab instead of snapshot")
+	}
+	if runtime.seenContainerID != "web" {
+		t.Fatalf("runtime saw container ID %q, want snapshot value web", runtime.seenContainerID)
+	}
+}
+
+func TestRuntimeCallsAreSerializedDuringStatusRefresh(t *testing.T) {
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:           "vm1",
+			MemoryMB:     512,
+			CPUs:         1,
+			Disk:         "vm1.qcow2",
+			VNC:          true,
+			DesiredState: lab.DesiredStateRunning,
+		}},
+	}
+	runtime := &serialRuntime{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	app := App{Lab: loaded, Runtime: runtime}
+	updates := make(chan statusUpdate, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app.startStatusRefresh(ctx, updates)
+	select {
+	case <-runtime.entered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime States was not called")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.refreshVNCWorkloadStatus(Node{Type: NodeVM, ID: "vm1"})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("foreground VNC refresh completed while status refresh held runtime lock: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(runtime.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("refreshVNCWorkloadStatus returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refreshVNCWorkloadStatus did not return after status refresh released runtime lock")
 	}
 }
 
@@ -961,7 +1530,11 @@ func TestContextMenuDiskRootOpensDiskSubmenu(t *testing.T) {
 	}
 }
 
-func TestDiskMenuEnterAttachesContainerDataDiskWithoutLayer(t *testing.T) {
+func TestDiskMenuEnterAttachesContainerBaseThroughLayer(t *testing.T) {
+	restore := fakeQemuImg(t)
+	defer restore()
+	t.Setenv("HOME", t.TempDir())
+
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:         "demo",
@@ -1000,10 +1573,10 @@ func TestDiskMenuEnterAttachesContainerDataDiskWithoutLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(reloaded.Disks) != 1 {
-		t.Fatalf("disk count after data attach = %d, want one data disk", len(reloaded.Disks))
+		t.Fatalf("disk count after data attach = %d, want base only", len(reloaded.Disks))
 	}
-	if reloaded.Disks[0].Kind != "data" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
-		t.Fatalf("data attach state = %#v", reloaded.Disks[0])
+	if reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
+		t.Fatalf("base disk not attached as container root layer: %#v", reloaded.Disks[0])
 	}
 	if reloaded.Containers[0].Disk == "" || !strings.Contains(reloaded.Containers[0].Disk, "/disks/data.qcow2") {
 		t.Fatalf("container disk after data attach = %q", reloaded.Containers[0].Disk)
@@ -1030,7 +1603,7 @@ func TestDiskMenuEnterAttachesContainerDataDiskWithoutLayer(t *testing.T) {
 		t.Fatalf("container disk after data detach = %q", reloaded.Containers[0].Disk)
 	}
 	if reloaded.Disks[0].AttachedTo != "" {
-		t.Fatalf("data disk still attached after detach: %#v", reloaded.Disks[0])
+		t.Fatalf("base disk still attached after detach: %#v", reloaded.Disks[0])
 	}
 }
 
@@ -1085,7 +1658,7 @@ func TestDiskMenuAttachAndDetach(t *testing.T) {
 	if reloaded.VMs[0].Disk == "" || !strings.Contains(reloaded.VMs[0].Disk, "/disks/data.qcow2") {
 		t.Fatalf("vm disk after attach = %q", reloaded.VMs[0].Disk)
 	}
-	if len(reloaded.Disks) != 1 || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
 		t.Fatalf("disk after attach = %#v", reloaded.Disks)
 	}
 
@@ -1627,6 +2200,24 @@ func TestCommandHelpTopics(t *testing.T) {
 	}
 }
 
+func TestCommandHelpRejectsExtraArgs(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		State: ViewState{
+			Focus:   FocusGraph,
+			Console: []string{"existing help"},
+		},
+	}
+
+	app.executeCommand("help vm extra")
+	if app.State.Message != "usage: help [topic]" {
+		t.Fatalf("message = %q, want usage: help [topic]", app.State.Message)
+	}
+	if got := strings.Join(app.State.Console, "\n"); got != "existing help" {
+		t.Fatalf("console = %q, want existing help", got)
+	}
+}
+
 func TestCommandBarIsRemoved(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 
@@ -1647,6 +2238,17 @@ func TestCommandQQuits(t *testing.T) {
 	}
 	if !app.executeCommand("quit") {
 		t.Fatal(":quit command did not quit")
+	}
+}
+
+func TestCommandQRejectsExtraArgs(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+
+	if app.executeCommand("quit now") {
+		t.Fatal(":quit with extra args quit unexpectedly")
+	}
+	if app.State.Message != "usage: quit" {
+		t.Fatalf("message = %q, want usage: quit", app.State.Message)
 	}
 }
 
@@ -1684,6 +2286,35 @@ func TestGlobalCreateContextMenuIsRemoved(t *testing.T) {
 	}
 }
 
+func topRootButtonForAction(t *testing.T, width int, action string) rect {
+	t.Helper()
+	items := topRibbonRootItems()
+	rects := topMenuButtonRects(items, width)
+	for i, item := range items {
+		if i < len(rects) && contextMenuAction(item) == action {
+			return rects[i]
+		}
+	}
+	t.Fatalf("top root action %q not found in %#v", action, items)
+	return rect{}
+}
+
+func topAddDropdownRowForAction(t *testing.T, app *App, action string) rect {
+	t.Helper()
+	menu, ok := app.topMenuDropdownLayout()
+	if !ok {
+		t.Fatal("top add dropdown layout unavailable")
+	}
+	actions := topRibbonAddActions()
+	for i, candidate := range actions {
+		if candidate == action {
+			return rect{X: menu.rect.X, Y: menu.rect.Y + i, W: menu.rect.W, H: 1}
+		}
+	}
+	t.Fatalf("top add action %q not found in %#v", action, actions)
+	return rect{}
+}
+
 func TestMouseClickTopAddDropdownCreatesVM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{ID: "demo"}
@@ -1703,11 +2334,13 @@ func TestMouseClickTopAddDropdownCreatesVM(t *testing.T) {
 		ViewHeight: 20,
 	}
 
-	app.handleKey("mouse:1:0:0")
+	addButton := topRootButtonForAction(t, app.ViewWidth, "create-menu")
+	app.handleKey("mouse:" + strconv.Itoa(addButton.X+1) + ":0:0")
 	if !app.State.TopMenuOpen {
 		t.Fatalf("top add menu did not open: %#v", app.State)
 	}
-	app.handleKey("mouse:2:1:0")
+	vmRow := topAddDropdownRowForAction(t, &app, "add vm")
+	app.handleKey("mouse:" + strconv.Itoa(vmRow.X+1) + ":" + strconv.Itoa(vmRow.Y) + ":0")
 	if len(app.Lab.VMs) != 1 {
 		t.Fatalf("vms after top add = %#v", app.Lab.VMs)
 	}
@@ -1723,13 +2356,56 @@ func TestMouseClickTopExitQuits(t *testing.T) {
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
-	rects := topMenuButtonRects(topRibbonRootItems(), app.ViewWidth)
-	if len(rects) < 2 {
-		t.Fatalf("top ribbon rects = %#v", rects)
+	exitButton := topRootButtonForAction(t, app.ViewWidth, "exit")
+
+	if !app.handleKey("mouse:" + strconv.Itoa(exitButton.X+1) + ":0:0") {
+		t.Fatal("top Exit click did not quit")
+	}
+}
+
+func TestMouseClickDisabledApplyLabDoesNothing(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "empty"},
+		State:      ViewState{Focus: FocusGraph, ApplyLabDisabled: true},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+	applyButton := topRootButtonForAction(t, app.ViewWidth, "apply-lab")
+
+	app.handleKey("mouse:" + strconv.Itoa(applyButton.X+1) + ":0:0")
+
+	if app.State.Message != "" {
+		t.Fatalf("disabled apply lab changed message to %q", app.State.Message)
+	}
+	if app.State.TopMenuOpen {
+		t.Fatal("disabled apply lab opened a menu")
+	}
+}
+
+func TestApplyOpenLabDoesNotReloadSameActiveLab(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := &fakeDaemonController{
+		status: DaemonStatus{Active: true, LabPath: absPath},
+	}
+	app := App{
+		LabPath:          path,
+		DaemonController: controller,
 	}
 
-	if !app.handleKey("mouse:" + strconv.Itoa(rects[1].X+1) + ":0:0") {
-		t.Fatal("top Exit click did not quit")
+	app.applyOpenLab()
+
+	if controller.applyCalls != 0 {
+		t.Fatalf("Apply calls = %d, want 0", controller.applyCalls)
+	}
+	if !app.State.ApplyLabDisabled {
+		t.Fatal("Apply Lab was not disabled for already active lab")
+	}
+	if !strings.Contains(app.State.Message, "already applied") {
+		t.Fatalf("message = %q, want already applied", app.State.Message)
 	}
 }
 
@@ -1746,7 +2422,7 @@ func TestTabTogglesTopAndGraphFocus(t *testing.T) {
 		t.Fatalf("top focus right moved graph selection from %d to %d", startSelected, app.State.Selected)
 	}
 	if app.State.TopMenuRootSelected != 1 {
-		t.Fatalf("top root selection = %d, want Exit", app.State.TopMenuRootSelected)
+		t.Fatalf("top root selection = %d, want Add", app.State.TopMenuRootSelected)
 	}
 	app.handleKey("tab")
 	if app.State.Focus != FocusGraph {
@@ -1805,6 +2481,7 @@ func TestTopFocusKeyboardAddAndExit(t *testing.T) {
 	}
 
 	app.handleKey("tab")
+	app.handleKey("right")
 	app.handleKey("enter")
 	if !app.State.TopMenuOpen {
 		t.Fatalf("enter on top Add did not open dropdown: %#v", app.State)
@@ -1814,7 +2491,13 @@ func TestTopFocusKeyboardAddAndExit(t *testing.T) {
 		t.Fatalf("vms after keyboard top add = %#v", app.Lab.VMs)
 	}
 
-	app.State.TopMenuRootSelected = 1
+	items := topRibbonRootItems()
+	for i, item := range items {
+		if contextMenuAction(item) == "exit" {
+			app.State.TopMenuRootSelected = i
+			break
+		}
+	}
 	if !app.handleKey("enter") {
 		t.Fatal("keyboard top Exit did not quit")
 	}
@@ -1844,8 +2527,10 @@ func TestMouseClickTopAddLinkCreatesExternalLink(t *testing.T) {
 		ViewHeight: 20,
 	}
 
-	app.handleKey("mouse:1:0:0")
-	app.handleKey("mouse:2:5:0")
+	addButton := topRootButtonForAction(t, app.ViewWidth, "create-menu")
+	app.handleKey("mouse:" + strconv.Itoa(addButton.X+1) + ":0:0")
+	linkRow := topAddDropdownRowForAction(t, &app, "link")
+	app.handleKey("mouse:" + strconv.Itoa(linkRow.X+1) + ":" + strconv.Itoa(linkRow.Y) + ":0")
 	if app.State.ConnectMode {
 		t.Fatalf("link started connect mode: %#v", app.State)
 	}
@@ -1927,6 +2612,30 @@ func TestCommandRejectsIncrementSuffixVMArgs(t *testing.T) {
 	app.executeCommand("add vm vm2 mem-=512")
 	if !strings.Contains(app.State.Message, "unsupported increment syntax") {
 		t.Fatalf("add vm invalid args message = %q", app.State.Message)
+	}
+}
+
+func TestCommandRejectsDuplicateArgsBeforeMutating(t *testing.T) {
+	app := App{
+		Model: MockModel(),
+		Lab: &lab.Lab{
+			ID: "demo",
+			VMs: []lab.VM{{
+				ID:       "vm1",
+				Name:     "original",
+				MemoryMB: 1024,
+				CPUs:     2,
+			}},
+		},
+		State: ViewState{Focus: FocusGraph},
+	}
+
+	app.executeCommand("vm set vm1 name=first name=second")
+	if app.State.Message != "duplicate argument: name" {
+		t.Fatalf("duplicate arg message = %q", app.State.Message)
+	}
+	if app.Lab.VMs[0].Name != "original" {
+		t.Fatalf("duplicate arg mutated vm name to %q", app.Lab.VMs[0].Name)
 	}
 }
 
@@ -2261,12 +2970,14 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 }
 
 func TestShellVMUsesDirectConsole(t *testing.T) {
+	var consoleCtx context.Context
 	app := App{
 		Model:   MockModel(),
 		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "running"}},
+		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): " Running "}},
 		State:   ViewState{Focus: FocusGraph},
-		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
+		VMConsole: func(ctx context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
+			consoleCtx = ctx
 			if id != "vm1" {
 				t.Fatalf("console id = %q", id)
 			}
@@ -2282,11 +2993,43 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
 		t.Fatalf("vm shell started workload %d times", got)
 	}
+	if got := app.WorkloadStates[NodeKey(NodeVM, "vm1")]; got != "running" {
+		t.Fatalf("workload state = %q, want normalized running", got)
+	}
 	if app.PendingShell.Console == nil || app.PendingShell.NativeRun != nil {
 		t.Fatalf("vm shell command = %#v", app.PendingShell)
 	}
 	if app.PendingShell.Display != "vm console /dev/pts/7" {
 		t.Fatalf("vm shell display = %q", app.PendingShell.Display)
+	}
+	if _, ok := consoleCtx.Deadline(); !ok {
+		t.Fatal("VM console context had no deadline")
+	}
+}
+
+func TestCommandShellRejectsExtraArgs(t *testing.T) {
+	consoleCalled := false
+	app := App{
+		Model:   MockModel(),
+		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "running"}},
+		State:   ViewState{Focus: FocusGraph},
+		VMConsole: func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error) {
+			consoleCalled = true
+			return &fakeConsole{}, "vm console /dev/pts/7", nil
+		},
+	}
+
+	app.executeCommand("shell vm vm1 extra")
+
+	if app.State.Message != "usage: shell <vm|container> <id>" {
+		t.Fatalf("message = %q, want shell usage", app.State.Message)
+	}
+	if app.PendingShell != nil {
+		t.Fatalf("extra-arg shell queued pending shell: %#v", app.PendingShell)
+	}
+	if consoleCalled {
+		t.Fatal("extra-arg shell opened VM console")
 	}
 }
 
@@ -2627,7 +3370,7 @@ func TestCommandContainerNICAddAndConnect(t *testing.T) {
 	}
 }
 
-func TestContainerNICConnectReconcilesRunningContainer(t *testing.T) {
+func TestContainerNICConnectDoesNotReconcileRunningContainer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID: "demo",
@@ -2657,8 +3400,8 @@ func TestContainerNICConnectReconcilesRunningContainer(t *testing.T) {
 
 	app.containerNICConnect("web", "0", map[string]string{"to": "wan"})
 
-	if runtime.started != NodeKey(NodeContainer, "web") {
-		t.Fatalf("started = %q, want running container reconciled", runtime.started)
+	if runtime.started != "" {
+		t.Fatalf("started = %q, want no direct TUI reconcile", runtime.started)
 	}
 	if !strings.HasPrefix(app.State.Message, "connected nic to container:") {
 		t.Fatalf("message = %q", app.State.Message)
@@ -2743,6 +3486,86 @@ func TestCommandLinkAddUsesFirstAvailableTargetNIC(t *testing.T) {
 	}
 }
 
+func TestCommandVMNICDeleteRemovesDirectLinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}, {}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}}},
+		},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 1},
+			To:   lab.NetworkEndpoint{Type: "vm", ID: "vm2", NIC: 0},
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("vm nic delete vm1 1")
+
+	if app.State.Message != "deleted nic from vm:vm1 nic1" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.VMs[0].Networks) != 1 {
+		t.Fatalf("vm networks = %#v, want one nic", reloaded.VMs[0].Networks)
+	}
+	if len(reloaded.NetworkLinks) != 0 {
+		t.Fatalf("network links after nic delete = %#v, want none", reloaded.NetworkLinks)
+	}
+}
+
+func TestCommandContainerNICDeleteRemovesDirectLinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}}}},
+		Containers: []lab.Container{{
+			ID:       "web",
+			Image:    "nginx",
+			Networks: []lab.ContainerNetwork{{}, {}},
+		}},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 0},
+			To:   lab.NetworkEndpoint{Type: "container", ID: "web", NIC: 1},
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.executeCommand("container nic rm web 1")
+
+	if app.State.Message != "deleted nic from container:web nic1" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Containers[0].Networks) != 1 {
+		t.Fatalf("container networks = %#v, want one nic", reloaded.Containers[0].Networks)
+	}
+	if len(reloaded.NetworkLinks) != 0 {
+		t.Fatalf("network links after nic delete = %#v, want none", reloaded.NetworkLinks)
+	}
+}
+
 func TestCommandLinkReportsUsageForInvalidEndpoint(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 	app.executeCommand("link add vm1 to=vm:vm2")
@@ -2757,6 +3580,117 @@ func TestCommandReportsUnterminatedQuote(t *testing.T) {
 	app.executeCommand(`vm set vm1 name="unterminated`)
 	if !strings.Contains(app.State.Message, "unterminated quote") {
 		t.Fatalf("message = %q, want unterminated quote", app.State.Message)
+	}
+}
+
+func TestCommandMissingRequiredIDReportsUsage(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{"vm start", "usage: vm start <id>"},
+		{"vm run", "usage: vm start <id>"},
+		{"vm stop", "usage: vm stop <id>"},
+		{"vm delete", "usage: vm delete <id>"},
+		{"vm rm", "usage: vm delete <id>"},
+		{"vm nic delete vm1", "usage: vm nic delete <id> <index>"},
+		{"container start", "usage: container start <id>"},
+		{"ct run", "usage: container start <id>"},
+		{"container stop", "usage: container stop <id>"},
+		{"container delete", "usage: container delete <id>"},
+		{"ct rm", "usage: container delete <id>"},
+		{"container nic delete web", "usage: container nic delete <id> <index>"},
+		{"switch delete", "usage: switch delete <id>"},
+		{"sw rm", "usage: switch delete <id>"},
+		{"external delete", "usage: external delete <id>"},
+		{"ext rm", "usage: external delete <id>"},
+		{"disk merge", "usage: disk merge <id>"},
+		{"disk delete", "usage: disk delete <id>"},
+		{"disk rm", "usage: disk delete <id>"},
+	}
+
+	for _, tt := range tests {
+		app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+		app.executeCommand(tt.command)
+		if app.State.Message != tt.want {
+			t.Fatalf("%q message = %q, want %q", tt.command, app.State.Message, tt.want)
+		}
+	}
+}
+
+func TestCommandExtraArgsForFixedArityCommandsDoNotMutate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:           "vm1",
+			MemoryMB:     2048,
+			CPUs:         2,
+			DesiredState: lab.DesiredStateStopped,
+			Networks:     []lab.VMNetwork{{}},
+		}},
+		Containers: []lab.Container{{
+			ID:           "web",
+			Image:        "nginx",
+			DesiredState: lab.DesiredStateStopped,
+			Networks:     []lab.ContainerNetwork{{}},
+		}},
+		Switches:      []lab.Switch{{ID: "sw1", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink", Interface: "eth0"}},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 0},
+			To:   lab.NetworkEndpoint{Type: "container", ID: "web", NIC: 0},
+		}},
+		Disks: []lab.Disk{
+			{ID: "data", Path: "disks/data.qcow2", Format: "qcow2", Kind: "base"},
+			{ID: "data-layer", Path: "layers/data-layer.qcow2", Format: "qcow2", Kind: "layer", Base: "data"},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{"vm start vm1 extra", "usage: vm start <id>"},
+		{"vm stop vm1 extra", "usage: vm stop <id>"},
+		{"vm delete vm1 extra", "usage: vm delete <id>"},
+		{"vm nic delete vm1 0 extra", "usage: vm nic delete <id> <index>"},
+		{"container start web extra", "usage: container start <id>"},
+		{"container stop web extra", "usage: container stop <id>"},
+		{"container delete web extra", "usage: container delete <id>"},
+		{"container nic delete web 0 extra", "usage: container nic delete <id> <index>"},
+		{"switch delete sw1 extra", "usage: switch delete <id>"},
+		{"external delete uplink extra", "usage: external delete <id>"},
+		{"link delete vm:vm1:0 extra", "usage: link delete <vm|container>:<id>:<nic>"},
+		{"disk merge data-layer extra", "usage: disk merge <id>"},
+		{"disk delete data extra", "usage: disk delete <id>"},
+		{"disk layer delete data-layer extra", "usage: disk layer delete <id>"},
+	}
+	for _, tt := range tests {
+		app.executeCommand(tt.command)
+		if app.State.Message != tt.want {
+			t.Fatalf("%q message = %q, want %q", tt.command, app.State.Message, tt.want)
+		}
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.VMs) != 1 || reloaded.VMs[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("vm mutated after rejected commands: %#v", reloaded.VMs)
+	}
+	if len(reloaded.Containers) != 1 || reloaded.Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("container mutated after rejected commands: %#v", reloaded.Containers)
+	}
+	if len(reloaded.Switches) != 1 || len(reloaded.ExternalLinks) != 1 || len(reloaded.NetworkLinks) != 1 || len(reloaded.Disks) != 2 {
+		t.Fatalf("lab mutated after rejected commands: switches=%#v externals=%#v links=%#v disks=%#v", reloaded.Switches, reloaded.ExternalLinks, reloaded.NetworkLinks, reloaded.Disks)
 	}
 }
 
@@ -2827,10 +3761,20 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 }
 
 func TestContextMenuGlobalCreateCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.lab")
+	loaded := &lab.Lab{ID: "empty"}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	app := App{
-		Model: Model{ID: "empty"},
-		Lab:   &lab.Lab{ID: "empty"},
-		State: ViewState{Focus: FocusGraph},
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
 	}
 
 	app.runGlobalMenuAction("add vm")
@@ -3003,7 +3947,7 @@ func TestContextMenuVNCActionUsesExistingRuntimePort(t *testing.T) {
 	}
 }
 
-func TestContextMenuVNCActionStartsVMAndRefreshesPort(t *testing.T) {
+func TestContextMenuVNCActionRefreshesPortWithoutStartingVM(t *testing.T) {
 	loaded := &lab.Lab{
 		ID:  "demo",
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
@@ -3020,8 +3964,8 @@ func TestContextMenuVNCActionStartsVMAndRefreshesPort(t *testing.T) {
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
-	if runtime.started != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("vnc action started %q", runtime.started)
+	if runtime.started != "" {
+		t.Fatalf("vnc action started %q, want no direct TUI reconcile", runtime.started)
 	}
 	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5906" {
 		t.Fatalf("vnc command = %#v", app.PendingVNC)
@@ -3045,11 +3989,37 @@ func TestContextMenuVNCActionUsesPortWhenStateRefreshFails(t *testing.T) {
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
-	if runtime.started != NodeKey(NodeVM, "vm1") {
-		t.Fatalf("vnc action started %q", runtime.started)
+	if runtime.started != "" {
+		t.Fatalf("vnc action started %q, want no direct TUI reconcile", runtime.started)
 	}
 	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5907" {
 		t.Fatalf("vnc command = %#v message=%q", app.PendingVNC, app.State.Message)
+	}
+}
+
+func TestRefreshVNCWorkloadStatusUsesTimeoutContext(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	runtime := &deadlineRuntime{}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		Runtime: runtime,
+	}
+
+	if err := app.refreshVNCWorkloadStatus(Node{ID: "vm1", Type: NodeVM}); err != nil {
+		t.Fatalf("refreshVNCWorkloadStatus returned error: %v", err)
+	}
+	if _, ok := runtime.statesCtx.Deadline(); !ok {
+		t.Fatal("runtime States context had no deadline")
+	}
+	if _, ok := runtime.vncCtx.Deadline(); !ok {
+		t.Fatal("runtime VNCPorts context had no deadline")
+	}
+	if got := app.VNCPorts[NodeKey(NodeVM, "vm1")]; got != 5908 {
+		t.Fatalf("VNC port = %d, want 5908", got)
 	}
 }
 
@@ -3394,6 +4364,42 @@ func TestConnectNICModeCanCreateTargetNIC(t *testing.T) {
 	link := reloaded.NetworkLinks[0]
 	if link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 0 {
 		t.Fatalf("network link target = %#v", link)
+	}
+}
+
+func TestConnectNICModePreservesTargetNICCreateFailure(t *testing.T) {
+	loaded := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{
+			{ID: "vm1", MemoryMB: 2048, CPUs: 2, Networks: []lab.VMNetwork{{}}},
+			{ID: "vm2", MemoryMB: 2048, CPUs: 2},
+		},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		State: ViewState{
+			Focus:             FocusGraph,
+			ConnectMode:       true,
+			ConnectTargetMenu: true,
+			ConnectNodeID:     "vm1",
+			ConnectNodeType:   NodeVM,
+			ConnectNICIndex:   "0",
+			ConnectTargetID:   "vm2",
+			ConnectTargetType: NodeVM,
+		},
+	}
+
+	app.connectSelectedTargetNIC(Node{ID: "vm2", Type: NodeVM}, "New NIC")
+
+	if app.State.Message != "nic add failed: missing lab path" {
+		t.Fatalf("message = %q, want concrete nic add failure", app.State.Message)
+	}
+	if !app.State.ConnectMode || !app.State.ConnectTargetMenu {
+		t.Fatalf("connect mode should stay active after target nic create failure: %#v", app.State)
+	}
+	if len(app.Lab.VMs[1].Networks) != 0 {
+		t.Fatalf("failed target nic create mutated target networks: %#v", app.Lab.VMs[1].Networks)
 	}
 }
 

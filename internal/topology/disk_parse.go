@@ -51,12 +51,15 @@ func diskFormat(disk lab.Disk) string {
 	return "qcow2"
 }
 
-func diskSizeGB(value string, fallback int) int {
+func diskSizeGB(value string, fallback int) (int, bool) {
 	value = strings.TrimSpace(strings.ToUpper(value))
+	if value == "" {
+		return fallback, true
+	}
 	value = strings.TrimSuffix(value, "GB")
 	value = strings.TrimSuffix(value, "G")
 	if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
-		return parsed
+		return parsed, true
 	}
-	return fallback
+	return 0, false
 }

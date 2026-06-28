@@ -73,6 +73,14 @@ func (b *Bridge) macNATSessions(ctx context.Context, l *lab.Lab) ([]macnat.Sessi
 	return sessions, nil
 }
 
+func switchUsesMacNAT(l *lab.Lab, sw lab.Switch) bool {
+	if sw.Mode == "macnat-bridge" {
+		return true
+	}
+	link, ok := findExternalLink(l, sw.ExternalLink)
+	return ok && link.Mode == lab.ExternalModeMacNAT
+}
+
 func directExternalMACs(l *lab.Lab, externalID string) []string {
 	var macs []string
 	for _, vm := range l.VMs {

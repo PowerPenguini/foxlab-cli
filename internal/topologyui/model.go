@@ -180,6 +180,7 @@ func ModelFromLab(l *lab.Lab) Model {
 }
 
 func displayWorkloadState(desired, actual string) string {
+	actual = normalizeRuntimeState(actual)
 	if desired == lab.DesiredStateRunning {
 		switch actual {
 		case "", "missing", "created", "defined", "stopped", "shutoff":

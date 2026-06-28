@@ -24,11 +24,12 @@ func (s *Service) SaveAndRefresh() error {
 	if s.Lab == nil {
 		return fmt.Errorf("missing loaded lab")
 	}
-	path := firstNonEmpty(s.Path, s.Lab.Path())
+	path := s.savePath()
 	if path == "" {
 		return fmt.Errorf("missing lab path")
 	}
 	if err := lab.SaveFile(path, s.Lab); err != nil {
+		s.reloadAfterFailedSave(path)
 		return err
 	}
 	loaded, err := lab.LoadFile(path)
@@ -39,8 +40,55 @@ func (s *Service) SaveAndRefresh() error {
 	return nil
 }
 
+func (s *Service) saveAndRefreshWithRollback(snapshot *lab.Lab) error {
+	if err := s.SaveAndRefresh(); err != nil {
+		if snapshot != nil {
+			s.Lab = snapshot
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) reloadAfterFailedSave(path string) {
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		return
+	}
+	s.Lab = loaded
+}
+
+func (s *Service) savePath() string {
+	if s.Lab == nil {
+		return ""
+	}
+	return firstNonEmpty(s.Path, s.Lab.Path())
+}
+
+func (s *Service) requireSavePath() error {
+	if s.savePath() == "" {
+		return fmt.Errorf("missing lab path")
+	}
+	return nil
+}
+
 func (s *Service) HasVM(id string) bool {
 	return s.HasLabVM(id)
+}
+
+func (s *Service) existingNodeKind(id string) string {
+	switch {
+	case s.HasLabSwitch(id):
+		return "switch"
+	case s.HasLabExternal(id):
+		return "external link"
+	case s.HasLabVM(id):
+		return "vm"
+	case s.HasLabContainer(id):
+		return "container"
+	default:
+		return ""
+	}
 }
 
 func (s *Service) HasLabVM(id string) bool {
@@ -114,7 +162,7 @@ func (s *Service) LabExternal(id string) (lab.ExternalLink, bool) {
 func (s *Service) NextVMID() string {
 	for i := s.nodeCount() + 1; ; i++ {
 		id := fmt.Sprintf("vm%d", i)
-		if !s.HasVM(id) {
+		if s.existingNodeKind(id) == "" {
 			return id
 		}
 	}
@@ -123,7 +171,7 @@ func (s *Service) NextVMID() string {
 func (s *Service) NextSwitchID() string {
 	for i := s.nodeCount() + 1; ; i++ {
 		id := fmt.Sprintf("sw%d", i)
-		if !s.HasLabSwitch(id) {
+		if s.existingNodeKind(id) == "" {
 			return id
 		}
 	}
@@ -132,7 +180,7 @@ func (s *Service) NextSwitchID() string {
 func (s *Service) NextExternalID() string {
 	for i := s.nodeCount() + 1; ; i++ {
 		id := fmt.Sprintf("uplink%d", i)
-		if !s.HasLabExternal(id) {
+		if s.existingNodeKind(id) == "" {
 			return id
 		}
 	}
@@ -141,7 +189,7 @@ func (s *Service) NextExternalID() string {
 func (s *Service) NextContainerID() string {
 	for i := s.nodeCount() + 1; ; i++ {
 		id := fmt.Sprintf("ct%d", i)
-		if !s.HasLabContainer(id) {
+		if s.existingNodeKind(id) == "" {
 			return id
 		}
 	}
@@ -185,8 +233,12 @@ func (s *Service) VMDesiredState(id, state string) string {
 		if s.Lab.VMs[i].ID != id {
 			continue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "desired state failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.VMs[i].DesiredState = state
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "desired state failed: " + err.Error()
 		}
 		return "desired vm:" + id + " " + state
@@ -206,8 +258,12 @@ func (s *Service) ContainerDesiredState(id, state string) string {
 		if s.Lab.Containers[i].ID != id {
 			continue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "desired state failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.Containers[i].DesiredState = state
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "desired state failed: " + err.Error()
 		}
 		return "desired container:" + id + " " + state

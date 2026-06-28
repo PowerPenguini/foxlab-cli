@@ -37,9 +37,9 @@ func (a *App) handleTopMenuKey(key string) bool {
 	case "tab":
 		a.State.Focus = NextFocus(a.State.Focus)
 	case "left":
-		a.State.TopMenuRootSelected = (normalizedMenuSelection(a.State.TopMenuRootSelected, len(rootItems)) - 1 + len(rootItems)) % len(rootItems)
+		a.State.TopMenuRootSelected = moveTopRibbonRootSelection(rootItems, a.State.TopMenuRootSelected, -1, a.State)
 	case "right":
-		a.State.TopMenuRootSelected = (normalizedMenuSelection(a.State.TopMenuRootSelected, len(rootItems)) + 1) % len(rootItems)
+		a.State.TopMenuRootSelected = moveTopRibbonRootSelection(rootItems, a.State.TopMenuRootSelected, 1, a.State)
 	case "escape":
 		a.State.Focus = FocusGraph
 	case "space", "enter", "down":
@@ -48,8 +48,19 @@ func (a *App) handleTopMenuKey(key string) bool {
 		if action == "exit" {
 			return true
 		}
-		a.State.TopMenuOpen = true
-		a.State.TopMenuSelected = 0
+		if action == "apply-lab" {
+			if !topRibbonRootEnabled(rootItems[selected], a.State) {
+				return false
+			}
+			if key == "space" || key == "enter" {
+				a.applyOpenLab()
+			}
+			return false
+		}
+		if action == "create-menu" {
+			a.State.TopMenuOpen = true
+			a.State.TopMenuSelected = 0
+		}
 	}
 	return false
 }

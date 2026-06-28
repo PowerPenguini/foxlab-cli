@@ -53,10 +53,29 @@ func networkEndpointKey(endpoint NetworkEndpoint) string {
 }
 
 func bridgeName(managedName string) string {
-	const maxLinuxIfName = 15
-	clean := strings.NewReplacer("_", "", "-", "").Replace(managedName)
-	if len(clean) > maxLinuxIfName-2 {
-		clean = clean[:maxLinuxIfName-2]
+	const (
+		maxLinuxIfName = 15
+		prefix         = "fl"
+		hashLen        = 6
+	)
+	clean := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(managedName))
+	if clean == "" {
+		clean = "foxlab"
 	}
-	return "fl" + clean
+	maxBase := maxLinuxIfName - len(prefix)
+	if len(clean) <= maxBase {
+		return prefix + clean
+	}
+	hash := fmt.Sprintf("%06x", hash32(clean)&0xffffff)
+	stemLen := maxLinuxIfName - len(prefix) - hashLen
+	if stemLen < 1 {
+		stemLen = 1
+	}
+	return prefix + clean[:stemLen] + hash
+}
+
+func hash32(value string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(value))
+	return h.Sum32()
 }

@@ -20,6 +20,9 @@ func parseArgs(fields []string) (map[string]string, error) {
 		if strings.HasSuffix(key, "+") || strings.HasSuffix(key, "-") {
 			return nil, fmt.Errorf("unsupported increment syntax: %q", key)
 		}
+		if _, exists := out[key]; exists {
+			return nil, fmt.Errorf("duplicate argument: %s", key)
+		}
 		out[key] = strings.TrimSpace(unquoteValue(value))
 	}
 	return out, nil

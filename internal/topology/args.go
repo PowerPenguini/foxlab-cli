@@ -105,7 +105,78 @@ func unexpectedContainerNICConnectArgs(args map[string]string) []string {
 	return invalid
 }
 
+func unexpectedSwitchArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"name":         {},
+		"mode":         {},
+		"external":     {},
+		"externallink": {},
+	}
+	var invalid []string
+	for key := range args {
+		if _, ok := valid[key]; !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	return invalid
+}
+
+func unexpectedExternalArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"name":      {},
+		"interface": {},
+		"mode":      {},
+	}
+	var invalid []string
+	for key := range args {
+		if _, ok := valid[key]; !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	return invalid
+}
+
+func unexpectedDiskCreateArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"size":   {},
+		"format": {},
+		"to":     {},
+		"target": {},
+		"attach": {},
+	}
+	return unexpectedArgs(args, valid)
+}
+
+func unexpectedDiskAttachArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"to":     {},
+		"target": {},
+	}
+	return unexpectedArgs(args, valid)
+}
+
+func unexpectedDiskDetachArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"type":   {},
+		"from":   {},
+		"target": {},
+		"disk":   {},
+	}
+	return unexpectedArgs(args, valid)
+}
+
+func unexpectedArgs(args map[string]string, valid map[string]struct{}) []string {
+	var invalid []string
+	for key := range args {
+		if _, ok := valid[key]; !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	return invalid
+}
+
 func nicIndexArg(value string) (int, bool) {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0, false
 	}
@@ -132,6 +203,26 @@ func positiveInt(value string) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func positiveIntField(args map[string]string, key string) (int, bool, bool) {
+	value, present := args[key]
+	if !present {
+		return 0, false, true
+	}
+	parsed, ok := positiveInt(value)
+	return parsed, true, ok
+}
+
+func parseBool(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func boolArg(value string, fallback bool) bool {

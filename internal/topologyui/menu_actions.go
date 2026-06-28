@@ -4,6 +4,8 @@ import "strings"
 
 func contextMenuAction(label string) string {
 	switch strings.TrimSpace(label) {
+	case "Apply lab", "apply lab":
+		return "apply-lab"
 	case "Configuration >", "Configuration", "config >":
 		return "config-menu"
 	case "NIC >", "NIC", "nic >":

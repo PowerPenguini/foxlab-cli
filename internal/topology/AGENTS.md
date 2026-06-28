@@ -17,7 +17,7 @@
 - Mutations operate on durable desired lab state only. They do not inspect libvirt/containerd live state directly.
 - Every successful state change should persist through `SaveAndRefresh()` so normalized/validated lab state is reloaded.
 - Removing workloads or NICs must also remove stale direct network links and detach managed disk layers where applicable.
-- Disk attachment creates a qcow2 layer for a VM/container and leaves the base disk unmodified until an explicit merge.
+- Disk attachment activates the selected disk only: a base disk is attached directly, an existing layer is attached directly, and new qcow2 layers are created only by explicit layer actions.
 - Command result strings are user-visible; keep names and wording stable once introduced.
 
 ## Work Guidance

@@ -23,6 +23,10 @@ type Runtime interface {
 	Close() error
 }
 
+type Destroyer interface {
+	Destroy(context.Context, *lab.Lab, Ref) error
+}
+
 type VNCRuntime interface {
 	VNCPorts(context.Context, *lab.Lab) (map[string]int, error)
 }

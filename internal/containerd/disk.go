@@ -24,13 +24,32 @@ var runHostCommand = func(ctx context.Context, name string, args ...string) erro
 	return nil
 }
 
+var lookPath = exec.LookPath
+
 type containerDiskMount struct {
-	Source      string
-	Destination string
+	Source                  string
+	Destination             string
+	CleanupDiskOnFailure    bool
+	CleanupOverlayOnFailure bool
 }
 
-func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container) (containerDiskMount, error) {
-	if err := requireContainerDiskTools(); err != nil {
+const containerDiskSourceMarker = ".foxlab-disk-source"
+const containerImageSourceMarker = ".foxlab-image-source"
+
+var containerDiskHooks = struct {
+	requireTools func() error
+	mountSource  func(string) (bool, string, error)
+	rootWritable func(string) bool
+	freeNBD      func() (string, error)
+}{
+	requireTools: requireContainerDiskTools,
+	mountSource:  mountSource,
+	rootWritable: containerRootFSWritable,
+	freeNBD:      freeNBDDevice,
+}
+
+func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container, imageRef, address, namespace string) (containerDiskMount, error) {
+	if err := containerDiskHooks.requireTools(); err != nil {
 		return containerDiskMount{}, err
 	}
 	diskPath := l.ResolvePath(ct.Disk)
@@ -41,44 +60,166 @@ func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 	if err != nil {
 		return containerDiskMount{}, err
 	}
-	rebuild := false
-	if mounted, source, err := mountSource(mountPath); err != nil {
+	cleanupDiskOnFailure := false
+	if mounted, source, err := containerDiskHooks.mountSource(mountPath); err != nil {
 		return containerDiskMount{}, err
 	} else if mounted {
-		if !containerRootFSWritable(mountPath) {
+		if !containerDiskHooks.rootWritable(mountPath) {
 			if err := cleanupMountedContainerDiskMount(ctx, mountPath, source); err != nil {
 				return containerDiskMount{}, fmt.Errorf("reset unusable container disk mount: %w", err)
 			}
-			rebuild = true
 		} else {
-			return containerDiskMount{Source: mountPath, Destination: containerDiskDestination(l, ct)}, nil
+			if mountedDiskPath, ok := mountedContainerDiskSource(mountPath); ok {
+				if mountedDiskPath != filepath.Clean(diskPath) {
+					if err := cleanupMountedContainerDiskMount(ctx, mountPath, source); err != nil {
+						return containerDiskMount{}, fmt.Errorf("reset stale container disk mount: %w", err)
+					}
+				} else {
+					return prepareContainerOverlayMount(ctx, l, ct, imageRef, address, namespace, mountPath, cleanupDiskOnFailure)
+				}
+			} else {
+				return prepareContainerOverlayMount(ctx, l, ct, imageRef, address, namespace, mountPath, cleanupDiskOnFailure)
+			}
 		}
 	}
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		return containerDiskMount{}, err
 	}
 	_ = runHostCommand(ctx, "modprobe", "nbd", "max_part=16")
-	device, err := freeNBDDevice()
+	device, err := containerDiskHooks.freeNBD()
 	if err != nil {
 		return containerDiskMount{}, err
 	}
 	if err := runHostCommand(ctx, "qemu-nbd", "--connect="+device, diskPath); err != nil {
 		return containerDiskMount{}, fmt.Errorf("connect container disk: %w", err)
 	}
-	if err := mountContainerDisk(ctx, device, mountPath, rebuild); err != nil {
+	if err := mountContainerDisk(ctx, device, mountPath); err != nil {
 		_ = runHostCommand(ctx, "qemu-nbd", "--disconnect", device)
 		return containerDiskMount{}, fmt.Errorf("mount container disk: %w", err)
 	}
-	return containerDiskMount{Source: mountPath, Destination: containerDiskDestination(l, ct)}, nil
+	cleanupDiskOnFailure = true
+	if err := writeContainerDiskSourceMarker(mountPath, diskPath); err != nil {
+		_ = cleanupMountedContainerDiskMount(ctx, mountPath, device)
+		return containerDiskMount{}, fmt.Errorf("record container disk source: %w", err)
+	}
+	mount, err := prepareContainerOverlayMount(ctx, l, ct, imageRef, address, namespace, mountPath, cleanupDiskOnFailure)
+	if err != nil {
+		_ = cleanupMountedContainerDiskMount(ctx, mountPath, device)
+		return containerDiskMount{}, err
+	}
+	return mount, nil
 }
 
-func mountContainerDisk(ctx context.Context, device, mountPath string, forceFormat bool) error {
-	if forceFormat {
-		if err := formatContainerDisk(ctx, device); err != nil {
-			return err
-		}
-		return runHostCommand(ctx, "mount", device, mountPath)
+func prepareContainerOverlayMount(ctx context.Context, l *lab.Lab, ct lab.Container, imageRef, address, namespace, diskRoot string, cleanupDiskOnFailure bool) (containerDiskMount, error) {
+	paths, err := containerOverlayPaths(l, ct, diskRoot)
+	if err != nil {
+		return containerDiskMount{}, err
 	}
+	if err := os.MkdirAll(paths.lower, 0o755); err != nil {
+		return containerDiskMount{}, err
+	}
+	if err := os.MkdirAll(paths.upper, 0o755); err != nil {
+		return containerDiskMount{}, err
+	}
+	if err := os.MkdirAll(paths.work, 0o755); err != nil {
+		return containerDiskMount{}, err
+	}
+	if err := os.MkdirAll(paths.merged, 0o755); err != nil {
+		return containerDiskMount{}, err
+	}
+	if err := ensureContainerImageMount(ctx, paths.lower, paths.imageMarker, imageRef, address, namespace); err != nil {
+		return containerDiskMount{}, err
+	}
+	if err := ensureContainerOverlayRoot(ctx, paths); err != nil {
+		_ = cleanupContainerImageMount(ctx, paths.lower, address, namespace)
+		return containerDiskMount{}, err
+	}
+	return containerDiskMount{
+		Source:                  paths.merged,
+		Destination:             "/",
+		CleanupDiskOnFailure:    cleanupDiskOnFailure,
+		CleanupOverlayOnFailure: true,
+	}, nil
+}
+
+type containerOverlayPathSet struct {
+	lower       string
+	imageMarker string
+	upper       string
+	work        string
+	merged      string
+}
+
+func containerOverlayPaths(l *lab.Lab, ct lab.Container, diskRoot string) (containerOverlayPathSet, error) {
+	root, err := l.StorageRoot()
+	if err != nil {
+		return containerOverlayPathSet{}, err
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return containerOverlayPathSet{}, err
+	}
+	lower := filepath.Join(root, "container-image-rootfs", ct.ID)
+	return containerOverlayPathSet{
+		lower:       lower,
+		imageMarker: lower + containerImageSourceMarker,
+		upper:       filepath.Join(diskRoot, "upper"),
+		work:        filepath.Join(diskRoot, "work"),
+		merged:      filepath.Join(diskRoot, "merged"),
+	}, nil
+}
+
+func ensureContainerImageMount(ctx context.Context, lower, marker, imageRef, address, namespace string) error {
+	if mounted, _, err := containerDiskHooks.mountSource(lower); err != nil {
+		return err
+	} else if mounted {
+		if mountedImageRef, ok := mountedContainerImageSource(marker); ok && mountedImageRef == imageRef {
+			return nil
+		}
+		if err := cleanupContainerImageMount(ctx, lower, address, namespace); err != nil {
+			return fmt.Errorf("reset stale container image rootfs: %w", err)
+		}
+	}
+	args := ctrGlobalArgs(address, namespace)
+	args = append(args, "images", "mount", "--snapshotter", "overlayfs", imageRef, lower)
+	if err := runHostCommand(ctx, "ctr", args...); err != nil {
+		return fmt.Errorf("mount container image rootfs: %w", err)
+	}
+	if err := writeContainerImageSourceMarker(marker, imageRef); err != nil {
+		_ = cleanupContainerImageMount(ctx, lower, address, namespace)
+		return fmt.Errorf("record container image source: %w", err)
+	}
+	return nil
+}
+
+func ensureContainerOverlayRoot(ctx context.Context, paths containerOverlayPathSet) error {
+	if mounted, _, err := containerDiskHooks.mountSource(paths.merged); err != nil {
+		return err
+	} else if mounted {
+		if err := runHostCommand(ctx, "umount", paths.merged); err != nil {
+			return fmt.Errorf("reset stale container overlay rootfs: %w", err)
+		}
+	}
+	options := "lowerdir=" + paths.lower + ",upperdir=" + paths.upper + ",workdir=" + paths.work
+	if err := runHostCommand(ctx, "mount", "-t", "overlay", "overlay", "-o", options, paths.merged); err != nil {
+		return fmt.Errorf("mount container overlay rootfs: %w", err)
+	}
+	return nil
+}
+
+func mountedContainerImageSource(marker string) (string, bool) {
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(data)), true
+}
+
+func writeContainerImageSourceMarker(marker, imageRef string) error {
+	return os.WriteFile(marker, []byte(strings.TrimSpace(imageRef)+"\n"), 0o644)
+}
+
+func mountContainerDisk(ctx context.Context, device, mountPath string) error {
 	err := runHostCommand(ctx, "mount", device, mountPath)
 	if err == nil {
 		return nil
@@ -111,6 +252,22 @@ func containerRootFSWritable(path string) bool {
 	return true
 }
 
+func mountedContainerDiskSource(mountPath string) (string, bool) {
+	data, err := os.ReadFile(containerDiskSourceMarkerPath(mountPath))
+	if err != nil {
+		return "", false
+	}
+	return filepath.Clean(strings.TrimSpace(string(data))), true
+}
+
+func writeContainerDiskSourceMarker(mountPath, diskPath string) error {
+	return os.WriteFile(containerDiskSourceMarkerPath(mountPath), []byte(filepath.Clean(diskPath)+"\n"), 0o644)
+}
+
+func containerDiskSourceMarkerPath(mountPath string) string {
+	return filepath.Join(mountPath, containerDiskSourceMarker)
+}
+
 func containerDiskHasFilesystem(ctx context.Context, device string) bool {
 	return runHostCommand(ctx, "blkid", "-o", "value", "-s", "TYPE", device) == nil
 }
@@ -132,7 +289,7 @@ func cleanupMountedContainerDiskMount(ctx context.Context, mountPath, source str
 	return nil
 }
 
-func cleanupContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container) error {
+func cleanupContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container, address, namespace string) error {
 	if ct.Disk == "" {
 		return nil
 	}
@@ -140,16 +297,62 @@ func cleanupContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 	if err != nil {
 		return err
 	}
-	mounted, source, err := mountSource(mountPath)
+	if err := cleanupContainerOverlayMount(ctx, l, ct, mountPath, address, namespace); err != nil {
+		return err
+	}
+	mounted, source, err := containerDiskHooks.mountSource(mountPath)
 	if err != nil || !mounted {
 		return err
 	}
 	return cleanupMountedContainerDiskMount(ctx, mountPath, source)
 }
 
+func cleanupContainerOverlayMount(ctx context.Context, l *lab.Lab, ct lab.Container, diskRoot, address, namespace string) error {
+	paths, err := containerOverlayPaths(l, ct, diskRoot)
+	if err != nil {
+		return err
+	}
+	if mounted, _, err := containerDiskHooks.mountSource(paths.merged); err != nil {
+		return err
+	} else if mounted {
+		if err := runHostCommand(ctx, "umount", paths.merged); err != nil {
+			return fmt.Errorf("unmount container overlay rootfs: %w", err)
+		}
+	}
+	if mounted, _, err := containerDiskHooks.mountSource(paths.lower); err != nil {
+		return err
+	} else if mounted {
+		if err := cleanupContainerImageMount(ctx, paths.lower, address, namespace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupContainerImageMount(ctx context.Context, lower, address, namespace string) error {
+	args := ctrGlobalArgs(address, namespace)
+	args = append(args, "images", "unmount", "--rm", lower)
+	if err := runHostCommand(ctx, "ctr", args...); err != nil {
+		return fmt.Errorf("unmount container image rootfs: %w", err)
+	}
+	_ = os.Remove(lower + containerImageSourceMarker)
+	return nil
+}
+
+func ctrGlobalArgs(address, namespace string) []string {
+	args := []string{}
+	if address = strings.TrimSpace(address); address != "" && address != DefaultAddress {
+		args = append(args, "--address", address)
+	}
+	if namespace = strings.TrimSpace(namespace); namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+	return args
+}
+
 func requireContainerDiskTools() error {
-	for _, name := range []string{"qemu-img", "qemu-nbd", "modprobe", "mount", "umount", "mkfs.ext4", "blkid"} {
-		if _, err := exec.LookPath(name); err != nil {
+	for _, name := range []string{"qemu-nbd", "modprobe", "mount", "umount", "mkfs.ext4", "blkid", "ctr"} {
+		if _, err := lookPath(name); err != nil {
 			return fmt.Errorf("container disk mount requires %s", name)
 		}
 	}

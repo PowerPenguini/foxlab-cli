@@ -80,6 +80,9 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("vm %q desiredState must be running or stopped", vm.ID))
 		}
 		for _, nic := range vm.Networks {
+			if !validMAC(nic.MAC) {
+				problems = append(problems, fmt.Sprintf("vm %q network mac %q is invalid", vm.ID, nic.MAC))
+			}
 			switchRef := nic.Switch != ""
 			externalRef := nic.ExternalLink != ""
 			if switchRef && externalRef {
@@ -115,6 +118,9 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ct.ID))
 		}
 		for _, nic := range ct.Networks {
+			if !validMAC(nic.MAC) {
+				problems = append(problems, fmt.Sprintf("container %q network mac %q is invalid", ct.ID, nic.MAC))
+			}
 			switchRef := nic.Switch != ""
 			externalRef := nic.ExternalLink != ""
 			if switchRef && externalRef {
@@ -134,7 +140,27 @@ func (l *Lab) Validate() error {
 		}
 	}
 
+	nodeIDs := map[string]string{}
+	for _, node := range []struct {
+		kind string
+		ids  map[string]struct{}
+	}{
+		{kind: "switch", ids: switchIDs},
+		{kind: "external link", ids: externalLinkIDs},
+		{kind: "vm", ids: vmIDs},
+		{kind: "container", ids: containerIDs},
+	} {
+		for id := range node.ids {
+			if existing, exists := nodeIDs[id]; exists {
+				problems = append(problems, fmt.Sprintf("node id %q is used by both %s and %s", id, existing, node.kind))
+				continue
+			}
+			nodeIDs[id] = node.kind
+		}
+	}
+
 	diskIDs := map[string]struct{}{}
+	diskKinds := map[string]string{}
 	for _, disk := range l.Disks {
 		if !validID(disk.ID) {
 			problems = append(problems, fmt.Sprintf("disk %q has invalid id", disk.ID))
@@ -143,6 +169,7 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("duplicate disk id %q", disk.ID))
 		}
 		diskIDs[disk.ID] = struct{}{}
+		diskKinds[disk.ID] = normalizedDiskKind(disk)
 	}
 	for _, disk := range l.Disks {
 		if disk.Path == "" {
@@ -154,16 +181,29 @@ func (l *Lab) Validate() error {
 		if disk.Kind != "" && disk.Kind != "base" && disk.Kind != "layer" && disk.Kind != "data" {
 			problems = append(problems, fmt.Sprintf("disk %q kind must be base, layer or data", disk.ID))
 		}
-		if disk.Kind == "layer" && disk.Base == "" {
+		kind := normalizedDiskKind(disk)
+		if kind == "layer" && disk.Base == "" {
 			problems = append(problems, fmt.Sprintf("disk %q layer requires base", disk.ID))
 		}
-		if disk.Kind == "data" && disk.Base != "" {
+		if kind == "data" && disk.Base != "" {
 			problems = append(problems, fmt.Sprintf("disk %q data disk must not reference base", disk.ID))
 		}
+		if kind == "base" && disk.Base != "" {
+			problems = append(problems, fmt.Sprintf("disk %q base disk must not reference base", disk.ID))
+		}
 		if disk.Base != "" {
-			if _, ok := diskIDs[disk.Base]; !ok {
+			baseKind, baseExists := diskKinds[disk.Base]
+			switch {
+			case disk.Base == disk.ID:
+				problems = append(problems, fmt.Sprintf("disk %q must not use itself as base", disk.ID))
+			case !baseExists:
 				problems = append(problems, fmt.Sprintf("disk %q references missing base disk %q", disk.ID, disk.Base))
+			case baseKind != "base":
+				problems = append(problems, fmt.Sprintf("disk %q base disk %q must be a base disk", disk.ID, disk.Base))
 			}
+		}
+		if disk.AttachedType == "" && disk.AttachedTo != "" {
+			problems = append(problems, fmt.Sprintf("disk %q attachedTo requires attachedType", disk.ID))
 		}
 		switch disk.AttachedType {
 		case "":
@@ -180,6 +220,23 @@ func (l *Lab) Validate() error {
 			}
 		default:
 			problems = append(problems, fmt.Sprintf("disk %q attachedType must be vm or container", disk.ID))
+		}
+	}
+	attachedDisks := map[string]string{}
+	for _, disk := range l.Disks {
+		if disk.AttachedType == "" || disk.AttachedTo == "" {
+			continue
+		}
+		key := disk.AttachedType + ":" + disk.AttachedTo
+		if existing, exists := attachedDisks[key]; exists {
+			problems = append(problems, fmt.Sprintf("disks %q and %q are both attached to %s", existing, disk.ID, key))
+			continue
+		}
+		attachedDisks[key] = disk.ID
+		if workloadDisk := l.attachedWorkloadDiskPath(disk.AttachedType, disk.AttachedTo); workloadDisk == "" {
+			problems = append(problems, fmt.Sprintf("disk %q is attached to %s but workload disk is empty", disk.ID, key))
+		} else if l.ResolvePath(workloadDisk) != l.ResolvePath(disk.Path) {
+			problems = append(problems, fmt.Sprintf("disk %q attachment path does not match %s disk", disk.ID, key))
 		}
 	}
 
@@ -284,6 +341,21 @@ func validID(id string) bool {
 	return idPattern.MatchString(id)
 }
 
+func normalizedDiskKind(disk Disk) string {
+	if disk.Kind == "" {
+		return "base"
+	}
+	return disk.Kind
+}
+
+func ValidID(id string) bool {
+	return validID(id)
+}
+
+func ValidMAC(value string) bool {
+	return validMAC(value)
+}
+
 func validDesiredState(value string) bool {
 	switch normalizeDesiredState(value) {
 	case "", DesiredStateRunning, DesiredStateStopped:
@@ -302,6 +374,15 @@ func validExternalMode(value string) bool {
 	}
 }
 
+func validMAC(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	_, ok := parseNICMAC(value)
+	return ok
+}
+
 func findVMByID(vms []VM, id string) (VM, bool) {
 	for _, vm := range vms {
 		if vm.ID == id {
@@ -318,4 +399,18 @@ func findContainerByID(containers []Container, id string) (Container, bool) {
 		}
 	}
 	return Container{}, false
+}
+
+func (l *Lab) attachedWorkloadDiskPath(attachedType, attachedTo string) string {
+	switch attachedType {
+	case "vm":
+		if vm, ok := findVMByID(l.VMs, attachedTo); ok {
+			return vm.Disk
+		}
+	case "container":
+		if ct, ok := findContainerByID(l.Containers, attachedTo); ok {
+			return ct.Disk
+		}
+	}
+	return ""
 }

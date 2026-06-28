@@ -24,8 +24,12 @@ func (s *Service) NICConnectDirect(sourceType, sourceID, indexValue, targetType,
 		return err.Error()
 	}
 	target := lab.NetworkEndpoint{Type: targetType, ID: targetID, NIC: targetIndex}
+	if err := s.requireSavePath(); err != nil {
+		return "nic connect failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
 	s.Lab.NetworkLinks = append(s.Lab.NetworkLinks, lab.NetworkLink{From: source, To: target})
-	if err := s.SaveAndRefresh(); err != nil {
+	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "nic connect failed: " + err.Error()
 	}
 	return "connected direct " + sourceType + ":" + sourceID + " nic" + indexValue + " to " + targetType + ":" + targetID + " nic" + strconv.Itoa(targetIndex)
@@ -54,6 +58,10 @@ func (s *Service) NICConnectDirectTo(sourceType, sourceID, sourceIndexValue, tar
 	if err := s.ensureNICEndpointExists(target); err != nil {
 		return err.Error()
 	}
+	if err := s.requireSavePath(); err != nil {
+		return "nic connect failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
 	if err := s.disconnectNICEndpoint(source); err != nil {
 		return err.Error()
 	}
@@ -61,7 +69,7 @@ func (s *Service) NICConnectDirectTo(sourceType, sourceID, sourceIndexValue, tar
 		return err.Error()
 	}
 	s.Lab.NetworkLinks = append(s.Lab.NetworkLinks, lab.NetworkLink{From: source, To: target})
-	if err := s.SaveAndRefresh(); err != nil {
+	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "nic connect failed: " + err.Error()
 	}
 	return "connected direct " + sourceType + ":" + sourceID + " nic" + sourceIndexValue + " to " + targetType + ":" + targetID + " nic" + targetIndexValue
@@ -76,10 +84,17 @@ func (s *Service) NICDisconnect(sourceType, sourceID, indexValue string) string 
 		return "usage: nic disconnect <source> <index>"
 	}
 	endpoint := lab.NetworkEndpoint{Type: sourceType, ID: sourceID, NIC: index}
+	if err := s.ensureNICEndpointExists(endpoint); err != nil {
+		return err.Error()
+	}
+	if err := s.requireSavePath(); err != nil {
+		return "nic disconnect failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
 	if err := s.disconnectNICEndpoint(endpoint); err != nil {
 		return err.Error()
 	}
-	if err := s.SaveAndRefresh(); err != nil {
+	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "nic disconnect failed: " + err.Error()
 	}
 	return "disconnected nic from " + sourceType + ":" + sourceID + " nic" + indexValue

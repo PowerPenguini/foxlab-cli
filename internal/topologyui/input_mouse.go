@@ -121,9 +121,13 @@ func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
 }
 
 func (a *App) topMenuFeedbackRect(event mouseEvent) (rect, bool) {
-	rootRects := topMenuButtonRects(topRibbonRootItems(), a.ViewWidth)
-	for _, button := range rootRects {
+	rootItems := topRibbonRootItems()
+	rootRects := topMenuButtonRects(rootItems, a.ViewWidth)
+	for i, button := range rootRects {
 		if xyInRect(event.x, event.y, button) {
+			if !topRibbonRootEnabled(rootItems[i], a.State) {
+				return rect{}, false
+			}
 			return button, true
 		}
 	}
@@ -143,10 +147,11 @@ func (a *App) topMenuDropdownLayout() (menuColumnLayout, bool) {
 		return menuColumnLayout{}, false
 	}
 	rootRects := topMenuButtonRects(topRibbonRootItems(), a.ViewWidth)
-	if len(rootRects) == 0 {
+	addIndex := topRibbonAddRootIndex(topRibbonRootItems())
+	if addIndex < 0 || addIndex >= len(rootRects) {
 		return menuColumnLayout{}, false
 	}
-	return layoutDropdownMenu(rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}, rootRects[0], menuItemsFromLabels(items), a.State.TopMenuSelected)
+	return layoutDropdownMenu(rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}, rootRects[addIndex], menuItemsFromLabels(items), a.State.TopMenuSelected)
 }
 
 func (a *App) contextMenuFeedbackRect(event mouseEvent) (rect, bool) {
@@ -259,11 +264,22 @@ func (a *App) handleTopMenuMouse(event mouseEvent) bool {
 		a.State.Focus = FocusTop
 		a.State.TopMenuRootSelected = i
 		action := contextMenuAction(rootItems[i])
+		if !topRibbonRootEnabled(rootItems[i], a.State) {
+			a.State.TopMenuOpen = false
+			return false
+		}
 		if action == "exit" {
 			return true
 		}
-		a.State.TopMenuOpen = !a.State.TopMenuOpen
-		a.State.TopMenuSelected = 0
+		if action == "apply-lab" {
+			a.State.TopMenuOpen = false
+			a.applyOpenLab()
+			return false
+		}
+		if action == "create-menu" {
+			a.State.TopMenuOpen = !a.State.TopMenuOpen
+			a.State.TopMenuSelected = 0
+		}
 		return false
 	}
 	if !a.State.TopMenuOpen {

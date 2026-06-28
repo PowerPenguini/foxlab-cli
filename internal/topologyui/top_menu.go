@@ -3,7 +3,7 @@ package topologyui
 import "strings"
 
 func topRibbonRootItems() []string {
-	return []string{"add >", "exit"}
+	return []string{"apply lab", "add >", "exit"}
 }
 
 func topRibbonAddItems() []string {
@@ -18,6 +18,8 @@ func topMenuLabel(item string) string {
 	label := strings.TrimSpace(item)
 	label = strings.TrimSpace(strings.TrimSuffix(label, ">"))
 	switch label {
+	case "apply lab":
+		return "Apply lab"
 	case "add":
 		return "Add"
 	case "add vm":
@@ -35,6 +37,36 @@ func topMenuLabel(item string) string {
 	default:
 		return label
 	}
+}
+
+func topRibbonAddRootIndex(items []string) int {
+	for i, item := range items {
+		if contextMenuAction(item) == "create-menu" {
+			return i
+		}
+	}
+	return -1
+}
+
+func topRibbonRootEnabled(item string, state ViewState) bool {
+	if contextMenuAction(item) == "apply-lab" {
+		return !state.ApplyLabDisabled
+	}
+	return true
+}
+
+func moveTopRibbonRootSelection(items []string, selected, step int, state ViewState) int {
+	if len(items) == 0 {
+		return 0
+	}
+	next := normalizedMenuSelection(selected, len(items))
+	for range items {
+		next = (next + step + len(items)) % len(items)
+		if topRibbonRootEnabled(items[next], state) {
+			return next
+		}
+	}
+	return normalizedMenuSelection(selected, len(items))
 }
 
 func topMenuButtonRects(items []string, width int) []rect {

@@ -123,6 +123,13 @@ func (r *LibvirtRuntime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref)
 	return r.StopVM(ctx, l, ref.ID)
 }
 
+func (r *LibvirtRuntime) Destroy(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+	if ref.Type != workload.TypeVM {
+		return fmt.Errorf("libvirt cannot destroy workload type %q", ref.Type)
+	}
+	return r.StopVM(ctx, l, ref.ID)
+}
+
 func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -222,7 +229,7 @@ func (r *LibvirtRuntime) StopVM(ctx context.Context, l *lab.Lab, id string) erro
 	dom, err := r.conn.LookupDomainByName(l.ManagedDomainName(vm))
 	if err != nil {
 		if isNotFound(err) {
-			return fmt.Errorf("libvirt domain not found: %s", l.ManagedDomainName(vm))
+			return r.stopMissingVM(ctx, l, vm)
 		}
 		return err
 	}
@@ -237,6 +244,11 @@ func (r *LibvirtRuntime) StopVM(ctx context.Context, l *lab.Lab, id string) erro
 	}
 	r.detachVMNICs(ctx, l, vm)
 	return r.undefineVM(vm, dom)
+}
+
+func (r *LibvirtRuntime) stopMissingVM(ctx context.Context, l *lab.Lab, vm lab.VM) error {
+	r.detachVMNICs(ctx, l, vm)
+	return nil
 }
 
 func (r *LibvirtRuntime) attachVMNICs(ctx context.Context, l *lab.Lab, vm lab.VM) error {

@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -86,7 +87,7 @@ func (r *Runtime) States(ctx context.Context, l *lab.Lab) (map[string]string, er
 	return states, nil
 }
 
-func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err error) {
 	if ref.Type != workload.TypeContainer {
 		return fmt.Errorf("containerd cannot start workload type %q", ref.Type)
 	}
@@ -100,6 +101,48 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error
 	}
 	defer closeClient()
 	name := l.ManagedContainerName(ct)
+	desiredDiskMount := containerDiskMount{}
+	if ct.Disk != "" {
+		var err error
+		desiredDiskMount, err = desiredContainerDiskMount(l, ct)
+		if err != nil {
+			return err
+		}
+	}
+	container, loadErr := client.LoadContainer(ctx, name)
+	if loadErr == nil {
+		if nilInterface(container) {
+			return fmt.Errorf("containerd returned nil container handle: %s", name)
+		}
+		changed, err := containerConfigChanged(ctx, container, ct, desiredDiskMount)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			task, err := container.Task(ctx, nil)
+			if err == nil {
+				if nilInterface(task) {
+					return fmt.Errorf("containerd returned nil task handle: %s", name)
+				}
+				status, statusErr := task.Status(ctx)
+				if statusErr == nil && status.Status == containerd.Running {
+					if r.Bridge != nil {
+						if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
+							return err
+						}
+					}
+					return nil
+				}
+				if err := deleteTask(ctx, task); err != nil {
+					return fmt.Errorf("delete stale task for %s: %w", name, err)
+				}
+			} else if !errdefs.IsNotFound(err) {
+				return err
+			}
+		}
+	} else if !errdefs.IsNotFound(loadErr) {
+		return loadErr
+	}
 	imageRef, err := containerImageRef(ct.Image)
 	if err != nil {
 		return err
@@ -111,12 +154,20 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error
 	diskMount := containerDiskMount{}
 	if ct.Disk != "" {
 		var err error
-		diskMount, err = prepareContainerDiskMount(ctx, l, ct)
+		diskMount, err = prepareContainerDiskMount(ctx, l, ct, imageRef, r.containerdAddress(), r.containerdNamespace())
 		if err != nil {
 			return err
 		}
 	}
-	container, err := client.LoadContainer(ctx, name)
+	startComplete := false
+	defer func() {
+		if !startComplete {
+			if cleanupErr := cleanupPreparedContainerDiskMount(l, ct, diskMount, r.containerdAddress(), r.containerdNamespace()); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
+	}()
+	container, err = client.LoadContainer(ctx, name)
 	if err != nil {
 		if !errdefs.IsNotFound(err) {
 			return err
@@ -144,11 +195,16 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error
 		status, statusErr := task.Status(ctx)
 		if statusErr == nil && status.Status == containerd.Running {
 			if r.Bridge != nil {
-				return r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid()))
+				if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
+					return err
+				}
 			}
+			startComplete = true
 			return nil
 		}
-		_ = deleteTask(ctx, task)
+		if err := deleteTask(ctx, task); err != nil {
+			return fmt.Errorf("delete stale task for %s: %w", name, err)
+		}
 	} else if !errdefs.IsNotFound(err) {
 		return err
 	}
@@ -160,13 +216,40 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error
 		return fmt.Errorf("containerd returned nil task handle after create: %s", name)
 	}
 	if err := task.Start(ctx); err != nil {
-		_ = deleteTask(ctx, task)
+		if cleanupErr := deleteTask(ctx, task); cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("delete failed task for %s: %w", name, cleanupErr))
+		}
 		return err
 	}
 	if r.Bridge != nil {
 		if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
+			if cleanupErr := deleteTask(ctx, task); cleanupErr != nil {
+				return errors.Join(err, fmt.Errorf("delete failed task for %s: %w", name, cleanupErr))
+			}
 			return err
 		}
+	}
+	startComplete = true
+	return nil
+}
+
+func cleanupPreparedContainerDiskMount(l *lab.Lab, ct lab.Container, diskMount containerDiskMount, address, namespace string) error {
+	if !diskMount.CleanupDiskOnFailure && !diskMount.CleanupOverlayOnFailure {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if diskMount.CleanupOverlayOnFailure {
+		mountPath, err := containerDiskMountPath(l, ct)
+		if err != nil {
+			return err
+		}
+		if err := cleanupContainerOverlayMount(ctx, l, ct, mountPath, address, namespace); err != nil {
+			return err
+		}
+	}
+	if diskMount.CleanupDiskOnFailure {
+		return cleanupContainerDiskMount(ctx, l, ct, address, namespace)
 	}
 	return nil
 }
@@ -190,7 +273,7 @@ func (r *Runtime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error 
 	container, err := client.LoadContainer(ctx, l.ManagedContainerName(ct))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
-			return nil
+			return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 		}
 		return err
 	}
@@ -200,18 +283,50 @@ func (r *Runtime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error 
 	task, err := container.Task(ctx, nil)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
-			return cleanupContainerDiskMount(ctx, l, ct)
+			return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 		}
 		return err
 	}
 	if nilInterface(task) {
-		return cleanupContainerDiskMount(ctx, l, ct)
+		return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 	}
 	_ = task.Kill(ctx, syscall.SIGTERM)
 	if err := deleteTask(ctx, task); err != nil {
 		return err
 	}
-	return cleanupContainerDiskMount(ctx, l, ct)
+	return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
+}
+
+func (r *Runtime) Destroy(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+	if ref.Type != workload.TypeContainer {
+		return fmt.Errorf("containerd cannot destroy workload type %q", ref.Type)
+	}
+	ct, ok := findContainer(l, ref.ID)
+	if !ok {
+		return fmt.Errorf("container not found: %s", ref.ID)
+	}
+	if r.Bridge != nil {
+		r.Bridge.DetachContainer(ctx, l, ct)
+	}
+	client, ctx, closeClient, err := r.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeClient()
+	container, err := client.LoadContainer(ctx, l.ManagedContainerName(ct))
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
+		}
+		return err
+	}
+	if nilInterface(container) {
+		return fmt.Errorf("containerd returned nil container handle: %s", l.ManagedContainerName(ct))
+	}
+	if err := deleteContainer(ctx, container); err != nil {
+		return err
+	}
+	return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 }
 
 func (r *Runtime) client(ctx context.Context) (*containerd.Client, context.Context, func(), error) {
@@ -230,6 +345,20 @@ func (r *Runtime) client(ctx context.Context) (*containerd.Client, context.Conte
 	return client, namespaces.WithNamespace(ctx, namespace), func() { _ = client.Close() }, nil
 }
 
+func (r *Runtime) containerdNamespace() string {
+	if strings.TrimSpace(r.Namespace) == "" {
+		return DefaultNamespace
+	}
+	return r.Namespace
+}
+
+func (r *Runtime) containerdAddress() string {
+	if strings.TrimSpace(r.Address) == "" {
+		return DefaultAddress
+	}
+	return r.Address
+}
+
 func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount containerDiskMount) []oci.SpecOpts {
 	opts := []oci.SpecOpts{oci.WithImageConfig(image)}
 	opts = append(opts, oci.WithProcessArgs(containerProcessArgs(ct)...))
@@ -242,12 +371,16 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 	}
 	opts = append(opts, oci.WithHostResolvconf)
 	if diskMount.Source != "" {
-		opts = append(opts, oci.WithMounts([]specs.Mount{{
-			Type:        "bind",
-			Source:      diskMount.Source,
-			Destination: diskMount.Destination,
-			Options:     []string{"rbind", "rw"},
-		}}))
+		if diskMount.Destination == "/" {
+			opts = append(opts, oci.WithRootFSPath(diskMount.Source))
+		} else {
+			opts = append(opts, oci.WithMounts([]specs.Mount{{
+				Type:        "bind",
+				Source:      diskMount.Source,
+				Destination: diskMount.Destination,
+				Options:     []string{"rbind", "rw"},
+			}}))
+		}
 	}
 	return opts
 }
@@ -287,9 +420,11 @@ func containerImage(ctx context.Context, client *containerd.Client, imageRef str
 func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, ct lab.Container, diskMount containerDiskMount) (containerd.Container, error) {
 	opts := []containerd.NewContainerOpts{
 		containerd.WithImage(image),
-		containerd.WithNewSnapshot(name+"-rootfs", image),
 		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount)...),
 		containerd.WithContainerLabels(map[string]string{configLabel: containerConfigHash(ct, diskMount)}),
+	}
+	if diskMount.Source == "" || diskMount.Destination != "/" {
+		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
 	}
 	return client.NewContainer(
 		ctx,
@@ -330,6 +465,11 @@ func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string 
 	parts = append(parts, "diskDestination="+diskMount.Destination)
 	parts = append(parts, "dns="+containerDNSMode)
 	parts = append(parts, "command="+strings.Join(containerProcessArgs(ct), "\x00"))
+	for i, nic := range ct.Networks {
+		parts = append(parts, fmt.Sprintf("network:%d:switch=%s", i, nic.Switch))
+		parts = append(parts, fmt.Sprintf("network:%d:external=%s", i, nic.ExternalLink))
+		parts = append(parts, fmt.Sprintf("network:%d:mac=%s", i, nic.MAC))
+	}
 	keys := make([]string, 0, len(ct.Env))
 	for key := range ct.Env {
 		keys = append(keys, key)
@@ -340,6 +480,17 @@ func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string 
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return hex.EncodeToString(sum[:])
+}
+
+func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount, error) {
+	if ct.Disk == "" {
+		return containerDiskMount{}, nil
+	}
+	mountPath, err := containerDiskMountPath(l, ct)
+	if err != nil {
+		return containerDiskMount{}, err
+	}
+	return containerDiskMount{Source: filepath.Join(mountPath, "merged"), Destination: "/"}, nil
 }
 
 func nilInterface(value any) bool {
@@ -353,40 +504,6 @@ func nilInterface(value any) bool {
 	default:
 		return false
 	}
-}
-
-func containerDiskDestination(l *lab.Lab, ct lab.Container) string {
-	disk, ok := attachedContainerDisk(l, ct)
-	if !ok {
-		return "/data"
-	}
-	value := strings.TrimSpace(disk.MountPath)
-	if value == "" {
-		return "/data"
-	}
-	clean := path.Clean("/" + strings.TrimLeft(value, "/"))
-	if clean == "/" {
-		return "/data"
-	}
-	return clean
-}
-
-func attachedContainerDisk(l *lab.Lab, ct lab.Container) (lab.Disk, bool) {
-	if l == nil || ct.Disk == "" {
-		return lab.Disk{}, false
-	}
-	resolvedContainerDisk := l.ResolvePath(ct.Disk)
-	for _, disk := range l.Disks {
-		if disk.AttachedType == "container" && disk.AttachedTo == ct.ID {
-			return disk, true
-		}
-	}
-	for _, disk := range l.Disks {
-		if l.ResolvePath(disk.Path) == resolvedContainerDisk {
-			return disk, true
-		}
-	}
-	return lab.Disk{}, false
 }
 
 func deleteTask(ctx context.Context, task containerd.Task) error {

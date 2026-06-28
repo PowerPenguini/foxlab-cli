@@ -83,9 +83,6 @@ func (a *App) containerNICAdd(id string, args map[string]string) {
 func (a *App) containerNICConnect(id, index string, args map[string]string) {
 	a.State.Message = a.ensureService().ContainerNICConnect(id, index, args)
 	a.syncAfterServiceMutation()
-	if strings.HasPrefix(a.State.Message, "connected nic to container:") {
-		a.reconcileRunningWorkload(NodeContainer, id)
-	}
 }
 
 func (a *App) containerNICDelete(id, index string) {

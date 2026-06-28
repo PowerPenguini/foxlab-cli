@@ -1,6 +1,7 @@
 package virt
 
 import (
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,39 @@ func TestDomainXMLUsesGeneratedMACForMacNATExternalLink(t *testing.T) {
 	}
 }
 
+func TestDomainXMLEscapesAttributeValues(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), `disk & "quote".qcow2`)
+	if err := writeEmptyFile(diskPath); err != nil {
+		t.Fatal(err)
+	}
+	l := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: `eth0&"lab"`}},
+		VMs: []lab.VM{{
+			ID:       "vm1",
+			MemoryMB: 2048,
+			CPUs:     2,
+			Disk:     diskPath,
+			Networks: []lab.VMNetwork{{ExternalLink: "uplink1"}},
+		}},
+	}
+	l.Normalize()
+
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWellFormedXML(t, xmlText)
+	for _, want := range []string{
+		`disk &amp; &quot;quote&quot;.qcow2`,
+		`<source dev="eth0&amp;&quot;lab&quot;" mode="bridge"/>`,
+	} {
+		if !strings.Contains(xmlText, want) {
+			t.Fatalf("domain XML missing escaped value %q:\n%s", want, xmlText)
+		}
+	}
+}
+
 func TestParseVNCPortReturnsAssignedPort(t *testing.T) {
 	xmlText := `<domain><devices><graphics type="vnc" port="5903" autoport="yes" listen="127.0.0.1"/></devices></domain>`
 
@@ -200,5 +234,33 @@ func TestNetworkXMLUsesManagedMetadata(t *testing.T) {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("network XML missing %q:\n%s", want, xmlText)
 		}
+	}
+}
+
+func TestNetworkXMLEscapesAttributeValues(t *testing.T) {
+	l := &lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: `eth0&"wan"`}},
+		Switches:      []lab.Switch{{ID: "sw1", Mode: "nat", ExternalLink: "uplink1"}},
+	}
+	l.Normalize()
+
+	xmlText, err := networkXML(l, l.Switches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWellFormedXML(t, xmlText)
+	if want := `<forward mode="nat" dev="eth0&amp;&quot;wan&quot;"/>`; !strings.Contains(xmlText, want) {
+		t.Fatalf("network XML missing escaped uplink %q:\n%s", want, xmlText)
+	}
+}
+
+func assertWellFormedXML(t *testing.T, xmlText string) {
+	t.Helper()
+	var root struct {
+		XMLName xml.Name
+	}
+	if err := xml.Unmarshal([]byte(xmlText), &root); err != nil {
+		t.Fatalf("generated XML is not well-formed: %v\n%s", err, xmlText)
 	}
 }

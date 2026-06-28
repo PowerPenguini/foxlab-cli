@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
@@ -13,7 +12,7 @@ import (
 )
 
 func main() {
-	fs := flag.NewFlagSet("topology-tui", flag.ExitOnError)
+	fs := flag.NewFlagSet("foxlab", flag.ExitOnError)
 	labPath := fs.String("lab", "", "optional .lab file to render")
 	mock := fs.Bool("mock", false, "render built-in mock topology")
 	noRaw := fs.Bool("no-raw", false, "render one frame without raw terminal mode")
@@ -22,18 +21,21 @@ func main() {
 	uri := fs.String("uri", virt.DefaultURI, "libvirt URI")
 	containerdAddress := fs.String("containerd", "", "containerd socket path")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: topology-tui [--lab demo.lab] [--mock] [--no-raw] [demo.lab]")
+		fmt.Fprintln(os.Stderr, "usage: foxlab [--lab demo.lab] [--mock] [--no-raw] [demo.lab]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 
-	if *labPath == "" && fs.NArg() > 0 {
-		*labPath = fs.Arg(0)
+	resolvedLabPath, err := resolveLabPath(*labPath, fs.Args(), *mock)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
+	*labPath = resolvedLabPath
 	if *labPath == "" && !*mock {
-		path, ok, err := defaultLabPath()
+		path, ok, err := lab.DefaultPath()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -72,6 +74,28 @@ func main() {
 	}
 }
 
+func resolveLabPath(flagPath string, args []string, mock bool) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("unexpected argument %q", args[1])
+	}
+	if flagPath != "" && len(args) > 0 {
+		return "", fmt.Errorf("unexpected argument %q; --lab is already set", args[0])
+	}
+	if mock {
+		if flagPath != "" {
+			return "", fmt.Errorf("--mock cannot be combined with --lab")
+		}
+		if len(args) > 0 {
+			return "", fmt.Errorf("--mock cannot be combined with a lab path")
+		}
+		return "", nil
+	}
+	if flagPath == "" && len(args) == 1 {
+		return args[0], nil
+	}
+	return flagPath, nil
+}
+
 func loadModel(path string, mock bool) (topologyui.Model, error) {
 	model, _, err := loadModelAndLab(path, mock)
 	return model, err
@@ -89,33 +113,4 @@ func loadModelAndLab(path string, mock bool) (topologyui.Model, *lab.Lab, error)
 		return topologyui.Model{}, nil, err
 	}
 	return topologyui.ModelFromLab(loaded), loaded, nil
-}
-
-func defaultLabPath() (string, bool, error) {
-	dir, err := lab.FoxlabHome()
-	if err != nil {
-		return "", false, err
-	}
-	path := filepath.Join(dir, "default.lab")
-	if path, ok := regularFile(path); ok {
-		return path, true, nil
-	}
-	matches, err := filepath.Glob(filepath.Join(dir, "*.lab"))
-	if err == nil && len(matches) == 1 {
-		if path, ok := regularFile(matches[0]); ok {
-			return path, true, nil
-		}
-	}
-	if err := lab.SaveFile(path, &lab.Lab{ID: "default"}); err != nil {
-		return "", false, fmt.Errorf("create default lab: %w", err)
-	}
-	return path, true, nil
-}
-
-func regularFile(path string) (string, bool) {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return "", false
-	}
-	return path, true
 }

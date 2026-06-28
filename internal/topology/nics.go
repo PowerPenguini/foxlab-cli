@@ -13,12 +13,19 @@ func (s *Service) VMNICAdd(id string, args map[string]string) string {
 	if invalid := unexpectedVMNICAddArgs(args); len(invalid) > 0 {
 		return "unsupported vm nic add argument: " + invalid[0]
 	}
+	if err := validateNICMACArg("vm nic", args["mac"]); err != nil {
+		return err.Error()
+	}
 	for i := range s.Lab.VMs {
 		if s.Lab.VMs[i].ID != id {
 			continue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "nic add failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.VMs[i].Networks = append(s.Lab.VMs[i].Networks, lab.VMNetwork{MAC: args["mac"]})
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic add failed: " + err.Error()
 		}
 		return "added nic to vm:" + id
@@ -41,6 +48,9 @@ func (s *Service) VMNICConnect(id, indexValue string, args map[string]string) st
 	if err != nil {
 		return err.Error()
 	}
+	if err := validateNICMACArg("vm nic", args["mac"]); err != nil {
+		return err.Error()
+	}
 	for i := range s.Lab.VMs {
 		if s.Lab.VMs[i].ID != id {
 			continue
@@ -48,13 +58,17 @@ func (s *Service) VMNICConnect(id, indexValue string, args map[string]string) st
 		if index >= len(s.Lab.VMs[i].Networks) {
 			return "vm nic not found: " + id + ":" + indexValue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "nic connect failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.removeNetworkLinksForEndpoint(lab.NetworkEndpoint{Type: "vm", ID: id, NIC: index})
 		s.Lab.VMs[i].Networks[index].Switch = switchRef
 		s.Lab.VMs[i].Networks[index].ExternalLink = externalRef
 		if value := args["mac"]; value != "" {
 			s.Lab.VMs[i].Networks[index].MAC = value
 		}
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic connect failed: " + err.Error()
 		}
 		return "connected nic to vm:" + id
@@ -77,9 +91,13 @@ func (s *Service) VMNICDelete(id, indexValue string) string {
 		if index >= len(s.Lab.VMs[i].Networks) {
 			return "vm nic not found: " + id + ":" + indexValue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "nic delete failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.VMs[i].Networks = append(s.Lab.VMs[i].Networks[:index], s.Lab.VMs[i].Networks[index+1:]...)
 		s.removeNetworkLinksForDeletedNIC("vm", id, index)
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic delete failed: " + err.Error()
 		}
 		return "deleted nic from vm:" + id + " nic" + indexValue
@@ -94,12 +112,19 @@ func (s *Service) ContainerNICAdd(id string, args map[string]string) string {
 	if invalid := unexpectedContainerNICAddArgs(args); len(invalid) > 0 {
 		return "unsupported container nic add argument: " + invalid[0]
 	}
+	if err := validateNICMACArg("container nic", args["mac"]); err != nil {
+		return err.Error()
+	}
 	for i := range s.Lab.Containers {
 		if s.Lab.Containers[i].ID != id {
 			continue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "container nic add failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.Containers[i].Networks = append(s.Lab.Containers[i].Networks, lab.ContainerNetwork{MAC: args["mac"]})
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic add failed: " + err.Error()
 		}
 		return "added nic to container:" + id
@@ -122,6 +147,9 @@ func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]str
 	if err != nil {
 		return err.Error()
 	}
+	if err := validateNICMACArg("container nic", args["mac"]); err != nil {
+		return err.Error()
+	}
 	for i := range s.Lab.Containers {
 		if s.Lab.Containers[i].ID != id {
 			continue
@@ -129,13 +157,17 @@ func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]str
 		if index >= len(s.Lab.Containers[i].Networks) {
 			return "container nic not found: " + id + ":" + indexValue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "container nic connect failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.removeNetworkLinksForEndpoint(lab.NetworkEndpoint{Type: "container", ID: id, NIC: index})
 		s.Lab.Containers[i].Networks[index].Switch = switchRef
 		s.Lab.Containers[i].Networks[index].ExternalLink = externalRef
 		if value := args["mac"]; value != "" {
 			s.Lab.Containers[i].Networks[index].MAC = value
 		}
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic connect failed: " + err.Error()
 		}
 		return "connected nic to container:" + id
@@ -158,9 +190,13 @@ func (s *Service) ContainerNICDelete(id, indexValue string) string {
 		if index >= len(s.Lab.Containers[i].Networks) {
 			return "container nic not found: " + id + ":" + indexValue
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "container nic delete failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
 		s.Lab.Containers[i].Networks = append(s.Lab.Containers[i].Networks[:index], s.Lab.Containers[i].Networks[index+1:]...)
 		s.removeNetworkLinksForDeletedNIC("container", id, index)
-		if err := s.SaveAndRefresh(); err != nil {
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic delete failed: " + err.Error()
 		}
 		return "deleted nic from container:" + id + " nic" + indexValue

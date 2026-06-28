@@ -81,12 +81,16 @@ func drawTopRibbon(g *grid, bounds rect, state ViewState) {
 	buttons := topMenuButtonRects(items, bounds.W)
 	fillRow(g, 0, 0, g.Width, ansiBgGray+ansiWhite)
 	activeRoot := normalizedMenuSelection(state.TopMenuRootSelected, len(items))
+	addRoot := topRibbonAddRootIndex(items)
 	for i, button := range buttons {
 		style := ansiBgGray + ansiWhite
-		if state.Focus == FocusTop && i == activeRoot {
+		enabled := topRibbonRootEnabled(items[i], state)
+		if !enabled {
+			style = ansiBgGray + ansiWhite + ansiDim
+		} else if state.Focus == FocusTop && i == activeRoot {
 			style = ansiBgCyan + ansiWhite + ansiBold
 		}
-		if state.TopMenuOpen && i == 0 {
+		if state.TopMenuOpen && i == addRoot {
 			style = ansiBgCyan + ansiWhite + ansiBold
 		}
 		g.Text(button.X, button.Y, fit(" "+topMenuLabel(items[i])+" ", button.W), style)
@@ -98,7 +102,10 @@ func drawTopRibbon(g *grid, bounds rect, state ViewState) {
 	if len(dropdownItems) == 0 {
 		return
 	}
-	menu, ok := layoutDropdownMenu(bounds, buttons[0], menuItemsFromLabels(dropdownItems), state.TopMenuSelected)
+	if addRoot < 0 || addRoot >= len(buttons) {
+		return
+	}
+	menu, ok := layoutDropdownMenu(bounds, buttons[addRoot], menuItemsFromLabels(dropdownItems), state.TopMenuSelected)
 	if !ok {
 		return
 	}

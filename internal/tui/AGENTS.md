@@ -30,7 +30,7 @@
   - `GOCACHE=/tmp/foxlab-cli-go-build go test ./internal/tui/...`
 - Full visual regression when primitives affect topology rendering:
   - `GOCACHE=/tmp/foxlab-cli-go-build go test ./...`
-  - `GOCACHE=/tmp/foxlab-cli-go-build go run . --no-raw --width 90 --height 24`
+  - `GOCACHE=/tmp/foxlab-cli-go-build go run ./cmd/foxlab --no-raw --width 90 --height 24`
 
 ## Child DOX Index
 

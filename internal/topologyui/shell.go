@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/virt"
 )
@@ -51,13 +52,15 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 		return err
 	}
 	defer closeRuntime()
-	stateCtx, stateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stateCtx, stateCancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer stateCancel()
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
 	if states, err := runtime.States(stateCtx, a.Lab); err == nil {
 		key := NodeKey(node.Type, node.ID)
-		if states[key] == "running" {
-			a.WorkloadStates = states
-			a.ensureService().States = states
+		if normalizeRuntimeState(states[key]) == "running" {
+			a.WorkloadStates = cloneRuntimeStateMap(states)
+			a.ensureService().States = a.WorkloadStates
 			a.applyWorkloadStates()
 			return nil
 		}
@@ -75,7 +78,9 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 	}
 	switch node.Type {
 	case NodeVM:
-		console, display, err := a.vmConsole(context.Background(), node.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
+		defer cancel()
+		console, display, err := a.vmConsole(ctx, node.ID)
 		if err != nil {
 			a.State.Message = "vm console failed: " + err.Error()
 			return shellCommand{}, false
@@ -129,7 +134,7 @@ func containerShellNeedsRestart(detail string) bool {
 
 func (a *App) containerShellExecCommand(ct lab.Container) *exec.Cmd {
 	args := []string{}
-	if address := firstNonEmpty(a.ContainerdAddress, a.containerdAddressFromLab()); address != "" {
+	if address := firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)); address != "" {
 		args = append(args, "--address", address)
 	}
 	args = append(args,
@@ -314,8 +319,7 @@ func writeFull(w io.Writer, input []byte) error {
 }
 
 func (a *App) executeShellCommand(fields []string) {
-	if len(fields) < 3 {
-		a.State.Message = "usage: shell <vm|container> <id>"
+	if !a.requireExactCommandArgs(fields, 3, "usage: shell <vm|container> <id>") {
 		return
 	}
 	typ := fields[1]

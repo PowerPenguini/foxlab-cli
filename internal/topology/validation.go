@@ -1,0 +1,83 @@
+package topology
+
+import (
+	"fmt"
+	"strings"
+
+	"foxlab-cli/internal/lab"
+)
+
+func validSwitchMode(mode string) bool {
+	switch mode {
+	case "bridge", "nat", "macnat-bridge":
+		return true
+	default:
+		return false
+	}
+}
+
+func validExternalMode(mode string) bool {
+	switch mode {
+	case "nat", "direct", "macnat":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) validateSwitchConfig(id, mode, external string) error {
+	if !validSwitchMode(mode) {
+		return fmt.Errorf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", id, mode)
+	}
+	if mode == "macnat-bridge" && external == "" {
+		return fmt.Errorf("switch %q macnat-bridge mode requires externalLink", id)
+	}
+	if external != "" && !s.HasLabExternal(external) {
+		return fmt.Errorf("switch %q references missing external link %q", id, external)
+	}
+	return nil
+}
+
+func validateExternalConfig(id, mode string) error {
+	if !validExternalMode(mode) {
+		return fmt.Errorf("external link %q uses unsupported mode %q; supported modes are nat, direct and macnat", id, mode)
+	}
+	return nil
+}
+
+func (s *Service) validateVMNetworkRefs(id, switchRef, externalRef string) error {
+	if switchRef != "" && externalRef != "" {
+		return fmt.Errorf("vm %q network must not reference both switch and externalLink", id)
+	}
+	if switchRef != "" && !s.HasLabSwitch(switchRef) {
+		return fmt.Errorf("vm %q references missing switch %q", id, switchRef)
+	}
+	if externalRef != "" && !s.HasLabExternal(externalRef) {
+		return fmt.Errorf("vm %q references missing external link %q", id, externalRef)
+	}
+	return nil
+}
+
+func (s *Service) validateContainerNetworkRefs(id, switchRef, externalRef string) error {
+	if switchRef != "" && externalRef != "" {
+		return fmt.Errorf("container %q network must not reference both switch and externalLink", id)
+	}
+	if switchRef != "" && !s.HasLabSwitch(switchRef) {
+		return fmt.Errorf("container %q references missing switch %q", id, switchRef)
+	}
+	if externalRef != "" && !s.HasLabExternal(externalRef) {
+		return fmt.Errorf("container %q references missing external link %q", id, externalRef)
+	}
+	return nil
+}
+
+func validateNICMACArg(scope, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !lab.ValidMAC(value) {
+		return fmt.Errorf("invalid %s mac: %s", scope, value)
+	}
+	return nil
+}

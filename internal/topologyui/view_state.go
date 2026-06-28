@@ -38,6 +38,7 @@ type ViewState struct {
 	TopMenuRootSelected int
 	TopMenuOpen         bool
 	TopMenuSelected     int
+	ApplyLabDisabled    bool
 	MouseClickActive    bool
 	MouseClickX         int
 	MouseClickY         int

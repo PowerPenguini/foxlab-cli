@@ -103,7 +103,13 @@ func (a *App) createNamedLayerForNode(node Node, entry diskMenuEntry, value stri
 		a.State.Message = "disk attach needs vm or container"
 		return
 	}
-	a.diskAttach(entry.diskID, map[string]string{"to": target, "layer": layerID})
+	targetType, targetID, ok := strings.Cut(target, ":")
+	if !ok {
+		a.State.Message = "disk attach needs vm or container"
+		return
+	}
+	a.State.Message = a.ensureService().DiskLayerCreateAndAttach(entry.diskID, layerID, targetType, targetID)
+	a.syncAfterServiceMutation()
 }
 
 func (a *App) detachDiskFromNode(node Node) {

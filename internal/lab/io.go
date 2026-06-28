@@ -1,9 +1,12 @@
 package lab
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +24,12 @@ func LoadFile(path string) (*Lab, error) {
 	if err := dec.Decode(&l); err != nil {
 		return nil, err
 	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("lab file %q contains multiple YAML documents", path)
+	} else if err != io.EOF {
+		return nil, err
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -35,11 +44,14 @@ func LoadFile(path string) (*Lab, error) {
 }
 
 func SaveFile(path string, l *Lab) error {
+	if l == nil {
+		return fmt.Errorf("missing lab")
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	copy := *l
+	copy := Clone(l)
 	copy.path = abs
 	copy.root = filepath.Dir(abs)
 	copy.Normalize()
@@ -49,11 +61,63 @@ func SaveFile(path string, l *Lab) error {
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(&copy)
+	data, err := yaml.Marshal(copy)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(abs, data, 0o644)
+	return writeFileAtomic(abs, data, 0o644)
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	var owner *syscall.Stat_t
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			owner = stat
+		}
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if owner != nil && os.Geteuid() == 0 {
+		if err := tmp.Chown(int(owner.Uid), int(owner.Gid)); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
+	}
+	return nil
 }
 
 func ListFiles(workspace string) ([]string, error) {
