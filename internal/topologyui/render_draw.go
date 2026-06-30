@@ -427,7 +427,11 @@ func drawContextPlaceholder(g *grid, x, y int, item, rowStyle string) {
 }
 
 func drawConsole(g *grid, state ViewState, width, height int) {
-	drawConsoleLines(g, []string{consoleLine(state)}, width, height, state.CommandMode)
+	line := consoleLine(state)
+	if line == "" {
+		return
+	}
+	drawConsoleLines(g, []string{line}, width, height, state.CommandMode)
 }
 
 func consoleLine(state ViewState) string {
@@ -437,20 +441,7 @@ func consoleLine(state ViewState) string {
 		}
 		return state.Message
 	}
-	switch {
-	case state.CommandMode:
-		return ": command | Enter run | Esc cancel"
-	case state.MoveMode:
-		return "move: arrows/hjkl reposition | Enter save | Esc cancel"
-	case state.ConnectMode:
-		return "connect: choose target | Enter/click confirm | Esc cancel"
-	case state.ContextMenu:
-		return "menu: arrows/hjkl navigate | Enter/click select | Esc close"
-	case state.Focus == FocusTop:
-		return "top: arrows choose | Enter open | Tab graph | Space/menu click opens actions"
-	default:
-		return "graph: arrows/hjkl select | Space/menu click opens actions | : commands"
-	}
+	return ""
 }
 
 func drawConsoleLines(g *grid, lines []string, width, height int, commandMode bool) {

@@ -52,6 +52,13 @@ type App struct {
 	DaemonController      DaemonController
 	runtimeMu             sync.Mutex
 	pendingKeys           []string
+	mouseDownNodeID       string
+	mouseDownNodeType     string
+	mouseDownX            int
+	mouseDownY            int
+	mouseDragStartX       int
+	mouseDragStartY       int
+	mouseDragMoved        bool
 }
 
 const runtimeStatusTimeout = 5 * time.Second

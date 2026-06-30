@@ -36,17 +36,13 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 		g.Text(x, y, fit(line, w), inspectorLineStyle(line))
 		y++
 	}
-	if y < panel.Y+panel.H-2 {
-		y++
-		g.Text(x, y, fit("actions Space menu  m move", w), themeMuted)
-	}
 }
 
 func drawInspectorHeader(g *grid, node Node, x, y, width int) {
 	if width <= 0 {
 		return
 	}
-	badge := "[" + NodeKind(node.Type) + "]"
+	badge := "[" + firstNonEmpty(node.Badge, NodeKind(node.Type)) + "]"
 	name := firstNonEmpty(node.Label, node.ID)
 	if runeLen(badge) >= width {
 		g.Text(x, y, fit(badge, width), nodeBadgeStyle(node.Type))

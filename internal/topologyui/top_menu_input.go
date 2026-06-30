@@ -46,7 +46,7 @@ func (a *App) handleTopMenuKey(key string) bool {
 		selected := normalizedMenuSelection(a.State.TopMenuRootSelected, len(rootItems))
 		action := contextMenuAction(rootItems[selected])
 		if action == "exit" {
-			return true
+			return key == "space" || key == "enter"
 		}
 		if action == "apply-lab" {
 			if !topRibbonRootEnabled(rootItems[selected], a.State) {

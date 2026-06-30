@@ -30,7 +30,7 @@ func contextMenuAction(label string) string {
 		return "delete"
 	case "Move", "move":
 		return "move"
-	case "Link", "link":
+	case "Link", "link", "Uplink", "uplink":
 		return "link"
 	case "Exit", "exit":
 		return "exit"

@@ -3,7 +3,7 @@ package topologyui
 import "strings"
 
 func (a *App) handleKey(key string) bool {
-	if strings.HasPrefix(key, "mouse:") {
+	if isMouseKey(key) {
 		return a.handleMouseKey(key)
 	}
 	if key == "tab" {
@@ -48,6 +48,12 @@ func (a *App) handleKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func isMouseKey(key string) bool {
+	return strings.HasPrefix(key, "mouse:") ||
+		strings.HasPrefix(key, "mouse-drag:") ||
+		strings.HasPrefix(key, "mouse-release:")
 }
 
 func navigationDirection(key string) string {

@@ -1014,6 +1014,61 @@ func TestNormalModeMStartsMoveAndSavesLayout(t *testing.T) {
 	}
 }
 
+func TestMouseDragNodeSavesLayoutWithoutMoveAction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, Disk: "labs/demo/disks/vm1.img"}},
+		Layout: lab.Layout{Nodes: map[string]lab.Position{
+			"vm1": {X: 80, Y: 72},
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	rects := layoutNodeRects(app.Model, app.graphBounds())
+	nodeRect := rects[NodeKey(NodeVM, "vm1")]
+	startX := nodeRect.X + 1
+	startY := nodeRect.Y + 1
+
+	app.handleKey("mouse:" + strconv.Itoa(startX) + ":" + strconv.Itoa(startY) + ":0")
+	app.handleKey("mouse-drag:" + strconv.Itoa(startX+3) + ":" + strconv.Itoa(startY+2) + ":0")
+	if app.State.ContextMenu {
+		t.Fatal("drag kept context menu open")
+	}
+	if !app.State.MoveMode {
+		t.Fatal("mouse drag did not enter transient move mode")
+	}
+	if app.Model.Nodes[0].X != 8 || app.Model.Nodes[0].Y != 5 {
+		t.Fatalf("dragged model position = (%d,%d), want (8,5)", app.Model.Nodes[0].X, app.Model.Nodes[0].Y)
+	}
+	app.handleKey("mouse-release:" + strconv.Itoa(startX+3) + ":" + strconv.Itoa(startY+2) + ":0")
+	if app.State.MoveMode {
+		t.Fatal("mouse release did not finish drag move")
+	}
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.Layout.Nodes["vm1"]
+	if got.X != 128 || got.Y != 120 {
+		t.Fatalf("saved layout = %#v, want X=128 Y=120", got)
+	}
+}
+
 func TestMoveSaveFailureRestoresLabLayout(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocked")
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
@@ -2611,6 +2666,24 @@ func TestTopFocusKeyboardAddAndExit(t *testing.T) {
 	}
 }
 
+func TestTopFocusDownDoesNotActivateExit(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusTop}}
+	items := topRibbonRootItems()
+	for i, item := range items {
+		if contextMenuAction(item) == "exit" {
+			app.State.TopMenuRootSelected = i
+			break
+		}
+	}
+
+	if app.handleKey("down") {
+		t.Fatal("down on top Exit quit unexpectedly")
+	}
+	if app.State.Focus != FocusTop {
+		t.Fatalf("focus after down on top Exit = %d, want top", app.State.Focus)
+	}
+}
+
 func TestMouseClickTopAddLinkCreatesExternalLink(t *testing.T) {
 	fakeHostInterfaces(t, "br0", "eth0")
 	path := filepath.Join(t.TempDir(), "demo.lab")
@@ -2830,6 +2903,12 @@ func TestDecodeKeysExpandsBracketedPasteInTextMode(t *testing.T) {
 func TestDecodeKeysMouseClick(t *testing.T) {
 	got := decodeKeys("\x1b[<0;12;5M", false)
 	want := []string{"mouse:11:4:0"}
+	assertKeys(t, got, want)
+}
+
+func TestDecodeKeysMouseDragAndRelease(t *testing.T) {
+	got := decodeKeys("\x1b[<32;15;8M\x1b[<0;15;8m", false)
+	want := []string{"mouse-drag:14:7:0", "mouse-release:14:7:0"}
 	assertKeys(t, got, want)
 }
 

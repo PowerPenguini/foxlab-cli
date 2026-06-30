@@ -9,11 +9,28 @@ type mouseEvent struct {
 	x      int
 	y      int
 	button int
+	kind   string
 }
+
+const (
+	mousePress   = "press"
+	mouseDrag    = "drag"
+	mouseRelease = "release"
+)
 
 func parseMouseEvent(key string) (mouseEvent, bool) {
 	parts := strings.Split(key, ":")
-	if len(parts) != 4 || parts[0] != "mouse" {
+	if len(parts) != 4 {
+		return mouseEvent{}, false
+	}
+	kind := mousePress
+	switch parts[0] {
+	case "mouse":
+	case "mouse-drag":
+		kind = mouseDrag
+	case "mouse-release":
+		kind = mouseRelease
+	default:
 		return mouseEvent{}, false
 	}
 	x, errX := strconv.Atoi(parts[1])
@@ -22,12 +39,12 @@ func parseMouseEvent(key string) (mouseEvent, bool) {
 	if errX != nil || errY != nil || errB != nil {
 		return mouseEvent{}, false
 	}
-	return mouseEvent{x: x, y: y, button: button}, true
+	return mouseEvent{x: x, y: y, button: button, kind: kind}, true
 }
 
 func (a *App) handleMouseKey(key string) bool {
 	event, ok := parseMouseEvent(key)
-	if !ok || event.button != 0 {
+	if !ok {
 		return false
 	}
 	if a.ViewWidth <= 0 {
@@ -36,6 +53,18 @@ func (a *App) handleMouseKey(key string) bool {
 	if a.ViewHeight <= 0 {
 		a.ViewHeight = 30
 	}
+	switch event.kind {
+	case mouseDrag:
+		a.handleMouseDrag(event)
+		return false
+	case mouseRelease:
+		a.handleMouseRelease(event)
+		return false
+	}
+	if event.button != 0 {
+		return false
+	}
+	a.clearMouseDrag()
 	if a.State.ConnectTargetMenu {
 		return a.handleConnectTargetMouse(event)
 	}
@@ -63,6 +92,7 @@ func (a *App) handleMouseKey(key string) bool {
 		return false
 	}
 	if index, ok := a.nodeIndexAt(event.x, event.y); ok {
+		a.recordMouseNodePress(index, event)
 		a.State.Focus = FocusGraph
 		a.State.Selected = index
 		a.State.ContextMenu = true
@@ -77,6 +107,89 @@ func (a *App) handleMouseKey(key string) bool {
 		a.State.Focus = FocusGraph
 	}
 	return false
+}
+
+func (a *App) recordMouseNodePress(index int, event mouseEvent) {
+	if index < 0 || index >= len(a.Model.Nodes) {
+		return
+	}
+	node := a.Model.Nodes[index]
+	a.mouseDownNodeID = node.ID
+	a.mouseDownNodeType = node.Type
+	a.mouseDownX = event.x
+	a.mouseDownY = event.y
+	a.mouseDragStartX = node.X
+	a.mouseDragStartY = node.Y
+	a.mouseDragMoved = false
+}
+
+func (a *App) clearMouseDrag() {
+	a.mouseDownNodeID = ""
+	a.mouseDownNodeType = ""
+	a.mouseDownX = 0
+	a.mouseDownY = 0
+	a.mouseDragStartX = 0
+	a.mouseDragStartY = 0
+	a.mouseDragMoved = false
+}
+
+func (a *App) handleMouseDrag(event mouseEvent) {
+	if event.button != 0 {
+		return
+	}
+	index, ok := a.mouseDragNodeIndex()
+	if !ok {
+		a.clearMouseDrag()
+		return
+	}
+	if !a.State.MoveMode || a.State.MoveNodeID != a.mouseDownNodeID || a.State.MoveNodeType != a.mouseDownNodeType {
+		a.State.MoveMode = true
+		a.State.MoveNodeID = a.mouseDownNodeID
+		a.State.MoveNodeType = a.mouseDownNodeType
+		a.State.MoveStartX = a.mouseDragStartX
+		a.State.MoveStartY = a.mouseDragStartY
+	}
+	dx := event.x - a.mouseDownX
+	dy := event.y - a.mouseDownY
+	maxX, maxY := a.moveBounds()
+	nextX := clamp(a.mouseDragStartX+dx, 0, maxX)
+	nextY := clamp(a.mouseDragStartY+dy, 0, maxY)
+	if a.Model.Nodes[index].X != nextX || a.Model.Nodes[index].Y != nextY {
+		a.Model.Nodes[index].X = nextX
+		a.Model.Nodes[index].Y = nextY
+		a.mouseDragMoved = true
+	}
+	a.State.Focus = FocusGraph
+	a.State.Selected = index
+	a.State.Message = ""
+	a.State.TopMenuOpen = false
+	a.State.closeContextMenu()
+}
+
+func (a *App) handleMouseRelease(event mouseEvent) {
+	if event.button != 0 {
+		return
+	}
+	if a.mouseDownNodeID == "" {
+		return
+	}
+	moved := a.mouseDragMoved
+	a.clearMouseDrag()
+	if moved && a.State.MoveMode {
+		a.saveActiveMove()
+	}
+}
+
+func (a *App) mouseDragNodeIndex() (int, bool) {
+	if a.mouseDownNodeID == "" {
+		return 0, false
+	}
+	for i, node := range a.Model.Nodes {
+		if node.ID == a.mouseDownNodeID && node.Type == a.mouseDownNodeType {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (a *App) setMouseClickFeedback(r rect) {
@@ -95,7 +208,7 @@ func (a *App) clearMouseClickFeedback() {
 
 func (a *App) prepareMouseClickFeedback(key string) bool {
 	event, ok := parseMouseEvent(key)
-	if !ok || event.button != 0 {
+	if !ok || event.kind != mousePress || event.button != 0 {
 		return false
 	}
 	if a.ViewWidth <= 0 {

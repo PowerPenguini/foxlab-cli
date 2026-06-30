@@ -29,8 +29,8 @@ func MockModel() Model {
 			{ID: "web", Type: NodeContainer, Badge: "CT", Label: "web", State: "missing", X: 4, Y: 19, Details: []string{"image=docker.io/library/nginx:latest", "nic0 → lan"}},
 			{ID: "edge", Type: NodeSwitch, Badge: "SW", Label: "edge", State: "bridge", X: 28, Y: 5, Details: []string{"mode=macnat-bridge", "uplink=uplink0"}},
 			{ID: "lan", Type: NodeSwitch, Badge: "SW", Label: "lan", State: "nat", X: 28, Y: 13, Details: []string{"mode=nat", "dhcp=on"}},
-			{ID: "uplink0", Type: NodeExternal, Badge: "IF", Label: "wlp0s20f3", State: "link", X: 52, Y: 5, Details: []string{"interface=wlp0s20f3"}},
-			{ID: "hostnet", Type: NodeExternal, Badge: "IF", Label: "br0", State: "link", X: 52, Y: 13, Details: []string{"interface=br0"}},
+			{ID: "uplink0", Type: NodeExternal, Badge: "UP", Label: "wlp0s20f3", State: "link", X: 52, Y: 5, Details: []string{"interface=wlp0s20f3"}},
+			{ID: "hostnet", Type: NodeExternal, Badge: "UP", Label: "br0", State: "link", X: 52, Y: 13, Details: []string{"interface=br0"}},
 		},
 		Edges: []Edge{
 			{From: NodeKey(NodeVM, "router"), To: NodeKey(NodeSwitch, "edge")},
@@ -162,7 +162,7 @@ func ModelFromLab(l *lab.Lab) Model {
 		m.Nodes = append(m.Nodes, Node{
 			ID:    link.ID,
 			Type:  NodeExternal,
-			Badge: "IF",
+			Badge: "UP",
 			Label: firstNonEmpty(link.Name, link.Interface, link.ID),
 			State: firstNonEmpty(link.Mode, lab.ExternalModeDirect),
 			X:     layoutX(l, link.ID, NodeExternal, i),
@@ -208,7 +208,7 @@ func NodeKind(typ string) string {
 	case NodeContainer:
 		return "CT"
 	case NodeExternal:
-		return "IF"
+		return "UP"
 	default:
 		return "SW"
 	}

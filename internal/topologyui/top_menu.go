@@ -7,7 +7,7 @@ func topRibbonRootItems() []string {
 }
 
 func topRibbonAddItems() []string {
-	return []string{"VM", "Container", "Switch", "Disk", "Link"}
+	return []string{"VM", "Container", "Switch", "Disk", "Uplink"}
 }
 
 func topRibbonAddActions() []string {

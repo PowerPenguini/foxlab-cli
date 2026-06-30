@@ -12,7 +12,7 @@ func TestRenderMockFrame(t *testing.T) {
 	for _, want := range []string{
 		"[VM] router",
 		"[SW] edge",
-		"[IF] wlp0s20f3",
+		"[UP] wlp0s20f3",
 		"╭",
 		"─",
 		"│",
@@ -596,11 +596,13 @@ func TestRenderWideInspectorShowsSelectedNodeDetails(t *testing.T) {
 		"state  ● running",
 		"cpu    2",
 		"mem    2G",
-		"actions Space menu",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("wide render missing inspector detail %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "actions Space menu") {
+		t.Fatalf("wide render still shows inspector actions:\n%s", out)
 	}
 }
 
@@ -633,13 +635,16 @@ func TestRenderInspectorSeparatesNodeTypeAndName(t *testing.T) {
 
 func TestRenderTopRibbonAddDropdown(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, TopMenuOpen: true}, 100, 30, false)
-	for _, want := range []string{" Add ", " VM", " Container", " Switch", " Disk", " Link"} {
+	for _, want := range []string{" Add ", " VM", " Container", " Switch", " Disk", " Uplink"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing top add dropdown item %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "External") {
 		t.Fatalf("top add dropdown still contains External:\n%s", out)
+	}
+	if strings.Contains(out, " Link") {
+		t.Fatalf("top add dropdown still contains Link:\n%s", out)
 	}
 }
 
@@ -1147,10 +1152,17 @@ func TestRenderAddDiskEmptyInlineNameEditHasNoLayerActions(t *testing.T) {
 	}
 }
 
-func TestRenderStatusBarAlwaysVisible(t *testing.T) {
+func TestRenderStatusBarHiddenWithoutMessage(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Focus: FocusGraph}, 100, 30, true)
-	if !strings.Contains(out, ansiBgGray+ansiWhite) {
-		t.Fatalf("render missing always-visible bottom bar:\n%q", out)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	lastLine := lines[len(lines)-1]
+	if strings.Contains(lastLine, ansiBgGray+ansiWhite) {
+		t.Fatalf("render shows default bottom bar:\n%q", lastLine)
+	}
+	for _, notWant := range []string{"graph: arrows", "Space/menu click opens actions", ": commands"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("render shows bottom help %q:\n%s", notWant, out)
+		}
 	}
 }
 

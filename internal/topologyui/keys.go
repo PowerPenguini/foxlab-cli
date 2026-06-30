@@ -149,10 +149,8 @@ func decodeMouseKey(seq string) (string, int) {
 		return "", consumeEscapeSequence(seq)
 	}
 	raw := seq[:end+1]
-	if raw[len(raw)-1] != 'M' {
-		return "", len(raw)
-	}
-	payload := strings.TrimPrefix(strings.TrimSuffix(raw, "M"), "\x1b[<")
+	final := raw[len(raw)-1]
+	payload := strings.TrimPrefix(strings.TrimRight(raw, "Mm"), "\x1b[<")
 	parts := strings.Split(payload, ";")
 	if len(parts) != 3 {
 		return "", len(raw)
@@ -163,7 +161,14 @@ func decodeMouseKey(seq string) (string, int) {
 	if errB != nil || errX != nil || errY != nil || x <= 0 || y <= 0 {
 		return "", len(raw)
 	}
-	return "mouse:" + strconv.Itoa(x-1) + ":" + strconv.Itoa(y-1) + ":" + strconv.Itoa(button), len(raw)
+	buttonName := "mouse"
+	if final == 'm' {
+		buttonName = "mouse-release"
+	} else if button&32 != 0 {
+		buttonName = "mouse-drag"
+	}
+	button &^= 32
+	return buttonName + ":" + strconv.Itoa(x-1) + ":" + strconv.Itoa(y-1) + ":" + strconv.Itoa(button), len(raw)
 }
 
 func consumeEscapeSequence(seq string) int {

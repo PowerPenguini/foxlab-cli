@@ -32,8 +32,8 @@ const (
 	ansiMoveHome       = "\x1b[H"
 	ansiEnterAltScreen = "\x1b[?1049h"
 	ansiExitAltScreen  = "\x1b[?1049l"
-	ansiEnableMouse    = "\x1b[?1000h\x1b[?1006h"
-	ansiDisableMouse   = "\x1b[?1000l\x1b[?1006l"
+	ansiEnableMouse    = "\x1b[?1002h\x1b[?1006h"
+	ansiDisableMouse   = "\x1b[?1002l\x1b[?1006l"
 )
 
 func startAppTerminalSession(a *App) (func(), error) {
