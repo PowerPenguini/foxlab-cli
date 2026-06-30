@@ -74,7 +74,9 @@ func Start(ctx context.Context, path string, store *Store) (string, <-chan error
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", nil, err
 	}
-	_ = os.Remove(path)
+	if err := removeSocketFile(path); err != nil {
+		return "", nil, err
+	}
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		return "", nil, err
@@ -87,7 +89,7 @@ func Start(ctx context.Context, path string, store *Store) (string, <-chan error
 
 func serveListener(ctx context.Context, path string, listener net.Listener, store *Store, errs chan<- error) {
 	defer listener.Close()
-	defer os.Remove(path)
+	defer removeSocketFile(path)
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -104,6 +106,20 @@ func serveListener(ctx context.Context, path string, listener net.Listener, stor
 		}
 		go serveConn(conn, store)
 	}
+}
+
+func removeSocketFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("status socket path %q exists and is not a socket", path)
+	}
+	return os.Remove(path)
 }
 
 func Query(ctx context.Context, path string) (Snapshot, error) {

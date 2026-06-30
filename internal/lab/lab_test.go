@@ -236,6 +236,27 @@ func TestValidateRejectsDataDiskWithBase(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsRootDiskMountPath(t *testing.T) {
+	l := &Lab{
+		ID:         "demo",
+		Containers: []Container{{ID: "web", Image: "nginx", Disk: "disks/data.qcow2"}},
+		Disks: []Disk{{
+			ID:           "data",
+			Path:         "disks/data.qcow2",
+			Format:       "qcow2",
+			Kind:         "data",
+			AttachedType: "container",
+			AttachedTo:   "web",
+			MountPath:    "/",
+		}},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil || !strings.Contains(err.Error(), `disk "data" mountPath must not be /`) {
+		t.Fatalf("expected root mountPath validation error, got %v", err)
+	}
+}
+
 func TestValidateRejectsInvalidDiskLayerBase(t *testing.T) {
 	tests := []struct {
 		name  string

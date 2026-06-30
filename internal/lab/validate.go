@@ -3,6 +3,7 @@ package lab
 import (
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"regexp"
 	"strings"
 )
@@ -180,6 +181,9 @@ func (l *Lab) Validate() error {
 		}
 		if disk.Kind != "" && disk.Kind != "base" && disk.Kind != "layer" && disk.Kind != "data" {
 			problems = append(problems, fmt.Sprintf("disk %q kind must be base, layer or data", disk.ID))
+		}
+		if !validContainerMountPath(disk.MountPath) {
+			problems = append(problems, fmt.Sprintf("disk %q mountPath must not be /", disk.ID))
 		}
 		kind := normalizedDiskKind(disk)
 		if kind == "layer" && disk.Base == "" {
@@ -381,6 +385,17 @@ func validMAC(value string) bool {
 	}
 	_, ok := parseNICMAC(value)
 	return ok
+}
+
+func validContainerMountPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	return pathpkg.Clean(value) != "/"
 }
 
 func findVMByID(vms []VM, id string) (VM, bool) {

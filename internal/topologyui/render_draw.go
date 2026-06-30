@@ -110,7 +110,7 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 	if !ok {
 		return
 	}
-	drawMenuColumn(g, layout.root, state.ContextInSubmenu == false, false, "", 0, false, false, false, false, false)
+	drawMenuColumn(g, layout.root, !state.ContextInSubmenu, false, "", 0, false, false, false, false, false)
 	if !layout.hasSub {
 		return
 	}
@@ -296,10 +296,6 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			} else {
 				item = contextEditLabel(item, editValue, editCursor)
 			}
-		}
-		itemAction := action
-		if itemAction == "" {
-			itemAction = contextMenuAction(item)
 		}
 		rowStyle := themeMenuRow
 		textStyle := rowStyle

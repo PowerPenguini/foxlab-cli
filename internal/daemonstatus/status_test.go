@@ -1,8 +1,13 @@
 package daemonstatus
 
 import (
+	"context"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -65,5 +70,65 @@ func TestStoreCopiesSnapshots(t *testing.T) {
 	again := store.Get()
 	if again.States["vm:one"] != "running" {
 		t.Fatalf("stored state = %q, want immutable running", again.States["vm:one"])
+	}
+}
+
+func TestStartRefusesRegularFileSocketPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "foxlabd.sock")
+	if err := os.WriteFile(path, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := Start(context.Background(), path, NewStore())
+
+	if err == nil || !strings.Contains(err.Error(), "exists and is not a socket") {
+		t.Fatalf("Start error = %v, want non-socket refusal", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != "keep me" {
+		t.Fatalf("regular file was modified: %q", data)
+	}
+}
+
+func TestStartReplacesStaleSocketAndRemovesSocketOnStop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "foxlabd.sock")
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: path}); err != nil {
+		_ = syscall.Close(fd)
+		t.Fatal(err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("stale socket missing before Start: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startedPath, errs, err := Start(ctx, path, NewStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startedPath != path {
+		t.Fatalf("started path = %q, want %q", startedPath, path)
+	}
+	cancel()
+	select {
+	case err := <-errs:
+		if err != context.Canceled {
+			t.Fatalf("listener error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not stop")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("socket path after stop = %v, want removed", err)
 	}
 }

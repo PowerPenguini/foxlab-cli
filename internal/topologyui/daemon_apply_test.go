@@ -210,6 +210,10 @@ func TestSystemdDaemonApplyWritesSystemUnitWhenServiceDoesNotExist(t *testing.T)
 	if !strings.Contains(string(unit), "ExecStart="+foxlabdPath+" --lab ${FOXLAB_LAB} --status-socket ${FOXLAB_STATUS_SOCKET}") {
 		t.Fatalf("unit file missing foxlabd ExecStart:\n%s", unit)
 	}
+	if !strings.Contains(string(unit), "After=containerd.service libvirtd.service") ||
+		!strings.Contains(string(unit), "Wants=containerd.service libvirtd.service") {
+		t.Fatalf("unit file missing runtime service dependencies:\n%s", unit)
+	}
 	if !strings.Contains(string(unit), "WantedBy=multi-user.target") {
 		t.Fatalf("unit file missing system install target:\n%s", unit)
 	}

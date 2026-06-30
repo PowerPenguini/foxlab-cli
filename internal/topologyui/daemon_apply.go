@@ -167,6 +167,8 @@ func (c *systemdDaemonController) ensureSystemUnit(ctx context.Context) error {
 	}
 	data := []byte("[Unit]\n" +
 		"Description=FoxLab reconciliator\n\n" +
+		"After=containerd.service libvirtd.service\n" +
+		"Wants=containerd.service libvirtd.service\n\n" +
 		"[Service]\n" +
 		"Type=simple\n" +
 		"Environment=FOXLAB_LAB=/root/.foxlab/default.lab\n" +

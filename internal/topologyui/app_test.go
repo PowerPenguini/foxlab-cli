@@ -730,6 +730,7 @@ func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
+		State:   ViewState{Message: "foxlabd status: runtime unavailable"},
 		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return snapshot, nil
 		},
@@ -746,6 +747,9 @@ func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
 	}
 	if node.State != "running" {
 		t.Fatalf("container state = %q, want daemon running", node.State)
+	}
+	if app.State.Message != "" {
+		t.Fatalf("message = %q, want recovered daemon status cleared", app.State.Message)
 	}
 }
 
@@ -1297,6 +1301,58 @@ func TestDrainStatusUpdatesCopiesUpdateMaps(t *testing.T) {
 	}
 	if app.VNCPorts[stateKey] != 5903 {
 		t.Fatalf("app VNC port = %d, want copied 5903", app.VNCPorts[stateKey])
+	}
+}
+
+func TestDrainStatusUpdatesClearsRecoveredStatusMessage(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		State: ViewState{Focus: FocusGraph, Message: "foxlabd status: runtime unavailable"},
+	}
+	updates := make(chan statusUpdate, 1)
+	updates <- statusUpdate{
+		lab:                loaded,
+		states:             map[string]string{NodeKey(NodeContainer, "web"): "running"},
+		clearStatusMessage: true,
+	}
+	active := true
+
+	if changed := app.drainStatusUpdates(updates, &active); !changed {
+		t.Fatal("status recovery update did not change app")
+	}
+	if app.State.Message != "" {
+		t.Fatalf("message = %q, want cleared recovered status error", app.State.Message)
+	}
+}
+
+func TestDrainStatusUpdatesKeepsCommandMessageOnHealthyStatus(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
+	}
+	app := App{
+		Model: ModelFromLab(loaded),
+		Lab:   loaded,
+		State: ViewState{Focus: FocusGraph, Message: "moved container:web"},
+	}
+	updates := make(chan statusUpdate, 1)
+	updates <- statusUpdate{
+		lab:                loaded,
+		states:             map[string]string{NodeKey(NodeContainer, "web"): "running"},
+		clearStatusMessage: true,
+	}
+	active := true
+
+	if changed := app.drainStatusUpdates(updates, &active); !changed {
+		t.Fatal("status update did not change app")
+	}
+	if app.State.Message != "moved container:web" {
+		t.Fatalf("message = %q, want command feedback preserved", app.State.Message)
 	}
 }
 

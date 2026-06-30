@@ -51,7 +51,7 @@
   - or `GOCACHE=/tmp/foxlab-cli-go-build go run ./cmd/foxlab --no-raw --width 90 --height 24`
 - Install-path check when packaging changes:
   - `make install DESTDIR=/tmp/foxlab-install-check PREFIX=/usr`
-  - Expected installed paths: `/tmp/foxlab-install-check/usr/bin/foxlab`, `/tmp/foxlab-install-check/usr/bin/foxlabd`, and `/tmp/foxlab-install-check/usr/share/systemd/user/foxlabd.service`.
+  - Expected installed paths: `/tmp/foxlab-install-check/usr/bin/foxlab`, `/tmp/foxlab-install-check/usr/bin/foxlabd`, and `/tmp/foxlab-install-check/usr/lib/systemd/system/foxlabd.service`.
 - For changes involving default lab creation, test with a temporary `HOME` and preserve the real user `GOPATH`/module cache:
   - `HOME=/tmp/foxlab-check GOPATH=/home/powerpenguini/go GOMODCACHE=/home/powerpenguini/go/pkg/mod GOCACHE=/tmp/foxlab-cli-go-build go run ./cmd/foxlab --no-raw --width 60 --height 16`
 

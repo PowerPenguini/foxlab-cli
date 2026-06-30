@@ -261,6 +261,7 @@ type statusUpdate struct {
 	states              map[string]string
 	vncPorts            map[string]int
 	message             string
+	clearStatusMessage  bool
 	applyStatus         DaemonStatus
 	applyStatusReceived bool
 }
@@ -293,11 +294,12 @@ func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdat
 			sendStatusUpdate(ctx, updates, update)
 			return
 		}
-		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states)}
+		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states), clearStatusMessage: true}
 		if ports, err := runtimeVNCPorts(statusCtx, runtime, snapshot); err == nil {
 			update.vncPorts = cloneRuntimePortMap(ports)
 		} else {
 			update.message = "vnc status failed: " + err.Error()
+			update.clearStatusMessage = false
 		}
 		if status, err := a.daemonStatus(statusCtx); err == nil {
 			update.applyStatus = status
@@ -339,6 +341,9 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 			}
 			if update.message != "" {
 				a.State.Message = update.message
+				changed = true
+			} else if update.clearStatusMessage && statusRefreshMessage(a.State.Message) {
+				a.State.Message = ""
 				changed = true
 			}
 			if update.applyStatusReceived {
@@ -481,6 +486,8 @@ func (a *App) refreshWorkloadStates() bool {
 	a.Service.States = a.WorkloadStates
 	if portErr := a.refreshVNCPortsWithRuntime(ctx, runtime); portErr != nil {
 		a.State.Message = "vnc status failed: " + portErr.Error()
+	} else if statusRefreshMessage(a.State.Message) {
+		a.State.Message = ""
 	}
 	a.applyWorkloadStates()
 	return true
@@ -515,6 +522,8 @@ func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.S
 	}
 	if len(snapshot.Errors) > 0 {
 		update.message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
+	} else {
+		update.clearStatusMessage = true
 	}
 	return update
 }
@@ -526,8 +535,25 @@ func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
 	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
 	if len(snapshot.Errors) > 0 {
 		a.State.Message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
+	} else if statusRefreshMessage(a.State.Message) {
+		a.State.Message = ""
 	}
 	a.applyWorkloadStates()
+}
+
+func statusRefreshMessage(message string) bool {
+	message = strings.TrimSpace(message)
+	for _, prefix := range []string{
+		"foxlabd status:",
+		"runtime connection failed:",
+		"runtime status failed:",
+		"vnc status failed:",
+	} {
+		if strings.HasPrefix(message, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime WorkloadRuntime) error {

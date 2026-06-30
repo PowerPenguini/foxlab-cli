@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -173,13 +172,17 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 			return err
 		}
 		container, err = createContainer(ctx, client, name, image, ct, diskMount)
-	} else if changed, err := containerConfigChanged(ctx, container, ct, diskMount); err != nil {
-		return err
-	} else if changed {
-		if err := deleteContainer(ctx, container); err != nil {
-			return err
+	} else {
+		changed, changeErr := containerConfigChanged(ctx, container, ct, diskMount)
+		if changeErr != nil {
+			return changeErr
 		}
-		container, err = createContainer(ctx, client, name, image, ct, diskMount)
+		if changed {
+			if err := deleteContainer(ctx, container); err != nil {
+				return err
+			}
+			container, err = createContainer(ctx, client, name, image, ct, diskMount)
+		}
 	}
 	if err != nil {
 		return err
@@ -371,16 +374,12 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 	}
 	opts = append(opts, oci.WithHostResolvconf)
 	if diskMount.Source != "" {
-		if diskMount.Destination == "/" {
-			opts = append(opts, oci.WithRootFSPath(diskMount.Source))
-		} else {
-			opts = append(opts, oci.WithMounts([]specs.Mount{{
-				Type:        "bind",
-				Source:      diskMount.Source,
-				Destination: diskMount.Destination,
-				Options:     []string{"rbind", "rw"},
-			}}))
-		}
+		opts = append(opts, oci.WithMounts([]specs.Mount{{
+			Type:        "bind",
+			Source:      diskMount.Source,
+			Destination: diskMount.Destination,
+			Options:     []string{"rbind", "rw"},
+		}}))
 	}
 	return opts
 }
@@ -422,9 +421,7 @@ func createContainer(ctx context.Context, client *containerd.Client, name string
 		containerd.WithImage(image),
 		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount)...),
 		containerd.WithContainerLabels(map[string]string{configLabel: containerConfigHash(ct, diskMount)}),
-	}
-	if diskMount.Source == "" || diskMount.Destination != "/" {
-		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
+		containerd.WithNewSnapshot(name+"-rootfs", image),
 	}
 	return client.NewContainer(
 		ctx,
@@ -490,7 +487,11 @@ func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount
 	if err != nil {
 		return containerDiskMount{}, err
 	}
-	return containerDiskMount{Source: filepath.Join(mountPath, "merged"), Destination: "/"}, nil
+	destination, err := containerDiskDestination(l, ct)
+	if err != nil {
+		return containerDiskMount{}, err
+	}
+	return containerDiskMount{Source: mountPath, Destination: destination}, nil
 }
 
 func nilInterface(value any) bool {
@@ -557,15 +558,6 @@ func findContainer(l *lab.Lab, id string) (lab.Container, bool) {
 	}
 	for _, ct := range l.Containers {
 		if ct.ID == id {
-			return ct, true
-		}
-	}
-	return lab.Container{}, false
-}
-
-func findContainerByManagedName(l *lab.Lab, name string) (lab.Container, bool) {
-	for _, ct := range l.Containers {
-		if l.ManagedContainerName(ct) == name {
 			return ct, true
 		}
 	}

@@ -138,9 +138,7 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	mountPath := filepath.Join(root, "container-rootfs", "web")
-	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
-	mergedPath := filepath.Join(mountPath, "merged")
+	mountPath := filepath.Join(root, "container-data", "web")
 
 	oldHooks := containerDiskHooks
 	containerDiskHooks.requireTools = func() error { return nil }
@@ -148,8 +146,6 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
-		case lowerPath, mergedPath:
-			return false, "", nil
 		default:
 			t.Fatalf("unexpected mountSource path = %q", path)
 			return false, "", nil
@@ -172,11 +168,11 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.Source != mergedPath || mount.Destination != "/" {
-		t.Fatalf("mount = %#v, want source %q destination /", mount, mergedPath)
+	if mount.Source != mountPath || mount.Destination != "/data" {
+		t.Fatalf("mount = %#v, want source %q destination /data", mount, mountPath)
 	}
-	if !mount.CleanupDiskOnFailure || !mount.CleanupOverlayOnFailure {
-		t.Fatalf("mount = %#v, want cleanup on failure for newly mounted disk and overlay", mount)
+	if !mount.CleanupDiskOnFailure || mount.CleanupOverlayOnFailure {
+		t.Fatalf("mount = %#v, want cleanup on failure for newly mounted disk only", mount)
 	}
 	for _, command := range testCommands(t) {
 		if strings.HasPrefix(command, "mkfs.ext4 ") {
@@ -189,8 +185,6 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 		"modprobe nbd max_part=16",
 		"qemu-nbd --connect=/dev/nbd1 " + diskPath,
 		"mount /dev/nbd1 " + mountPath,
-		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
-		"mount -t overlay overlay -o lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work") + " " + mergedPath,
 	}
 	if !reflect.DeepEqual(testCommands(t), want) {
 		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
@@ -210,9 +204,7 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	mountPath := filepath.Join(root, "container-rootfs", "web")
-	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
-	mergedPath := filepath.Join(mountPath, "merged")
+	mountPath := filepath.Join(root, "container-data", "web")
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +218,6 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
-		case lowerPath, mergedPath:
-			return false, "", nil
 		default:
 			t.Fatalf("unexpected mountSource path = %q", path)
 			return false, "", nil
@@ -248,18 +238,14 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.Source != mergedPath || mount.Destination != "/" {
-		t.Fatalf("mount = %#v, want source %q destination /", mount, mergedPath)
+	if mount.Source != mountPath || mount.Destination != "/data" {
+		t.Fatalf("mount = %#v, want source %q destination /data", mount, mountPath)
 	}
-	if mount.CleanupDiskOnFailure || !mount.CleanupOverlayOnFailure {
-		t.Fatalf("mount = %#v, want reused disk preserved and overlay cleaned on later failure", mount)
+	if mount.CleanupDiskOnFailure || mount.CleanupOverlayOnFailure {
+		t.Fatalf("mount = %#v, want reused disk preserved", mount)
 	}
-	want := []string{
-		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
-		"mount -t overlay overlay -o lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work") + " " + mergedPath,
-	}
-	if !reflect.DeepEqual(testCommands(t), want) {
-		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	if commands := testCommands(t); len(commands) != 0 {
+		t.Fatalf("commands = %#v, want none", commands)
 	}
 }
 
@@ -276,9 +262,7 @@ func TestPrepareContainerDiskMountReusesWritableLegacyMountWithoutMarker(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	mountPath := filepath.Join(root, "container-rootfs", "web")
-	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
-	mergedPath := filepath.Join(mountPath, "merged")
+	mountPath := filepath.Join(root, "container-data", "web")
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -289,8 +273,6 @@ func TestPrepareContainerDiskMountReusesWritableLegacyMountWithoutMarker(t *test
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
-		case lowerPath, mergedPath:
-			return false, "", nil
 		default:
 			t.Fatalf("unexpected mountSource path = %q", path)
 			return false, "", nil
@@ -311,18 +293,14 @@ func TestPrepareContainerDiskMountReusesWritableLegacyMountWithoutMarker(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.Source != mergedPath || mount.Destination != "/" {
-		t.Fatalf("mount = %#v, want source %q destination /", mount, mergedPath)
+	if mount.Source != mountPath || mount.Destination != "/data" {
+		t.Fatalf("mount = %#v, want source %q destination /data", mount, mountPath)
 	}
-	if mount.CleanupDiskOnFailure || !mount.CleanupOverlayOnFailure {
-		t.Fatalf("mount = %#v, want reused legacy disk preserved and overlay cleaned on later failure", mount)
+	if mount.CleanupDiskOnFailure || mount.CleanupOverlayOnFailure {
+		t.Fatalf("mount = %#v, want reused legacy disk preserved", mount)
 	}
-	want := []string{
-		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
-		"mount -t overlay overlay -o lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work") + " " + mergedPath,
-	}
-	if !reflect.DeepEqual(testCommands(t), want) {
-		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	if commands := testCommands(t); len(commands) != 0 {
+		t.Fatalf("commands = %#v, want none", commands)
 	}
 }
 
@@ -343,9 +321,7 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	mountPath := filepath.Join(root, "container-rootfs", "web")
-	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
-	mergedPath := filepath.Join(mountPath, "merged")
+	mountPath := filepath.Join(root, "container-data", "web")
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -359,8 +335,6 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
-		case lowerPath, mergedPath:
-			return false, "", nil
 		default:
 			t.Fatalf("unexpected mountSource path = %q", path)
 			return false, "", nil
@@ -378,11 +352,11 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mount.Source != mergedPath || mount.Destination != "/" {
-		t.Fatalf("mount = %#v, want source %q destination /", mount, mergedPath)
+	if mount.Source != mountPath || mount.Destination != "/data" {
+		t.Fatalf("mount = %#v, want source %q destination /data", mount, mountPath)
 	}
-	if !mount.CleanupDiskOnFailure || !mount.CleanupOverlayOnFailure {
-		t.Fatalf("mount = %#v, want cleanup on failure for replaced disk mount and overlay", mount)
+	if !mount.CleanupDiskOnFailure || mount.CleanupOverlayOnFailure {
+		t.Fatalf("mount = %#v, want cleanup on failure for replaced disk mount", mount)
 	}
 	marker, err := os.ReadFile(containerDiskSourceMarkerPath(mountPath))
 	if err != nil {
@@ -397,8 +371,6 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 		"modprobe nbd max_part=16",
 		"qemu-nbd --connect=/dev/nbd1 " + newDiskPath,
 		"mount /dev/nbd1 " + mountPath,
-		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
-		"mount -t overlay overlay -o lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work") + " " + mergedPath,
 	}
 	if !reflect.DeepEqual(testCommands(t), want) {
 		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
@@ -414,7 +386,7 @@ func TestCleanupPreparedContainerDiskMountReturnsCleanupError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mountPath := filepath.Join(root, "container-rootfs", "web")
+	mountPath := filepath.Join(root, "container-data", "web")
 	mergedPath := filepath.Join(mountPath, "merged")
 	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
 
@@ -447,6 +419,26 @@ func TestCleanupPreparedContainerDiskMountReturnsCleanupError(t *testing.T) {
 	want := []string{"umount " + mountPath}
 	if !reflect.DeepEqual(testCommands(t), want) {
 		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	}
+}
+
+func TestContainerDiskDestinationRejectsRootMount(t *testing.T) {
+	l := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "web", Disk: "disks/data.qcow2"}},
+		Disks: []lab.Disk{{
+			ID:           "data",
+			Path:         "disks/data.qcow2",
+			AttachedType: "container",
+			AttachedTo:   "web",
+			MountPath:    "/",
+		}},
+	}
+
+	_, err := containerDiskDestination(l, l.Containers[0])
+
+	if err == nil || !strings.Contains(err.Error(), "must not be /") {
+		t.Fatalf("containerDiskDestination error = %v, want root mount rejection", err)
 	}
 }
 
