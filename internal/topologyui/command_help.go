@@ -46,12 +46,12 @@ func helpLines(topic string) []string {
 	case "switch", "switches":
 		return []string{
 			"switch: Configuration edits name, mode, and external link",
-			"switch actions: Add VM, Add Container, Move, and Delete are menu actions",
+			"switch actions: Uplink menu, Add VM, Add Container, Move, and Delete are menu actions",
 		}
 	case "external":
 		return []string{
 			"external: Configuration edits name and interface",
-			"external actions: Add Switch, Move, and Delete are menu actions",
+			"external actions: Connect, Add Switch, Move, and Delete are menu actions",
 		}
 	default:
 		return []string{

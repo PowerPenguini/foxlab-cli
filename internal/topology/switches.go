@@ -92,6 +92,33 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 	return "switch not found: " + id
 }
 
+func (s *Service) SwitchDisconnectExternal(id string) string {
+	if s.Lab == nil {
+		return "switch set needs a loaded .lab file"
+	}
+	for i := range s.Lab.Switches {
+		if s.Lab.Switches[i].ID != id {
+			continue
+		}
+		if s.Lab.Switches[i].ExternalLink == "" {
+			return "switch uplink already empty:" + id
+		}
+		if err := s.requireSavePath(); err != nil {
+			return "switch config failed: " + err.Error()
+		}
+		snapshot := lab.Clone(s.Lab)
+		s.Lab.Switches[i].ExternalLink = ""
+		if s.Lab.Switches[i].Mode == "macnat-bridge" {
+			s.Lab.Switches[i].Mode = "bridge"
+		}
+		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
+			return "switch config failed: " + err.Error()
+		}
+		return "disconnected uplink from switch:" + id
+	}
+	return "switch not found: " + id
+}
+
 func (s *Service) SwitchDelete(id string) string {
 	if s.Lab == nil {
 		return "switch delete needs a loaded .lab file"

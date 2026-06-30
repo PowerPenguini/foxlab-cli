@@ -600,6 +600,50 @@ func TestRenderContextSubmenuForSelectedNode(t *testing.T) {
 	}
 }
 
+func TestRenderSwitchUplinkSubmenuShowsUplinks(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 3, Focus: FocusGraph, ContextMenu: true}, 100, 30, false)
+	if !strings.Contains(out, " Uplink ") {
+		t.Fatalf("render missing switch uplink root item:\n%s", out)
+	}
+	if strings.Contains(out, " Connect") {
+		t.Fatalf("render kept switch connect root action:\n%s", out)
+	}
+
+	out = RenderString(MockModel(), ViewState{
+		Selected:         3,
+		Focus:            FocusGraph,
+		ContextMenu:      true,
+		ContextSelected:  1,
+		ContextGroup:     "uplink-menu",
+		ContextInSubmenu: true,
+	}, 100, 30, false)
+	for _, want := range []string{
+		" Attach Uplink",
+		" uplink0",
+		" X ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing switch uplink submenu item %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, " hostnet") {
+		t.Fatalf("render showed unrelated uplink in switch submenu:\n%s", out)
+	}
+	ansiOut := RenderString(MockModel(), ViewState{
+		Selected:            3,
+		Focus:               FocusGraph,
+		ContextMenu:         true,
+		ContextSelected:     1,
+		ContextGroup:        "uplink-menu",
+		ContextInSubmenu:    true,
+		ContextSubSelected:  1,
+		ContextDeleteUplink: true,
+	}, 100, 30, true)
+	if !strings.Contains(ansiOut, ansiBgRed+ansiWhite+ansiBold+" X ") {
+		t.Fatalf("render did not mark selected uplink X with red background and white foreground:\n%q", ansiOut)
+	}
+}
+
 func TestRenderContextSubmenuHasNoGap(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{
 		Selected:         1,

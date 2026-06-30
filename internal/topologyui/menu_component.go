@@ -92,6 +92,14 @@ func menuItemKinds(items []MenuItem) []string {
 	return kinds
 }
 
+func menuItemEnabled(items []MenuItem) []bool {
+	enabled := make([]bool, 0, len(items))
+	for _, item := range items {
+		enabled = append(enabled, item.Enabled)
+	}
+	return enabled
+}
+
 func layoutFloatingMenu(bounds, anchor rect, items []MenuItem, selected int) (menuColumnLayout, bool) {
 	if len(items) == 0 {
 		return menuColumnLayout{}, false
@@ -231,7 +239,11 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 			rootLabels = contextMenuItems(node, "")
 		}
 	}
-	root, ok := layoutFloatingMenu(bounds, nodeRect, menuItemsFromLabels(rootLabels), state.ContextSelected)
+	rootItems := menuItemsFromLabels(rootLabels)
+	if hasNode {
+		applyContextMenuItemState(m, node, rootItems)
+	}
+	root, ok := layoutFloatingMenu(bounds, nodeRect, rootItems, state.ContextSelected)
 	if !ok {
 		return menuLayout{}, node, hasNode, false
 	}
@@ -252,8 +264,18 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 		subActions = state.DiskMenuActions
 		subKinds = state.DiskMenuKinds
 	}
+	if contextGroup == "uplink-menu" && node.Type == NodeSwitch {
+		subLabels = switchUplinkMenuItems(node)
+		subKinds = switchUplinkMenuKinds(subLabels)
+	}
 	editWidth := contextMenuEditWidth(state, contextGroup, subLabels, subKinds)
-	sub, ok := layoutSubmenu(bounds, root, menuItemsWithMeta(subLabels, subActions, subKinds), state.ContextSubSelected, editWidth)
+	subItems := menuItemsWithMeta(subLabels, subActions, subKinds)
+	if contextGroup == "uplink-menu" && node.Type == NodeSwitch {
+		for i := range subItems {
+			subItems[i].Enabled = switchUplinkMenuItemEnabled(m, subItems[i].Label)
+		}
+	}
+	sub, ok := layoutSubmenu(bounds, root, subItems, state.ContextSubSelected, editWidth)
 	if !ok {
 		return layout, node, hasNode, true
 	}
@@ -270,6 +292,17 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 	layout.selectBox = selectBox
 	layout.hasSelect = true
 	return layout, node, hasNode, true
+}
+
+func applyContextMenuItemState(m Model, node Node, items []MenuItem) {
+	if node.Type != NodeExternal || !externalConnectedInModel(m, node.ID) {
+		return
+	}
+	for i := range items {
+		if items[i].Action == "connect" {
+			items[i].Enabled = false
+		}
+	}
 }
 
 func contextSelectGroupBelongsToSub(node Node, subItems []string, selected int, selectGroup string) bool {

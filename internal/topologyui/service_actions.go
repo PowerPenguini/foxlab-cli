@@ -45,6 +45,11 @@ func (a *App) switchSet(id string, args map[string]string) {
 	a.syncAfterServiceMutation()
 }
 
+func (a *App) switchDisconnectExternal(id string) {
+	a.State.Message = a.ensureService().SwitchDisconnectExternal(id)
+	a.syncAfterServiceMutation()
+}
+
 func (a *App) switchDelete(id string) {
 	a.State.Message = a.ensureService().SwitchDelete(id)
 	a.syncAfterServiceMutation()

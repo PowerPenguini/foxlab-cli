@@ -632,6 +632,9 @@ func (a *App) contextMenuSubmenuItems(node Node, ok bool) []string {
 	if a.State.ContextGroup == "disk-menu" {
 		return a.State.DiskMenuItems
 	}
+	if a.State.ContextGroup == "uplink-menu" && node.Type == NodeSwitch {
+		return switchUplinkMenuItems(node)
+	}
 	return contextMenuItems(node, a.State.ContextGroup)
 }
 
@@ -640,6 +643,7 @@ func (a *App) openCommand(command string) {
 	a.State.DiskMenuActions = nil
 	a.State.DiskMenuKinds = nil
 	a.State.ContextDeleteNIC = false
+	a.State.ContextDeleteUplink = false
 	a.State.ContextEdit = false
 	a.State.ContextEditValue = ""
 	a.State.ContextEditCursor = 0

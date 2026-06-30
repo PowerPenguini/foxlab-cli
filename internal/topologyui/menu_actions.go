@@ -10,8 +10,14 @@ func contextMenuAction(label string) string {
 		return "config-menu"
 	case "NIC >", "NIC", "nic >":
 		return "nic-menu"
+	case "Uplink >", "uplink >":
+		return "uplink-menu"
 	case "add >", "create >":
 		return "create-menu"
+	case "Add SW":
+		return "add sw"
+	case "Attach Uplink":
+		return "attach-uplink"
 	case "Run":
 		return "run"
 	case "Stop":
@@ -22,6 +28,8 @@ func contextMenuAction(label string) string {
 		return "add-disk"
 	case "Add NIC":
 		return "add-nic"
+	case "Connect":
+		return "connect"
 	case "Shell":
 		return "shell"
 	case "VNC":

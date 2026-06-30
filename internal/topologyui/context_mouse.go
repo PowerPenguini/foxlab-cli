@@ -55,6 +55,16 @@ func (a *App) applyMouseButtonState(node Node, menu rect, x int) {
 		a.State.ContextDeleteNIC = true
 		return
 	}
+	if a.State.ContextGroup == "uplink-menu" {
+		items := a.contextMenuSubmenuItems(node, true)
+		if len(items) > 0 {
+			item := items[normalizedMenuSelection(a.State.ContextSubSelected, len(items))]
+			if isSwitchUplinkMenuDetail(item) && x >= menu.X+menu.W-3 {
+				a.State.ContextDeleteUplink = true
+				return
+			}
+		}
+	}
 	if a.State.ContextGroup != "disk-menu" {
 		return
 	}

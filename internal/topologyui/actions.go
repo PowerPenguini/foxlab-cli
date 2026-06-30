@@ -71,6 +71,12 @@ func (a *App) runMenuAction(node Node, action string) {
 		}
 	case "add-nic":
 		a.openAddNICCommand(node)
+	case "connect":
+		a.startConnectEndpoint(node)
+	case "attach-uplink":
+		if node.Type == NodeSwitch {
+			a.attachFirstAvailableUplink(node.ID)
+		}
 	case "add-disk":
 		a.openAddDiskCommand(node)
 	case "add vm", "create-vm":
@@ -129,6 +135,38 @@ func (a *App) openCreateSwitchCommand(node Node) {
 func (a *App) openCreateExternalCommand() {
 	id := a.nextExternalID()
 	a.externalCreate(id, map[string]string{"interface": defaultExternalInterfaceName(), "name": id, "mode": lab.ExternalModeNAT})
+}
+
+func (a *App) attachFirstAvailableUplink(switchID string) bool {
+	ids := a.attachableUplinkIDs()
+	switch len(ids) {
+	case 0:
+		a.State.Message = "no uplink available"
+		return false
+	case 1:
+		a.switchSet(switchID, map[string]string{"external": ids[0]})
+	default:
+		node, ok := nodeByKey(a.Model, NodeKey(NodeSwitch, switchID))
+		if !ok {
+			a.State.Message = "switch not found: " + switchID
+			return false
+		}
+		a.startConnectEndpoint(node)
+	}
+	return true
+}
+
+func (a *App) selectSwitchUplinkMenuItem(node Node, item string) bool {
+	if strings.TrimSpace(item) == attachUplinkMenuItem {
+		return a.attachFirstAvailableUplink(node.ID)
+	}
+	externalID, ok := switchUplinkMenuExternalID(item)
+	if !ok {
+		a.State.Message = "select uplink"
+		return false
+	}
+	a.switchSet(node.ID, map[string]string{"external": externalID})
+	return true
 }
 
 func (a *App) openCreateLink() {

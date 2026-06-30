@@ -8,6 +8,13 @@ func (a *App) handleContextInlineActionEnter(node Node, subItems []string, selec
 			return true
 		}
 	}
+	if a.State.ContextDeleteUplink {
+		if isSwitchUplinkMenuDetail(subItems[selected]) {
+			a.switchDisconnectExternal(node.ID)
+			a.State.closeContextMenu()
+			return true
+		}
+	}
 	if a.State.ContextDeleteDisk {
 		entry := a.contextSelectedDiskEntry(node)
 		if selected < len(subItems) && entry.diskID != "" {
@@ -67,6 +74,19 @@ func (a *App) handleContextHorizontalActionKey(node Node, key string, subItems [
 			}
 			if key == "left" && a.State.ContextDeleteNIC {
 				a.State.ContextDeleteNIC = false
+				return true
+			}
+		}
+	}
+	if a.State.ContextInSubmenu && a.State.ContextGroup == "uplink-menu" && len(subItems) > 0 {
+		selected := normalizedMenuSelection(a.State.ContextSubSelected, len(subItems))
+		if isSwitchUplinkMenuDetail(subItems[selected]) {
+			if key == "right" {
+				a.State.ContextDeleteUplink = true
+				return true
+			}
+			if key == "left" && a.State.ContextDeleteUplink {
+				a.State.ContextDeleteUplink = false
 				return true
 			}
 		}

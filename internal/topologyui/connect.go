@@ -31,6 +31,78 @@ func (a *App) startConnectNICIndex(node Node, index string) {
 	a.State.Selected = endpointIndex
 }
 
+func (a *App) startConnectEndpoint(node Node) {
+	switch node.Type {
+	case NodeSwitch, NodeExternal:
+	default:
+		a.State.Message = "connect needs switch or uplink"
+		return
+	}
+	if node.Type == NodeExternal && a.externalConnected(node.ID) {
+		a.State.Message = "uplink already connected: " + node.ID
+		return
+	}
+	a.State.ConnectNodeID = node.ID
+	a.State.ConnectNodeType = node.Type
+	a.State.ConnectNICIndex = ""
+	endpointIndex, ok := a.firstConnectEndpointIndex(node.Type)
+	if !ok {
+		a.clearConnectMode()
+		a.State.Message = "no " + a.connectEndpointLabel() + " available"
+		return
+	}
+	a.State.ConnectMode = true
+	a.State.Message = "connect " + node.Key() + ": select " + a.connectEndpointLabel()
+	a.State.Selected = endpointIndex
+}
+
+func (a *App) externalConnected(id string) bool {
+	if a.Lab == nil {
+		return externalConnectedInModel(a.Model, id)
+	}
+	for _, sw := range a.Lab.Switches {
+		if sw.ExternalLink == id {
+			return true
+		}
+	}
+	for _, vm := range a.Lab.VMs {
+		for _, nic := range vm.Networks {
+			if nic.ExternalLink == id {
+				return true
+			}
+		}
+	}
+	for _, ct := range a.Lab.Containers {
+		for _, nic := range ct.Networks {
+			if nic.ExternalLink == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *App) firstAttachableUplinkID() string {
+	ids := a.attachableUplinkIDs()
+	if len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+func (a *App) attachableUplinkIDs() []string {
+	if a.Lab == nil {
+		return attachableUplinkIDsInModel(a.Model)
+	}
+	ids := []string{}
+	for _, link := range a.Lab.ExternalLinks {
+		if link.ID != "" && !a.externalConnected(link.ID) {
+			ids = append(ids, link.ID)
+		}
+	}
+	return ids
+}
+
 func (a *App) handleConnectTargetMenuKey(key string) bool {
 	node, ok := a.connectTargetNode()
 	items := []string{}
@@ -83,16 +155,37 @@ func (a *App) connectSelectedEndpoint() {
 	index := a.State.ConnectNICIndex
 	switch endpoint.Type {
 	case NodeSwitch, NodeExternal:
-		switch sourceType {
-		case NodeVM:
+		switch {
+		case sourceType == NodeVM:
 			a.vmNICConnect(sourceID, index, map[string]string{"to": endpoint.ID})
-		case NodeContainer:
+			a.clearConnectMode()
+		case sourceType == NodeContainer:
 			a.containerNICConnect(sourceID, index, map[string]string{"to": endpoint.ID})
+			a.clearConnectMode()
+		case sourceType == NodeSwitch || sourceType == NodeExternal:
+			a.connectSwitchExternal(sourceType, sourceID, endpoint.Type, endpoint.ID)
+			a.clearConnectMode()
 		}
-		a.clearConnectMode()
 	case NodeVM, NodeContainer:
 		a.openConnectTargetMenu(endpoint)
 	}
+}
+
+func (a *App) connectSwitchExternal(sourceType, sourceID, targetType, targetID string) {
+	switchID := ""
+	externalID := ""
+	switch {
+	case sourceType == NodeSwitch && targetType == NodeExternal:
+		switchID = sourceID
+		externalID = targetID
+	case sourceType == NodeExternal && targetType == NodeSwitch:
+		switchID = targetID
+		externalID = sourceID
+	default:
+		a.State.Message = "select " + a.connectEndpointLabel()
+		return
+	}
+	a.switchSet(switchID, map[string]string{"external": externalID})
 }
 
 func (a *App) openConnectTargetMenu(endpoint Node) {
@@ -146,19 +239,35 @@ func (a *App) canConnectToEndpoint(node Node) bool {
 	}
 	switch a.State.ConnectNodeType {
 	case NodeVM:
-		return node.Type == NodeSwitch || node.Type == NodeExternal || node.Type == NodeVM || node.Type == NodeContainer
+		if node.Type == NodeExternal {
+			return !a.externalConnected(node.ID)
+		}
+		return node.Type == NodeSwitch || node.Type == NodeVM || node.Type == NodeContainer
 	case NodeContainer:
-		return node.Type == NodeSwitch || node.Type == NodeExternal || node.Type == NodeVM || node.Type == NodeContainer
+		if node.Type == NodeExternal {
+			return !a.externalConnected(node.ID)
+		}
+		return node.Type == NodeSwitch || node.Type == NodeVM || node.Type == NodeContainer
+	case NodeSwitch:
+		return node.Type == NodeExternal && !a.externalConnected(node.ID)
+	case NodeExternal:
+		return node.Type == NodeSwitch
 	default:
 		return false
 	}
 }
 
 func (a *App) connectEndpointLabel() string {
-	if a.State.ConnectNodeType == NodeContainer {
+	switch a.State.ConnectNodeType {
+	case NodeSwitch:
+		return "uplink endpoint"
+	case NodeExternal:
+		return "switch endpoint"
+	case NodeContainer:
+		return "switch, external or workload endpoint"
+	default:
 		return "switch, external or workload endpoint"
 	}
-	return "switch, external or workload endpoint"
 }
 
 func (a *App) firstConnectEndpointIndex(sourceType string) (int, bool) {

@@ -19,6 +19,7 @@ type ViewState struct {
 	ContextSelectGroup    string
 	ContextSelectSelected int
 	ContextDeleteNIC      bool
+	ContextDeleteUplink   bool
 	ContextEdit           bool
 	ContextEditValue      string
 	ContextEditCursor     int

@@ -15,6 +15,9 @@ func contextMenuWidthWithKinds(items []string, kinds []string) int {
 		if isNICDetail(item) {
 			extra = 6
 		}
+		if kind == "uplink" {
+			extra = 6
+		}
 		if kind == "layer" || isDiskMenuDetail(item) {
 			extra = 12
 		}

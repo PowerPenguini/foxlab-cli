@@ -2,6 +2,7 @@ package topologyui
 
 func (s *ViewState) clearContextRowState() {
 	s.ContextDeleteNIC = false
+	s.ContextDeleteUplink = false
 	s.ContextAddDiskLayer = false
 	s.ContextMergeDisk = false
 	s.ContextDetachDisk = false

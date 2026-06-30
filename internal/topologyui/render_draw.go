@@ -130,7 +130,9 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 		return
 	}
 	contextGroup := state.ContextGroup
-	deleteActionSelected := (contextGroup == "nic-menu" && state.ContextDeleteNIC) || (contextGroup == "disk-menu" && state.ContextDeleteDisk)
+	deleteActionSelected := (contextGroup == "nic-menu" && state.ContextDeleteNIC) ||
+		(contextGroup == "uplink-menu" && state.ContextDeleteUplink) ||
+		(contextGroup == "disk-menu" && state.ContextDeleteDisk)
 	mergeActionSelected := contextGroup == "disk-menu" && state.ContextMergeDisk
 	detachActionSelected := contextGroup == "disk-menu" && state.ContextDetachDisk
 	addLayerActionSelected := contextGroup == "disk-menu" && state.ContextAddDiskLayer
@@ -141,7 +143,7 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 }
 
 func drawMenuColumn(g *grid, column menuColumnLayout, isActive bool, editing bool, editValue string, editCursor int, deleteButtonSelected bool, mergeButtonSelected bool, detachButtonSelected bool, addLayerButtonSelected bool, diskMenu bool) {
-	drawContextMenuItems(g, column.rect, menuItemLabels(column.items), menuItemActions(column.items), menuItemKinds(column.items), column.selected, column.start, isActive, editing, editValue, editCursor, deleteButtonSelected, mergeButtonSelected, detachButtonSelected, addLayerButtonSelected, diskMenu)
+	drawContextMenuItems(g, column.rect, menuItemLabels(column.items), menuItemActions(column.items), menuItemKinds(column.items), menuItemEnabled(column.items), column.selected, column.start, isActive, editing, editValue, editCursor, deleteButtonSelected, mergeButtonSelected, detachButtonSelected, addLayerButtonSelected, diskMenu)
 }
 
 func drawTopRibbon(g *grid, m Model, bounds rect, state ViewState) {
@@ -288,7 +290,7 @@ func connectPreviewTargetKey(m Model, state ViewState) string {
 	return node.Key()
 }
 
-func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, kinds []string, active, start int, isActive bool, editing bool, editValue string, editCursor int, deleteButtonSelected bool, mergeButtonSelected bool, detachButtonSelected bool, addLayerButtonSelected bool, diskMenu bool) {
+func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, kinds []string, enabled []bool, active, start int, isActive bool, editing bool, editValue string, editCursor int, deleteButtonSelected bool, mergeButtonSelected bool, detachButtonSelected bool, addLayerButtonSelected bool, diskMenu bool) {
 	for row := 0; row < menu.H; row++ {
 		i := start + row
 		item := items[i]
@@ -299,6 +301,10 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 		kind := ""
 		if i < len(kinds) {
 			kind = kinds[i]
+		}
+		itemEnabled := true
+		if i < len(enabled) {
+			itemEnabled = enabled[i]
 		}
 		layerRow := diskMenu && (kind == "layer" || isDiskMenuDetail(item))
 		baseRow := diskMenu && (kind == "base" || isDiskAttachMenuDetail(item))
@@ -314,7 +320,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 		}
 		rowStyle := themeMenuRow
 		textStyle := rowStyle
-		if isContextInfoItem(item) {
+		if isContextInfoItem(item) || !itemEnabled {
 			textStyle += themeMuted
 		}
 		if isActive && i == active {
@@ -326,7 +332,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			g.Set(menu.X, menu.Y+row, ' ', ansiBgCyan)
 		}
 		textWidth := menu.W - 3
-		if isNICDetail(item) || layerRow {
+		if isNICDetail(item) || kind == "uplink" || layerRow {
 			textWidth = max(0, menu.W-6)
 		}
 		if baseRow || layerRow || dataRow {
@@ -406,7 +412,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			g.Text(menu.X+menu.W-3, menu.Y+row, " X ", xStyle)
 			continue
 		}
-		if isNICDetail(item) {
+		if isNICDetail(item) || kind == "uplink" {
 			xStyle := rowStyle
 			if isActive && i == active && deleteButtonSelected {
 				xStyle = ansiBgRed + ansiWhite + ansiBold

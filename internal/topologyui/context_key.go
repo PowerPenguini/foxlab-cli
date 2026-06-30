@@ -64,6 +64,12 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		a.State.closeContextMenu()
 		return
 	}
+	if ok && a.State.ContextGroup == "uplink-menu" && node.Type == NodeSwitch {
+		if a.selectSwitchUplinkMenuItem(node, subItems[selected]) {
+			a.State.closeContextMenu()
+		}
+		return
+	}
 	if ok && isBoolContextItem(subItems[selected]) {
 		a.applyContextEdit(node, subItems[selected], toggledBoolValue(contextItemValue(subItems[selected])))
 		return
@@ -124,12 +130,26 @@ func (a *App) handleContextRootEnter(node Node, ok bool, rootItems []string) {
 		a.State.ContextSubSelected = 0
 		return
 	}
+	if !a.contextRootActionEnabled(node, ok, action) {
+		return
+	}
 	if ok {
 		a.runMenuAction(node, action)
 	} else {
 		a.runGlobalMenuAction(action)
 	}
 	a.State.closeContextMenu()
+}
+
+func (a *App) contextRootActionEnabled(node Node, ok bool, action string) bool {
+	if !ok {
+		return true
+	}
+	if node.Type == NodeExternal && action == "connect" && a.externalConnected(node.ID) {
+		a.State.Message = "uplink already connected: " + node.ID
+		return false
+	}
+	return true
 }
 
 func (a *App) handleContextHorizontalKey(node Node, ok bool, key string, rootItems, subItems []string) {

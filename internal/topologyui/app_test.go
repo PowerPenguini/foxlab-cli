@@ -514,6 +514,7 @@ func TestContextMenuRowChangeClearsInlineActionState(t *testing.T) {
 			ContextInSubmenu:    true,
 			ContextSubSelected:  1,
 			ContextDeleteNIC:    true,
+			ContextDeleteUplink: true,
 			ContextAddDiskLayer: true,
 			ContextMergeDisk:    true,
 			ContextDetachDisk:   true,
@@ -526,7 +527,7 @@ func TestContextMenuRowChangeClearsInlineActionState(t *testing.T) {
 
 	app.handleKey("down")
 
-	if app.State.ContextDeleteNIC || app.State.ContextAddDiskLayer || app.State.ContextMergeDisk || app.State.ContextDetachDisk || app.State.ContextDeleteDisk {
+	if app.State.ContextDeleteNIC || app.State.ContextDeleteUplink || app.State.ContextAddDiskLayer || app.State.ContextMergeDisk || app.State.ContextDetachDisk || app.State.ContextDeleteDisk {
 		t.Fatalf("row action flags were not cleared: %#v", app.State)
 	}
 }
@@ -4494,6 +4495,418 @@ func TestConnectContainerNICModeSelectsExternalEndpoint(t *testing.T) {
 		t.Fatalf("container networks = %#v", reloaded.Containers[0].Networks)
 	}
 	if !hasEdge(app.Model, NodeKey(NodeContainer, "web"), NodeKey(NodeExternal, "uplink1")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+}
+
+func TestConnectSwitchModeSelectsExternalEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "connect")
+	if !app.State.ConnectMode {
+		t.Fatalf("connect mode not started: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	app.handleKey("enter")
+	if app.State.ConnectMode {
+		t.Fatal("connect mode did not finish after selecting external endpoint")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Switches[0].ExternalLink != "uplink1" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+}
+
+func TestSwitchUplinkSubmenuConnectsExistingExternal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:            FocusGraph,
+			ContextMenu:      true,
+			ContextSelected:  1,
+			ContextGroup:     "uplink-menu",
+			ContextInSubmenu: true,
+		},
+	}
+
+	app.handleKey("enter")
+
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after choosing uplink")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Switches[0].ExternalLink != "uplink1" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+}
+
+func TestSwitchUplinkSubmenuMultipleExternalsStartsConnectMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{
+			{ID: "uplink1", Interface: "br0"},
+			{ID: "uplink2", Interface: "br1"},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:            FocusGraph,
+			ContextMenu:      true,
+			ContextSelected:  1,
+			ContextGroup:     "uplink-menu",
+			ContextInSubmenu: true,
+		},
+	}
+
+	app.handleKey("enter")
+
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after starting uplink selection")
+	}
+	if !app.State.ConnectMode || app.State.ConnectNodeType != NodeSwitch || app.State.ConnectNodeID != "lan" {
+		t.Fatalf("connect mode not started for switch: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	uplink2Index := -1
+	for i, node := range app.Model.Nodes {
+		if node.Type == NodeExternal && node.ID == "uplink2" {
+			uplink2Index = i
+			break
+		}
+	}
+	if uplink2Index < 0 {
+		t.Fatalf("uplink2 missing from model: %#v", app.Model.Nodes)
+	}
+	app.State.Selected = uplink2Index
+	app.handleKey("enter")
+
+	if app.State.ConnectMode {
+		t.Fatal("connect mode did not finish after selecting external endpoint")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Switches[0].ExternalLink != "uplink2" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink2")) {
+		t.Fatalf("model edges = %#v", app.Model.Edges)
+	}
+}
+
+func TestSwitchUplinkSubmenuDoesNotListDisconnectedExternal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:            FocusGraph,
+			ContextMenu:      true,
+			ContextSelected:  1,
+			ContextGroup:     "uplink-menu",
+			ContextInSubmenu: true,
+		},
+	}
+
+	items := app.contextMenuSubmenuItems(app.Model.Nodes[0], true)
+	if len(items) != 1 || items[0] != attachUplinkMenuItem {
+		t.Fatalf("switch uplink menu items = %#v, want only Attach Uplink", items)
+	}
+}
+
+func TestSwitchUplinkSubmenuAttachDisabledWithoutExternal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		ViewWidth:  100,
+		ViewHeight: 30,
+		State: ViewState{
+			Focus:            FocusGraph,
+			ContextMenu:      true,
+			ContextSelected:  1,
+			ContextGroup:     "uplink-menu",
+			ContextInSubmenu: true,
+		},
+	}
+
+	layout, _, _, ok := app.currentContextMenuLayout()
+	if !ok || !layout.hasSub || len(layout.sub.items) == 0 {
+		t.Fatalf("uplink submenu layout missing: %#v", layout)
+	}
+	if layout.sub.items[0].Label != attachUplinkMenuItem || layout.sub.items[0].Enabled {
+		t.Fatalf("attach item = %#v, want disabled Attach Uplink", layout.sub.items[0])
+	}
+
+	app.handleKey("enter")
+	if !app.State.ContextMenu {
+		t.Fatal("disabled attach closed the menu")
+	}
+	if app.State.Message != "no uplink available" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Switches[0].ExternalLink != "" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+}
+
+func TestSwitchUplinkSubmenuXDisconnectsExternal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge", ExternalLink: "uplink1"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:               FocusGraph,
+			ContextMenu:         true,
+			ContextGroup:        "uplink-menu",
+			ContextInSubmenu:    true,
+			ContextSubSelected:  1,
+			ContextDeleteUplink: true,
+		},
+	}
+
+	app.handleKey("enter")
+
+	if app.State.ContextMenu {
+		t.Fatal("context menu stayed open after disconnecting uplink")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID != "uplink1" {
+		t.Fatalf("external link was deleted instead of detached: %#v", reloaded.ExternalLinks)
+	}
+	if reloaded.Switches[0].ExternalLink != "" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+	if hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+		t.Fatalf("model still has switch-uplink edge = %#v", app.Model.Edges)
+	}
+
+	switchNode, ok := nodeByKey(app.Model, NodeKey(NodeSwitch, "lan"))
+	if !ok {
+		t.Fatal("switch node missing after detach")
+	}
+	items := switchUplinkMenuItems(switchNode)
+	if len(items) != 1 || items[0] != attachUplinkMenuItem {
+		t.Fatalf("switch uplink menu items after detach = %#v", items)
+	}
+}
+
+func TestConnectedExternalConnectMenuItemIsDisabled(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		ViewWidth:  100,
+		ViewHeight: 30,
+		State: ViewState{
+			Focus:       FocusGraph,
+			Selected:    5,
+			ContextMenu: true,
+		},
+	}
+
+	layout, node, ok, layoutOK := app.currentContextMenuLayout()
+	if !layoutOK || !ok {
+		t.Fatal("context menu layout missing")
+	}
+	if node.ID != "uplink0" || node.Type != NodeExternal {
+		t.Fatalf("selected node = %#v, want uplink0 external", node)
+	}
+	foundConnect := false
+	for _, item := range layout.root.items {
+		if item.Action != "connect" {
+			continue
+		}
+		foundConnect = true
+		if item.Enabled {
+			t.Fatalf("connected uplink Connect item should be disabled: %#v", layout.root.items)
+		}
+	}
+	if !foundConnect {
+		t.Fatalf("connected uplink menu has no Connect item: %#v", layout.root.items)
+	}
+}
+
+func TestConnectedExternalConnectActionDoesNotStartConnectMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge", ExternalLink: "uplink1"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:           FocusGraph,
+			Selected:        1,
+			ContextMenu:     true,
+			ContextSelected: 1,
+		},
+	}
+
+	app.handleKey("enter")
+
+	if app.State.ConnectMode {
+		t.Fatal("connected uplink started connect mode")
+	}
+	if !app.State.ContextMenu {
+		t.Fatal("disabled connect action closed the context menu")
+	}
+	if app.State.Message != "uplink already connected: uplink1" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+}
+
+func TestConnectExternalModeSelectsSwitchEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "br0"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "connect")
+	if !app.State.ConnectMode {
+		t.Fatalf("connect mode not started: %#v", app.State)
+	}
+	node, ok := selectedNode(app.Model, app.State.Selected)
+	if !ok || node.ID != "lan" || node.Type != NodeSwitch {
+		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
+	}
+
+	app.handleKey("enter")
+	if app.State.ConnectMode {
+		t.Fatal("connect mode did not finish after selecting switch endpoint")
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Switches[0].ExternalLink != "uplink1" {
+		t.Fatalf("switches = %#v", reloaded.Switches)
+	}
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }

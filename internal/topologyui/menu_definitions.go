@@ -94,8 +94,10 @@ func switchContextMenuItems(node Node, group string) []string {
 			contextFieldItem("mode", nodeDetailValue(node, "mode", "mode=bridge")),
 			contextFieldItem("external", nodeDetailValue(node, "external", "external=?")),
 		}, node.Details)
+	case "uplink-menu":
+		return []string{"Attach Uplink"}
 	case "":
-		return []string{"Configuration >", "Move", "Delete"}
+		return []string{"Configuration >", "Uplink >", "Move", "Delete"}
 	default:
 		return nil
 	}
@@ -114,7 +116,7 @@ func externalContextMenuItems(node Node, group string) []string {
 	case "mode-menu":
 		return []string{lab.ExternalModeNAT, lab.ExternalModeDirect, lab.ExternalModeMacNAT}
 	case "":
-		return []string{"Configuration >", "Move", "Delete"}
+		return []string{"Configuration >", "Connect", "Add SW", "Move", "Delete"}
 	default:
 		return nil
 	}
