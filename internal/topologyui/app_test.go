@@ -1073,6 +1073,77 @@ func TestMouseDragNodeSavesLayoutWithoutMoveAction(t *testing.T) {
 	}
 }
 
+func TestMouseDragEmptyGraphPansViewportWithoutMovingNode(t *testing.T) {
+	app := App{
+		Model:      Model{Nodes: []Node{{ID: "right", Type: NodeSwitch, X: 80, Y: 2}}},
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  56,
+		ViewHeight: 20,
+	}
+
+	app.handleKey("mouse:30:10:0")
+	app.handleKey("mouse-drag:20:10:0")
+
+	if app.State.PanX != -10 || app.State.PanY != 0 {
+		t.Fatalf("pan = (%d,%d), want (-10,0)", app.State.PanX, app.State.PanY)
+	}
+	if app.Model.Nodes[0].X != 80 || app.Model.Nodes[0].Y != 2 {
+		t.Fatalf("node moved during pan: (%d,%d)", app.Model.Nodes[0].X, app.Model.Nodes[0].Y)
+	}
+	if app.State.MoveMode {
+		t.Fatal("empty graph pan entered move mode")
+	}
+
+	app.handleKey("mouse-release:20:10:0")
+	if app.State.PanX != -10 || app.State.PanY != 0 {
+		t.Fatalf("pan after release = (%d,%d), want (-10,0)", app.State.PanX, app.State.PanY)
+	}
+}
+
+func TestShiftArrowPansViewportWithoutChangingSelection(t *testing.T) {
+	app := App{
+		Model:      Model{Nodes: []Node{{ID: "left", Type: NodeVM, X: 0, Y: 2}, {ID: "right", Type: NodeSwitch, X: 80, Y: 2}}},
+		State:      ViewState{Focus: FocusGraph, Selected: 1},
+		ViewWidth:  56,
+		ViewHeight: 20,
+	}
+
+	app.handleKey("shift-right")
+
+	if app.State.PanX != -8 || app.State.PanY != 0 {
+		t.Fatalf("pan = (%d,%d), want (-8,0)", app.State.PanX, app.State.PanY)
+	}
+	if app.State.Selected != 1 {
+		t.Fatalf("selected = %d, want unchanged 1", app.State.Selected)
+	}
+}
+
+func TestPanClampsToContentBounds(t *testing.T) {
+	app := App{
+		Model:      Model{Nodes: []Node{{ID: "right", Type: NodeSwitch, X: 80, Y: 2}}},
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  56,
+		ViewHeight: 20,
+	}
+
+	app.panGraph(-999, 0)
+	if app.State.PanX != -96 {
+		t.Fatalf("left clamp panX = %d, want -96", app.State.PanX)
+	}
+	app.panGraph(999, 0)
+	if app.State.PanX != 0 {
+		t.Fatalf("right clamp panX = %d, want 0", app.State.PanX)
+	}
+
+	app.Model = Model{Nodes: []Node{{ID: "fit", Type: NodeVM, X: 4, Y: 2}}}
+	app.State.PanX = 0
+	app.State.PanY = 0
+	app.panGraph(-8, -4)
+	if app.State.PanX != -8 || app.State.PanY != -4 {
+		t.Fatalf("fit content pan = (%d,%d), want (-8,-4)", app.State.PanX, app.State.PanY)
+	}
+}
+
 func TestMoveSaveFailureRestoresLabLayout(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocked")
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
@@ -1499,6 +1570,16 @@ func TestAppRenderReusesRouteCacheAcrossViewStateChanges(t *testing.T) {
 	if &app.RouteCacheRoutes[0] != &routes[0] {
 		t.Fatal("route cache was recomputed for view-only state update")
 	}
+
+	out.Reset()
+	app.State.PanX = -1
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey == key {
+		t.Fatal("route cache key did not change after viewport pan")
+	}
+	key = app.RouteCacheKey
 
 	out.Reset()
 	app.Model.Nodes[0].X++
@@ -2965,6 +3046,12 @@ func TestDecodeKeysMouseClick(t *testing.T) {
 func TestDecodeKeysMouseDragAndRelease(t *testing.T) {
 	got := decodeKeys("\x1b[<32;15;8M\x1b[<0;15;8m", false)
 	want := []string{"mouse-drag:14:7:0", "mouse-release:14:7:0"}
+	assertKeys(t, got, want)
+}
+
+func TestDecodeKeysShiftArrows(t *testing.T) {
+	got := decodeKeys("\x1b[1;2A\x1b[1;2B\x1b[1;2C\x1b[1;2D", false)
+	want := []string{"shift-up", "shift-down", "shift-right", "shift-left"}
 	assertKeys(t, got, want)
 }
 

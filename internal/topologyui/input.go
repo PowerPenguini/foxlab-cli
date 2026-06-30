@@ -27,6 +27,14 @@ func (a *App) handleKey(key string) bool {
 	switch key {
 	case "quit":
 		return true
+	case "shift-left":
+		a.panGraph(keyboardPanStepX, 0)
+	case "shift-right":
+		a.panGraph(-keyboardPanStepX, 0)
+	case "shift-up":
+		a.panGraph(0, keyboardPanStepY)
+	case "shift-down":
+		a.panGraph(0, -keyboardPanStepY)
 	case "down", "up", "left", "right", "char:j", "char:k", "char:h", "char:l":
 		a.State.Selected = MoveSelection(a.Model, a.State.Selected, navigationDirection(key))
 	case "tab":

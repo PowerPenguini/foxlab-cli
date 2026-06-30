@@ -19,11 +19,11 @@ func RenderString(m Model, state ViewState, width, height int, ansi bool) string
 }
 
 func renderGrid(m Model, state ViewState, width, height int) *grid {
-	_, routes := planRenderRoutes(m, width, height)
+	_, routes := planRenderRoutes(m, state, width, height)
 	return renderGridWithRoutes(m, state, width, height, routes)
 }
 
-func planRenderRoutes(m Model, width, height int) (map[string]rect, []visibleEdge) {
+func planRenderRoutes(m Model, state ViewState, width, height int) (map[string]rect, []visibleEdge) {
 	if width < minWidth {
 		width = minWidth
 	}
@@ -31,7 +31,7 @@ func planRenderRoutes(m Model, width, height int) (map[string]rect, []visibleEdg
 		height = minHeight
 	}
 	graph := graphBounds(width, height)
-	nodeRects := layoutNodeRects(m, graph)
+	nodeRects := layoutNodeRectsWithPan(m, graph, state.PanX, state.PanY)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
 	return nodeRects, planVisibleRoutes(planner, m.Edges, nodeRects, graph)
 }
@@ -46,7 +46,7 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 	g := newGrid(width, height)
 	canvas := rect{X: 0, Y: 0, W: width, H: height}
 	graph := graphBounds(width, height)
-	nodeRects := layoutNodeRects(m, graph)
+	nodeRects := layoutNodeRectsWithPan(m, graph, state.PanX, state.PanY)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
 	for _, visible := range visibleEdges {
 		if routeTouchesMovingNode(visible.edge, state) {
@@ -66,14 +66,14 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 			continue
 		}
 		nodeRect := nodeRects[node.Key()]
-		if rectFullyVisible(nodeRect, graph) {
+		if rectIntersects(nodeRect, graph) {
 			drawNode(g, node, nodeRect, false, state.Focus == FocusGraph, state.AnimationFrame)
 		}
 	}
 	if len(m.Nodes) > 0 {
 		node := m.Nodes[selectedIndex]
 		nodeRect := nodeRects[node.Key()]
-		if rectFullyVisible(nodeRect, graph) {
+		if rectIntersects(nodeRect, graph) {
 			drawNode(g, node, nodeRect, true, state.Focus == FocusGraph, state.AnimationFrame)
 		}
 	}
@@ -91,14 +91,14 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 			continue
 		}
 		nodeRect := nodeRects[node.Key()]
-		if rectFullyVisible(nodeRect, graph) {
+		if rectIntersects(nodeRect, graph) {
 			styleBoxBorder(g, nodeRect, selectedBorderStyle(false, state.Focus == FocusGraph))
 		}
 	}
 	if len(m.Nodes) > 0 {
 		node := m.Nodes[selectedIndex]
 		nodeRect := nodeRects[node.Key()]
-		if rectFullyVisible(nodeRect, graph) {
+		if rectIntersects(nodeRect, graph) {
 			styleBoxBorder(g, nodeRect, selectedBorderStyle(true, state.Focus == FocusGraph))
 		}
 	}

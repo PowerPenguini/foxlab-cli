@@ -59,6 +59,11 @@ type App struct {
 	mouseDragStartX       int
 	mouseDragStartY       int
 	mouseDragMoved        bool
+	mousePanActive        bool
+	mousePanDownX         int
+	mousePanDownY         int
+	mousePanStartX        int
+	mousePanStartY        int
 }
 
 const runtimeStatusTimeout = 5 * time.Second
@@ -357,10 +362,10 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 }
 
 func (a *App) render(w io.Writer, width, height int, ansi bool) error {
-	key := renderRouteCacheKey(a.Model, width, height)
+	key := renderRouteCacheKey(a.Model, width, height, a.State.PanX, a.State.PanY)
 	reuseMovingRoutes := a.State.MoveMode && a.RouteCacheKey != "" && len(a.RouteCacheRoutes) > 0
 	if key != a.RouteCacheKey && !reuseMovingRoutes {
-		_, routes := planRenderRoutes(a.Model, width, height)
+		_, routes := planRenderRoutes(a.Model, a.State, width, height)
 		a.RouteCacheKey = key
 		a.RouteCacheRoutes = routes
 	}

@@ -20,7 +20,7 @@ func movingNodeRoutes(m Model, state ViewState, nodeRects map[string]rect, bound
 		}
 		from, fromOK := nodeRects[edge.From]
 		to, toOK := nodeRects[edge.To]
-		if !fromOK || !toOK || !rectFullyVisible(from, bounds) || !rectFullyVisible(to, bounds) {
+		if !fromOK || !toOK || !rectIntersects(from, bounds) || !rectIntersects(to, bounds) {
 			continue
 		}
 		route, ok := quickMoveRoute(from, to, bounds)

@@ -65,6 +65,7 @@ func (a *App) handleMouseKey(key string) bool {
 		return false
 	}
 	a.clearMouseDrag()
+	a.clearMousePan()
 	if a.State.ConnectTargetMenu {
 		return a.handleConnectTargetMouse(event)
 	}
@@ -105,6 +106,7 @@ func (a *App) handleMouseKey(key string) bool {
 	}
 	if xyInRect(event.x, event.y, a.graphBounds()) {
 		a.State.Focus = FocusGraph
+		a.recordMousePanPress(event)
 	}
 	return false
 }
@@ -133,8 +135,28 @@ func (a *App) clearMouseDrag() {
 	a.mouseDragMoved = false
 }
 
+func (a *App) recordMousePanPress(event mouseEvent) {
+	a.mousePanActive = true
+	a.mousePanDownX = event.x
+	a.mousePanDownY = event.y
+	a.mousePanStartX = a.State.PanX
+	a.mousePanStartY = a.State.PanY
+}
+
+func (a *App) clearMousePan() {
+	a.mousePanActive = false
+	a.mousePanDownX = 0
+	a.mousePanDownY = 0
+	a.mousePanStartX = 0
+	a.mousePanStartY = 0
+}
+
 func (a *App) handleMouseDrag(event mouseEvent) {
 	if event.button != 0 {
+		return
+	}
+	if a.mousePanActive {
+		a.handleMousePanDrag(event)
 		return
 	}
 	index, ok := a.mouseDragNodeIndex()
@@ -166,8 +188,24 @@ func (a *App) handleMouseDrag(event mouseEvent) {
 	a.State.closeContextMenu()
 }
 
+func (a *App) handleMousePanDrag(event mouseEvent) {
+	dx := event.x - a.mousePanDownX
+	dy := event.y - a.mousePanDownY
+	nextX, nextY := clampPanForModel(a.Model, a.graphBounds(), a.mousePanStartX+dx, a.mousePanStartY+dy)
+	a.State.PanX = nextX
+	a.State.PanY = nextY
+	a.State.Focus = FocusGraph
+	a.State.Message = ""
+	a.State.TopMenuOpen = false
+	a.State.closeContextMenu()
+}
+
 func (a *App) handleMouseRelease(event mouseEvent) {
 	if event.button != 0 {
+		return
+	}
+	if a.mousePanActive {
+		a.clearMousePan()
 		return
 	}
 	if a.mouseDownNodeID == "" {
@@ -240,7 +278,7 @@ func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
 		}
 	}
 	if index, ok := a.nodeIndexAt(event.x, event.y); ok {
-		nodeRects := layoutNodeRects(a.Model, a.graphBounds())
+		nodeRects := layoutNodeRectsWithPan(a.Model, a.graphBounds(), a.State.PanX, a.State.PanY)
 		if r, rectOK := nodeRects[a.Model.Nodes[index].Key()]; rectOK {
 			return r, true
 		}
@@ -352,7 +390,7 @@ func (a *App) connectTargetFeedbackRect(event mouseEvent) (rect, bool) {
 
 func (a *App) connectTargetMenuLayout() (menuColumnLayout, bool) {
 	bounds := a.graphBounds()
-	nodeRects := layoutNodeRects(a.Model, bounds)
+	nodeRects := layoutNodeRectsWithPan(a.Model, bounds, a.State.PanX, a.State.PanY)
 	node, ok := a.connectTargetNode()
 	if !ok {
 		return menuColumnLayout{}, false
@@ -370,7 +408,7 @@ func (a *App) connectTargetMenuLayout() (menuColumnLayout, bool) {
 
 func (a *App) nodeIndexAt(x, y int) (int, bool) {
 	bounds := a.graphBounds()
-	nodeRects := layoutNodeRects(a.Model, bounds)
+	nodeRects := layoutNodeRectsWithPan(a.Model, bounds, a.State.PanX, a.State.PanY)
 	for i, node := range a.Model.Nodes {
 		r, ok := nodeRects[node.Key()]
 		if ok && xyInRect(x, y, r) {
@@ -386,7 +424,7 @@ func xyInRect(x, y int, r rect) bool {
 
 func (a *App) currentContextMenuLayout() (menuLayout, Node, bool, bool) {
 	bounds := a.graphBounds()
-	nodeRects := layoutNodeRects(a.Model, bounds)
+	nodeRects := layoutNodeRectsWithPan(a.Model, bounds, a.State.PanX, a.State.PanY)
 	return contextMenuLayoutFor(a.Model, a.State, nodeRects, bounds)
 }
 

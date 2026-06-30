@@ -490,7 +490,18 @@ func TestLayoutNodeRectsDoNotClampOffscreenNodes(t *testing.T) {
 	}
 }
 
-func TestRenderSkipsEdgesWithOffscreenEndpoints(t *testing.T) {
+func TestRenderUsesViewportPan(t *testing.T) {
+	m := Model{Nodes: []Node{{ID: "right", Type: NodeSwitch, Label: "right", X: 70, Y: 2, State: "bridge"}}}
+	if out := RenderString(m, ViewState{Focus: FocusGraph}, 56, 20, false); strings.Contains(out, "right") {
+		t.Fatalf("render drew unpanned offscreen node:\n%s", out)
+	}
+	out := RenderString(m, ViewState{Focus: FocusGraph, PanX: -30}, 56, 20, false)
+	if !strings.Contains(out, "right") {
+		t.Fatalf("render did not draw panned node:\n%s", out)
+	}
+}
+
+func TestRenderDrawsPartialEdgeToOffscreenEndpoint(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "visible", Type: NodeVM, Label: "visible", X: 10, Y: 10, State: "defined"},
@@ -502,22 +513,39 @@ func TestRenderSkipsEdgesWithOffscreenEndpoints(t *testing.T) {
 	if strings.Contains(out, "offscreen") {
 		t.Fatalf("render drew offscreen node:\n%s", out)
 	}
-	if strings.Contains(out, "─") || strings.Contains(out, "│") {
-		clean := strings.ReplaceAll(out, "│[VM] visible  │", "")
-		clean = strings.ReplaceAll(clean, "│◌ defined     │", "")
-		clean = strings.ReplaceAll(clean, "╭──────────────╮", "")
-		clean = strings.ReplaceAll(clean, "╰──────────────╯", "")
-		if strings.Contains(clean, "─") || strings.Contains(clean, "│") {
-			t.Fatalf("render drew edge to offscreen endpoint:\n%s", out)
-		}
+	if !strings.Contains(out, "───────") {
+		t.Fatalf("render did not draw partial edge to offscreen endpoint:\n%s", out)
 	}
 }
 
-func TestRenderSkipsPartiallyVisibleNodes(t *testing.T) {
+func TestRenderKeepsPannedVisibleNodeConnectedToOffscreenEndpoint(t *testing.T) {
+	m := Model{
+		Nodes: []Node{
+			{ID: "hidden", Type: NodeSwitch, X: 4, Y: 8, State: "bridge"},
+			{ID: "uplink", Type: NodeExternal, Badge: "UP", Label: "uplink2", X: 70, Y: 10, State: "link"},
+		},
+		Edges: []Edge{{From: NodeKey(NodeSwitch, "hidden"), To: NodeKey(NodeExternal, "uplink")}},
+	}
+	out := RenderString(m, ViewState{Focus: FocusGraph, PanX: -30}, 56, 20, false)
+	if strings.Contains(out, "[SW] hidden") {
+		t.Fatalf("render drew hidden offscreen node:\n%s", out)
+	}
+	if !strings.Contains(out, "[UP] uplink2") {
+		t.Fatalf("render did not draw panned visible endpoint:\n%s", out)
+	}
+	if !strings.Contains(out, "───────") {
+		t.Fatalf("render did not keep panned endpoint connected:\n%s", out)
+	}
+}
+
+func TestRenderClipsPartiallyVisibleNodes(t *testing.T) {
 	m := Model{Nodes: []Node{{ID: "partial", Type: NodeSwitch, X: 50, Y: 5, Label: "partial", State: "bridge"}}}
 	out := RenderString(m, ViewState{Focus: FocusGraph}, 56, 20, false)
-	if strings.Contains(out, "[SW]") || strings.Contains(out, "bridge") {
-		t.Fatalf("render drew partially visible node:\n%s", out)
+	if !strings.Contains(out, "[SW]") || !strings.Contains(out, "bridg") {
+		t.Fatalf("render did not clip partially visible node:\n%s", out)
+	}
+	if strings.Contains(out, "partial") || strings.Contains(out, "bridge ") {
+		t.Fatalf("render did not cut node at viewport edge:\n%s", out)
 	}
 }
 

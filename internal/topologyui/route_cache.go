@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func renderRouteCacheKey(m Model, width, height int) string {
+func renderRouteCacheKey(m Model, width, height, panX, panY int) string {
 	if width < minWidth {
 		width = minWidth
 	}
@@ -16,6 +16,11 @@ func renderRouteCacheKey(m Model, width, height int) string {
 	b.WriteString(strconv.Itoa(width))
 	b.WriteByte('x')
 	b.WriteString(strconv.Itoa(height))
+	b.WriteByte('|')
+	b.WriteString("pan=")
+	b.WriteString(strconv.Itoa(panX))
+	b.WriteByte(',')
+	b.WriteString(strconv.Itoa(panY))
 	b.WriteByte('|')
 	for _, node := range m.Nodes {
 		b.WriteString(node.Type)

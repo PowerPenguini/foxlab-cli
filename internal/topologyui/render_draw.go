@@ -3,13 +3,17 @@ package topologyui
 import "strings"
 
 func layoutNodeRects(m Model, pane rect) map[string]rect {
+	return layoutNodeRectsWithPan(m, pane, 0, 0)
+}
+
+func layoutNodeRectsWithPan(m Model, pane rect, panX, panY int) map[string]rect {
 	out := make(map[string]rect, len(m.Nodes))
 	if len(m.Nodes) == 0 {
 		return out
 	}
 	for _, node := range m.Nodes {
-		x := pane.X + node.X
-		y := pane.Y + node.Y
+		x := pane.X + node.X + panX
+		y := pane.Y + node.Y + panY
 		out[node.Key()] = rect{X: x, Y: y, W: nodeWidth, H: nodeHeight}
 	}
 	return out
@@ -20,6 +24,17 @@ func rectFullyVisible(r rect, bounds rect) bool {
 		r.Y >= bounds.Y &&
 		r.X+r.W <= bounds.X+bounds.W &&
 		r.Y+r.H <= bounds.Y+bounds.H
+}
+
+func rectIntersects(r rect, bounds rect) bool {
+	return r.W > 0 &&
+		r.H > 0 &&
+		bounds.W > 0 &&
+		bounds.H > 0 &&
+		r.X < bounds.X+bounds.W &&
+		r.X+r.W > bounds.X &&
+		r.Y < bounds.Y+bounds.H &&
+		r.Y+r.H > bounds.Y
 }
 
 func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int) {
@@ -248,11 +263,11 @@ func drawConnectPreview(g *grid, m Model, state ViewState, nodeRects map[string]
 		return
 	}
 	from, ok := nodeRects[sourceKey]
-	if !ok || !rectFullyVisible(from, bounds) {
+	if !ok || !rectIntersects(from, bounds) {
 		return
 	}
 	to, ok := nodeRects[targetKey]
-	if !ok || !rectFullyVisible(to, bounds) {
+	if !ok || !rectIntersects(to, bounds) {
 		return
 	}
 	route, ok := planner.planRoute(from, to)

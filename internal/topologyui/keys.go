@@ -118,6 +118,14 @@ func decodeEscapeKey(seq string) (string, int) {
 	switch {
 	case strings.HasPrefix(seq, "\x1b[<"):
 		return decodeMouseKey(seq)
+	case strings.HasPrefix(seq, "\x1b[1;2B"):
+		return "shift-down", len("\x1b[1;2B")
+	case strings.HasPrefix(seq, "\x1b[1;2A"):
+		return "shift-up", len("\x1b[1;2A")
+	case strings.HasPrefix(seq, "\x1b[1;2D"):
+		return "shift-left", len("\x1b[1;2D")
+	case strings.HasPrefix(seq, "\x1b[1;2C"):
+		return "shift-right", len("\x1b[1;2C")
 	case strings.HasPrefix(seq, "\x1b[B"):
 		return "down", len("\x1b[B")
 	case strings.HasPrefix(seq, "\x1b[A"):

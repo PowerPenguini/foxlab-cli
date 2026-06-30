@@ -8,7 +8,7 @@ import (
 func visibleNodeRects(nodeRects map[string]rect, bounds rect) []rect {
 	out := make([]rect, 0, len(nodeRects))
 	for _, r := range nodeRects {
-		if rectFullyVisible(r, bounds) {
+		if rectIntersects(r, bounds) {
 			out = append(out, r)
 		}
 	}
@@ -31,9 +31,20 @@ func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string
 		return edgeRoutePriority(orderedEdges[i], nodeRects) < edgeRoutePriority(orderedEdges[j], nodeRects)
 	})
 	for _, edge := range orderedEdges {
-		from := nodeRects[edge.From]
-		to := nodeRects[edge.To]
-		if !rectFullyVisible(from, bounds) || !rectFullyVisible(to, bounds) {
+		from, fromOK := nodeRects[edge.From]
+		to, toOK := nodeRects[edge.To]
+		if !fromOK || !toOK {
+			continue
+		}
+		fromVisible := rectIntersects(from, bounds)
+		toVisible := rectIntersects(to, bounds)
+		if !fromVisible || !toVisible {
+			route, ok := planner.planPartialRoute(from, to, fromVisible, toVisible)
+			if !ok {
+				continue
+			}
+			planner.reserve(route)
+			visible = append(visible, visibleEdge{edge: edge, route: route})
 			continue
 		}
 		workloadLink := workloadNodeKey(edge.From) && workloadNodeKey(edge.To)
@@ -58,6 +69,60 @@ func planVisibleRoutes(planner *routePlanner, edges []Edge, nodeRects map[string
 		visible = append(visible, visibleEdge{edge: edge, route: route})
 	}
 	return visible
+}
+
+func (p *routePlanner) planPartialRoute(from, to rect, fromVisible, toVisible bool) (edgeRoute, bool) {
+	if fromVisible == toVisible {
+		return edgeRoute{}, false
+	}
+	visible := from
+	hidden := to
+	reverse := false
+	if toVisible {
+		visible = to
+		hidden = from
+		reverse = true
+	}
+	start := sidePort(visible, hidden)
+	endPoint, ok := routeBoundaryPoint(start.entry, portExitDirection(start), p.bounds)
+	if !ok || endPoint == start.entry {
+		return edgeRoute{}, false
+	}
+	cells, ok := pathCellsFromWaypoints([]routePoint{start.entry, endPoint})
+	if !ok || !p.pathClear(cells, start.entry, endPoint, routeOptions{allowOccupied: true}) {
+		return edgeRoute{}, false
+	}
+	route := edgeRoute{
+		cells: cells,
+		start: start,
+		end:   routePort{border: endPoint, entry: endPoint},
+	}
+	if reverse {
+		route.start, route.end = route.end, route.start
+		reverseRoutePoints(route.cells)
+	}
+	return route, true
+}
+
+func routeBoundaryPoint(start routePoint, dir int, bounds rect) (routePoint, bool) {
+	switch dir {
+	case directionLeft:
+		return routePoint{X: bounds.X, Y: start.Y}, true
+	case directionRight:
+		return routePoint{X: bounds.X + bounds.W - 1, Y: start.Y}, true
+	case directionUp:
+		return routePoint{X: start.X, Y: bounds.Y}, true
+	case directionDown:
+		return routePoint{X: start.X, Y: bounds.Y + bounds.H - 1}, true
+	default:
+		return routePoint{}, false
+	}
+}
+
+func reverseRoutePoints(points []routePoint) {
+	for left, right := 0, len(points)-1; left < right; left, right = left+1, right-1 {
+		points[left], points[right] = points[right], points[left]
+	}
 }
 
 func edgeRoutePriority(edge Edge, nodeRects map[string]rect) int {

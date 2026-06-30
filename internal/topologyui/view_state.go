@@ -8,6 +8,8 @@ const (
 type ViewState struct {
 	Selected              int
 	Focus                 int
+	PanX                  int
+	PanY                  int
 	Message               string
 	ContextMenu           bool
 	ContextGroup          string
