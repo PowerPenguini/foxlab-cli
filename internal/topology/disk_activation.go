@@ -7,7 +7,7 @@ func (s *Service) activateContainerDataDisk(disk lab.Disk, targetID string) stri
 		return "disk is attached: " + disk.ID
 	}
 	if diskKind(disk) == "base" && s.diskHasLayers(disk.ID) {
-		return "disk has layers; create a container data disk: " + disk.ID
+		return "disk has layers; create a separate container disk: " + disk.ID
 	}
 	index, _, ok := s.diskIndexByID(disk.ID)
 	if !ok {

@@ -28,7 +28,7 @@ func helpLines(topic string) []string {
 		return []string{
 			"container: Configuration edits name, image, command, and power state",
 			"container nic: NIC menu adds, deletes, or connects NICs",
-			"container disk: Disk menu creates, attaches, detaches, and deletes data disks",
+			"container disk: Disk menu creates, attaches, detaches, and deletes rootfs layers",
 			"container actions: Shell, Move, and Delete are root menu actions",
 		}
 	case "disk", "disks":

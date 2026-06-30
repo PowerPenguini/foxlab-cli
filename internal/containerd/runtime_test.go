@@ -57,8 +57,8 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 	changedMAC.Networks[0].MAC = "02:00:00:00:00:11"
 	removedNIC := base
 	removedNIC.Networks = nil
-	dataMount := containerDiskMount{Source: "/host/data", Destination: "/data"}
-	changedDataMount := containerDiskMount{Source: "/host/other-data", Destination: "/data"}
+	rootMount := containerDiskMount{Source: "/host/rootfs/merged", Destination: "/"}
+	changedRootMount := containerDiskMount{Source: "/host/other-rootfs/merged", Destination: "/"}
 
 	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(changedImage, containerDiskMount{}) {
 		t.Fatal("image change did not change hash")
@@ -81,12 +81,12 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(removedNIC, containerDiskMount{}) {
 		t.Fatal("network removal did not change hash")
 	}
-	if containerConfigHash(base, dataMount) == containerConfigHash(base, changedDataMount) {
-		t.Fatal("disk data source change did not change hash")
+	if containerConfigHash(base, rootMount) == containerConfigHash(base, changedRootMount) {
+		t.Fatal("disk rootfs source change did not change hash")
 	}
 }
 
-func TestDesiredContainerDiskMountMatchesPreparedMountShape(t *testing.T) {
+func TestDesiredContainerDiskMountMatchesOverlayRootShape(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SUDO_USER", "")
 	l := &lab.Lab{
@@ -109,11 +109,11 @@ func TestDesiredContainerDiskMountMatchesPreparedMountShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSource := filepath.Join(root, "container-data", "web")
-	if mount.Source != wantSource || mount.Destination != "/srv/web" {
-		t.Fatalf("desired mount = %#v, want source %q destination /srv/web", mount, wantSource)
+	wantSource := filepath.Join(root, "container-data", "web", "merged")
+	if mount.Source != wantSource || mount.Destination != "/" {
+		t.Fatalf("desired mount = %#v, want source %q destination /", mount, wantSource)
 	}
-	preparedShape := containerDiskMount{Source: wantSource, Destination: "/srv/web"}
+	preparedShape := containerDiskMount{Source: wantSource, Destination: "/"}
 	if containerConfigHash(l.Containers[0], mount) != containerConfigHash(l.Containers[0], preparedShape) {
 		t.Fatal("desired disk mount does not match prepared mount hash shape")
 	}
@@ -159,28 +159,24 @@ func TestContainerProcessArgsDefaultKeepsContainerRunning(t *testing.T) {
 	}
 }
 
-func TestContainerSpecOptsBindMountsContainerDiskAsData(t *testing.T) {
-	diskMount := containerDiskMount{Source: "/host/data", Destination: "/data"}
+func TestContainerSpecOptsUsesContainerDiskAsRootFS(t *testing.T) {
+	diskMount := containerDiskMount{Source: "/host/rootfs/merged", Destination: "/"}
 	opts := containerSpecOpts(nil, lab.Container{}, diskMount)
 	if len(opts) != 4 {
-		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, resolv.conf, and data mount", len(opts))
+		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, resolv.conf, and rootfs path", len(opts))
 	}
 	var spec coci.Spec
-	if err := opts[len(opts)-1](context.Background(), nil, &cdocontainers.Container{}, &spec); err != nil {
+	if err := opts[0](context.Background(), nil, &cdocontainers.Container{}, &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Root != nil {
-		t.Fatalf("spec root = %#v, want image snapshot rootfs unchanged", spec.Root)
+	if spec.Root == nil || spec.Root.Path != diskMount.Source {
+		t.Fatalf("spec root = %#v, want rootfs path %q", spec.Root, diskMount.Source)
 	}
-	if len(spec.Mounts) != 1 {
-		t.Fatalf("spec mounts = %#v, want one data disk bind mount", spec.Mounts)
+	if spec.Root.Readonly {
+		t.Fatalf("spec root = %#v, want writable rootfs", spec.Root)
 	}
-	mount := spec.Mounts[0]
-	if mount.Type != "bind" || mount.Source != diskMount.Source || mount.Destination != diskMount.Destination {
-		t.Fatalf("spec mount = %#v, want data disk bind mount", mount)
-	}
-	if !reflect.DeepEqual(mount.Options, []string{"rbind", "rw"}) {
-		t.Fatalf("spec mount options = %#v", mount.Options)
+	if len(spec.Mounts) != 0 {
+		t.Fatalf("spec mounts = %#v, want disk rootfs without bind mount", spec.Mounts)
 	}
 }
 

@@ -236,7 +236,7 @@ func TestValidateRejectsDataDiskWithBase(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsRootDiskMountPath(t *testing.T) {
+func TestValidateAllowsRootDiskMountPathForContainerLayer(t *testing.T) {
 	l := &Lab{
 		ID:         "demo",
 		Containers: []Container{{ID: "web", Image: "nginx", Disk: "disks/data.qcow2"}},
@@ -251,9 +251,8 @@ func TestValidateRejectsRootDiskMountPath(t *testing.T) {
 		}},
 	}
 	l.Normalize()
-	err := l.Validate()
-	if err == nil || !strings.Contains(err.Error(), `disk "data" mountPath must not be /`) {
-		t.Fatalf("expected root mountPath validation error, got %v", err)
+	if err := l.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -136,6 +137,14 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 					return fmt.Errorf("delete stale task for %s: %w", name, err)
 				}
 			} else if !errdefs.IsNotFound(err) {
+				return err
+			}
+		}
+		if changed {
+			if err := deleteContainer(ctx, container); err != nil {
+				return err
+			}
+			if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
 				return err
 			}
 		}
@@ -363,7 +372,11 @@ func (r *Runtime) containerdAddress() string {
 }
 
 func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount containerDiskMount) []oci.SpecOpts {
-	opts := []oci.SpecOpts{oci.WithImageConfig(image)}
+	opts := []oci.SpecOpts{}
+	if diskMount.Source != "" && diskMount.Destination == "/" {
+		opts = append(opts, oci.WithRootFSPath(diskMount.Source))
+	}
+	opts = append(opts, oci.WithImageConfig(image))
 	opts = append(opts, oci.WithProcessArgs(containerProcessArgs(ct)...))
 	env := []string{}
 	for key, value := range ct.Env {
@@ -373,7 +386,7 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 		opts = append(opts, oci.WithEnv(env))
 	}
 	opts = append(opts, oci.WithHostResolvconf)
-	if diskMount.Source != "" {
+	if diskMount.Source != "" && diskMount.Destination != "/" {
 		opts = append(opts, oci.WithMounts([]specs.Mount{{
 			Type:        "bind",
 			Source:      diskMount.Source,
@@ -421,7 +434,9 @@ func createContainer(ctx context.Context, client *containerd.Client, name string
 		containerd.WithImage(image),
 		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount)...),
 		containerd.WithContainerLabels(map[string]string{configLabel: containerConfigHash(ct, diskMount)}),
-		containerd.WithNewSnapshot(name+"-rootfs", image),
+	}
+	if diskMount.Source == "" || diskMount.Destination != "/" {
+		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
 	}
 	return client.NewContainer(
 		ctx,
@@ -487,11 +502,7 @@ func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount
 	if err != nil {
 		return containerDiskMount{}, err
 	}
-	destination, err := containerDiskDestination(l, ct)
-	if err != nil {
-		return containerDiskMount{}, err
-	}
-	return containerDiskMount{Source: mountPath, Destination: destination}, nil
+	return containerDiskMount{Source: filepath.Join(mountPath, "merged"), Destination: "/"}, nil
 }
 
 func nilInterface(value any) bool {
