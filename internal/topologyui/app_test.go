@@ -683,11 +683,11 @@ func TestContextMenuMouseSwitchesInlineEditFieldsWithoutCopyingValue(t *testing.
 	}
 }
 
-func TestContextMenuIncludesShellForWorkloads(t *testing.T) {
+func TestContextMenuIncludesConsoleForVMsAndShellForContainers(t *testing.T) {
 	foundVM := false
 	foundVNC := false
 	for _, item := range contextMenuItems(Node{ID: "vm1", Type: NodeVM}, "") {
-		if item == "Shell" {
+		if item == "Console" {
 			foundVM = true
 		}
 		if item == "VNC" {
@@ -695,10 +695,13 @@ func TestContextMenuIncludesShellForWorkloads(t *testing.T) {
 		}
 	}
 	if !foundVM {
-		t.Fatalf("vm context menu missing Shell: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
+		t.Fatalf("vm context menu missing Console: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
 	}
 	if !foundVNC {
 		t.Fatalf("vm context menu missing VNC: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
+	}
+	if action := contextMenuAction("Console"); action != "shell" {
+		t.Fatalf("Console action = %q, want shell", action)
 	}
 	found := false
 	foundContainerVNC := false
@@ -3837,6 +3840,16 @@ func TestContainerShellNeedsRestartForRootFSError(t *testing.T) {
 		if !containerShellNeedsRestart(detail) {
 			t.Fatalf("containerShellNeedsRestart(%q) = false", detail)
 		}
+	}
+}
+
+func TestConsoleConnectMessageExplainsVMSerialConsole(t *testing.T) {
+	got := consoleConnectMessage("vm console /dev/pts/7")
+	if !strings.Contains(got, "serial port") || !strings.Contains(got, "VNC") || !strings.Contains(got, "ttyS0") {
+		t.Fatalf("VM console message missing serial hint: %q", got)
+	}
+	if got := consoleConnectMessage("container shell foxlab-demo-web"); strings.Contains(got, "serial port") {
+		t.Fatalf("container shell message contains VM serial hint: %q", got)
 	}
 }
 

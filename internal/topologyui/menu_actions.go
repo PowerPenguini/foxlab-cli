@@ -30,7 +30,7 @@ func contextMenuAction(label string) string {
 		return "add-nic"
 	case "Connect":
 		return "connect"
-	case "Shell":
+	case "Shell", "Console":
 		return "shell"
 	case "VNC":
 		return "vnc"

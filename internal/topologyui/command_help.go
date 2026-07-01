@@ -22,7 +22,7 @@ func helpLines(topic string) []string {
 			"vm: Configuration edits name, CPU, memory, VNC, ISO, and power state",
 			"vm nic: NIC menu adds, deletes, or connects NICs",
 			"vm disk: Disk menu creates, attaches, detaches, deletes, and manages layers",
-			"vm actions: Shell, VNC, Move, and Delete are root menu actions",
+			"vm actions: Console, VNC, Move, and Delete are root menu actions",
 		}
 	case "container", "containers", "ct":
 		return []string{

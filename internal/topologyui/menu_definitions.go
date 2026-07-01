@@ -80,7 +80,7 @@ func vmContextMenuItems(node Node, group string) []string {
 	case "disk-menu":
 		return nil
 	case "":
-		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Shell", "VNC", "Delete"}
+		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Console", "VNC", "Delete"}
 	default:
 		return nil
 	}

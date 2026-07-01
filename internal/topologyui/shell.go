@@ -193,7 +193,7 @@ func (a *App) runConsole(console io.ReadWriteCloser, display string) error {
 	}
 	defer restoreRaw()
 
-	_, _ = io.WriteString(a.Out, "\r\nconnected to "+display+"; Ctrl-] exits\r\n")
+	_, _ = io.WriteString(a.Out, consoleConnectMessage(display))
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -222,6 +222,14 @@ func (a *App) runConsole(console io.ReadWriteCloser, display string) error {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+}
+
+func consoleConnectMessage(display string) string {
+	message := "\r\nconnected to " + display + "; Ctrl-] exits\r\n"
+	if strings.HasPrefix(display, "vm console ") {
+		message += "VM console is a serial port; use VNC unless the guest has ttyS0/getty enabled.\r\n"
+	}
+	return message
 }
 
 func writeConsoleInput(w io.Writer, input []byte) error {
