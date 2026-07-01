@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -3829,40 +3828,6 @@ func TestCommandShellRejectsExtraArgs(t *testing.T) {
 	}
 }
 
-func TestContainerShellExecCommandUsesCtrTasksExec(t *testing.T) {
-	app := App{
-		ContainerdAddress: "/tmp/containerd.sock",
-		Lab:               &lab.Lab{ID: "demo"},
-	}
-	cmd := app.containerShellExecCommand(lab.Container{ID: "kali", Shell: "/usr/bin/bash"})
-	wantPrefix := []string{
-		"ctr",
-		"--address", "/tmp/containerd.sock",
-		"--namespace", "foxlab",
-		"tasks", "exec",
-		"--tty",
-		"--exec-id",
-	}
-	wantShell := []string{"/usr/bin/bash", "-i"}
-	if len(cmd.Args) != len(wantPrefix)+2+len(wantShell) {
-		t.Fatalf("ctr args = %#v", cmd.Args)
-	}
-	for i, want := range wantPrefix {
-		if cmd.Args[i] != want {
-			t.Fatalf("ctr arg %d = %q, want %q; args=%#v", i, cmd.Args[i], want, cmd.Args)
-		}
-	}
-	if !strings.HasPrefix(cmd.Args[len(wantPrefix)], "foxlab-shell-kali-") {
-		t.Fatalf("exec id = %q", cmd.Args[len(wantPrefix)])
-	}
-	if cmd.Args[len(wantPrefix)+1] != "foxlab-demo-kali" {
-		t.Fatalf("container arg = %q", cmd.Args[len(wantPrefix)+1])
-	}
-	if got := cmd.Args[len(wantPrefix)+2:]; !reflect.DeepEqual(got, wantShell) {
-		t.Fatalf("shell args = %#v, want %#v", got, wantShell)
-	}
-}
-
 func TestContainerShellNeedsRestartForRootFSError(t *testing.T) {
 	for _, detail := range []string{
 		"exec /bin/sh: input/output error",
@@ -3872,26 +3837,6 @@ func TestContainerShellNeedsRestartForRootFSError(t *testing.T) {
 		if !containerShellNeedsRestart(detail) {
 			t.Fatalf("containerShellNeedsRestart(%q) = false", detail)
 		}
-	}
-}
-
-func TestRunContainerShellExecReturnsStderrDetail(t *testing.T) {
-	out, err := os.CreateTemp(t.TempDir(), "shell-out")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-	app := App{Out: out}
-	cmd := exec.Command("sh", "-c", "echo 'exec /bin/sh: input/output error' >&2; exit 255")
-	err = app.runContainerShellExec(cmd)
-	if err == nil {
-		t.Fatal("runContainerShellExec returned nil")
-	}
-	if !strings.Contains(err.Error(), "input/output error") {
-		t.Fatalf("error = %q, want stderr detail", err.Error())
-	}
-	if !strings.Contains(err.Error(), "stop and run the container") {
-		t.Fatalf("error = %q, want recovery hint", err.Error())
 	}
 }
 

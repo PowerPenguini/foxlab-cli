@@ -1,17 +1,15 @@
 package topologyui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"time"
 
+	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/foxruntime"
-	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/virt"
 )
 
@@ -93,11 +91,10 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 			return shellCommand{}, false
 		}
 		display := "container shell " + a.Lab.ManagedContainerName(ct)
-		cmd := a.containerShellExecCommand(ct)
 		return shellCommand{
 			Display: display,
 			NativeRun: func(a *App) error {
-				return a.runContainerShellExec(cmd)
+				return a.runContainerShell(node.ID)
 			},
 		}, true
 	default:
@@ -106,18 +103,22 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 	}
 }
 
-func (a *App) runContainerShellExec(cmd *exec.Cmd) error {
-	var stderr bytes.Buffer
-	cmd.Stdin = a.In
-	cmd.Stdout = a.Out
-	cmd.Stderr = io.MultiWriter(a.Out, &stderr)
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail != "" {
-			if containerShellNeedsRestart(detail) {
-				detail += "; stop and run the container to rebuild/restart its rootfs"
-			}
-			return fmt.Errorf("%w: %s", err, detail)
+func (a *App) runContainerShell(id string) error {
+	if a.Lab == nil {
+		return fmt.Errorf("shell needs a loaded .lab file")
+	}
+	restoreRaw, err := makeShellBlockingRaw(int(a.In.Fd()))
+	if err != nil {
+		return err
+	}
+	defer restoreRaw()
+
+	_, _ = io.WriteString(a.Out, "\r\nconnected to container shell "+id+"; Ctrl-] exits\r\n")
+	runtime := containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)))
+	defer runtime.Close()
+	if err := runtime.ExecShell(context.Background(), a.Lab, id, a.In, a.Out); err != nil {
+		if containerShellNeedsRestart(err.Error()) {
+			return fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", err)
 		}
 		return err
 	}
@@ -130,34 +131,6 @@ func containerShellNeedsRestart(detail string) bool {
 		strings.Contains(detail, "cannot resize a stopped container") ||
 		strings.Contains(detail, "container is stopped") ||
 		strings.Contains(detail, "task not found")
-}
-
-func (a *App) containerShellExecCommand(ct lab.Container) *exec.Cmd {
-	args := []string{}
-	if address := firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)); address != "" {
-		args = append(args, "--address", address)
-	}
-	args = append(args,
-		"--namespace", "foxlab",
-		"tasks", "exec",
-		"--tty",
-		"--exec-id", containerShellExecID(ct.ID),
-		a.Lab.ManagedContainerName(ct),
-	)
-	args = append(args, containerShellArgs(ct)...)
-	return exec.Command("ctr", args...)
-}
-
-func containerShellExecID(id string) string {
-	return "foxlab-shell-" + strings.ToLower(id) + "-" + time.Now().Format("20060102150405.000000000")
-}
-
-func containerShellArgs(ct lab.Container) []string {
-	shell := strings.TrimSpace(ct.Shell)
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	return []string{shell, "-i"}
 }
 
 func (a *App) runShell(command shellCommand) error {
