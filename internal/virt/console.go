@@ -63,6 +63,7 @@ func (r *LibvirtRuntime) OpenConsole(ctx context.Context, l *lab.Lab, id string)
 		_ = dom.Free()
 		return nil, fmt.Errorf("watch console stream %q: %w", id, err)
 	}
+	console.drainStream(stream)
 	return console, nil
 }
 
@@ -208,6 +209,10 @@ func (c *Console) handleStreamEvent(st *libvirt.Stream, events libvirt.StreamEve
 	if events&libvirt.STREAM_EVENT_READABLE == 0 {
 		return
 	}
+	c.drainStream(st)
+}
+
+func (c *Console) drainStream(st *libvirt.Stream) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := st.Recv(buf)
