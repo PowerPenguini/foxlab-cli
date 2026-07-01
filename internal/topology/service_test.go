@@ -268,7 +268,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "vm",
 			run:  func() string { return service.VMCreate("", map[string]string{}) },
-			want: "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|external=ID]",
+			want: "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|uplink=ID]",
 		},
 		{
 			name: "vm invalid",
@@ -288,7 +288,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "switch",
 			run:  func() string { return service.SwitchCreate("", map[string]string{}) },
-			want: "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [external=ID]",
+			want: "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [uplink=ID]",
 		},
 		{
 			name: "switch invalid",
@@ -298,17 +298,17 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "external",
 			run:  func() string { return service.ExternalCreate("", map[string]string{}) },
-			want: "usage: external create <id> interface=IFACE [mode=nat|direct|macnat]",
+			want: "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]",
 		},
 		{
 			name: "external invalid",
 			run:  func() string { return service.ExternalCreate("bad/id", map[string]string{"interface": "eth0"}) },
-			want: "invalid external id: bad/id",
+			want: "invalid uplink id: bad/id",
 		},
 		{
 			name: "external interface",
 			run:  func() string { return service.ExternalCreate("uplink", map[string]string{}) },
-			want: "usage: external create <id> interface=IFACE [mode=nat|direct|macnat]",
+			want: "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]",
 		},
 	}
 
@@ -369,12 +369,12 @@ func TestServiceSwitchAndExternalRejectUnsupportedArgs(t *testing.T) {
 		{
 			name: "external create",
 			run:  func() string { return service.ExternalCreate("lte", map[string]string{"iface": "wwan0"}) },
-			want: "unsupported external create argument: iface",
+			want: "unsupported uplink create argument: iface",
 		},
 		{
 			name: "external set",
 			run:  func() string { return service.ExternalSet("uplink", map[string]string{"iface": "eth1"}) },
-			want: "unsupported external set argument: iface",
+			want: "unsupported uplink set argument: iface",
 		},
 	}
 
@@ -514,7 +514,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "switch create missing external",
 			run:  func(s *Service) string { return s.SwitchCreate("wan", map[string]string{"external": "missing"}) },
-			want: `switch create failed: switch "wan" references missing external link "missing"`,
+			want: `switch create failed: switch "wan" references missing uplink "missing"`,
 		},
 		{
 			name: "switch set bad mode",
@@ -526,12 +526,12 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 			run: func(s *Service) string {
 				return s.ExternalCreate("lte", map[string]string{"interface": "wwan0", "mode": "bad"})
 			},
-			want: `external create failed: external link "lte" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
+			want: `uplink create failed: uplink "lte" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
 		},
 		{
 			name: "external set bad mode",
 			run:  func(s *Service) string { return s.ExternalSet("uplink", map[string]string{"mode": "bad"}) },
-			want: `external config failed: external link "uplink" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
+			want: `uplink config failed: uplink "uplink" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
 		},
 		{
 			name: "vm create missing switch",
@@ -548,7 +548,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "vm set missing external",
 			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}) },
-			want: `config failed: vm "vm1" references missing external link "missing"`,
+			want: `config failed: vm "vm1" references missing uplink "missing"`,
 		},
 		{
 			name: "container create switch and external",
@@ -562,7 +562,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 			run: func(s *Service) string {
 				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"})
 			},
-			want: `container create failed: container "api" references missing external link "missing"`,
+			want: `container create failed: container "api" references missing uplink "missing"`,
 		},
 		{
 			name: "container set switch and external",
@@ -591,6 +591,42 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s created lab file or stat failed: %v", tt.name, err)
 		}
+	}
+}
+
+func TestServiceSwitchSetAppendsExternalLinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		Switches: []lab.Switch{{
+			ID:            "lan",
+			Mode:          "bridge",
+			ExternalLinks: []string{"uplink1"},
+		}},
+		ExternalLinks: []lab.ExternalLink{
+			{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT},
+			{ID: "uplink2", Interface: "eth1", Mode: lab.ExternalModeNAT},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(loaded, path)
+
+	if got := service.SwitchSet("lan", map[string]string{"external": "uplink2"}); got != "configured switch:lan" {
+		t.Fatalf("SwitchSet = %q", got)
+	}
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1", "uplink2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("switch externalLinks = %#v, want %#v", got, want)
 	}
 }
 
@@ -727,7 +763,7 @@ func TestServiceMutationsRequireSavePathBeforeMutatingLab(t *testing.T) {
 		{
 			name: "external delete",
 			run:  func() string { return service.ExternalDelete("uplink") },
-			want: "external delete failed: missing lab path",
+			want: "uplink delete failed: missing lab path",
 		},
 		{
 			name: "nic delete",
@@ -805,14 +841,14 @@ func TestWorkloadNetworkRefsValidateBeforeSavePath(t *testing.T) {
 		{
 			name: "vm set",
 			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}) },
-			want: `config failed: vm "vm1" references missing external link "missing"`,
+			want: `config failed: vm "vm1" references missing uplink "missing"`,
 		},
 		{
 			name: "container create",
 			run: func(s *Service) string {
 				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"})
 			},
-			want: `container create failed: container "api" references missing external link "missing"`,
+			want: `container create failed: container "api" references missing uplink "missing"`,
 		},
 		{
 			name: "container set",
@@ -942,7 +978,7 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 		{
 			name: "switch collides with external",
 			run:  func(s *Service) string { return s.SwitchCreate("uplink", nil) },
-			want: "node id already exists as external link: uplink",
+			want: "node id already exists as uplink: uplink",
 		},
 		{
 			name: "external collides with switch",
@@ -1057,7 +1093,7 @@ func TestServiceEmptySetArgsAreNoOpBeforeSavePath(t *testing.T) {
 		{
 			name: "external set",
 			run:  func(s *Service) string { return s.ExternalSet("uplink", nil) },
-			want: "configured external:uplink",
+			want: "configured uplink:uplink",
 		},
 	}
 

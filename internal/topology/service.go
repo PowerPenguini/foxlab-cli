@@ -81,7 +81,7 @@ func (s *Service) existingNodeKind(id string) string {
 	case s.HasLabSwitch(id):
 		return "switch"
 	case s.HasLabExternal(id):
-		return "external link"
+		return "uplink"
 	case s.HasLabVM(id):
 		return "vm"
 	case s.HasLabContainer(id):
@@ -214,7 +214,7 @@ func (s *Service) SwitchForExternal(id string) string {
 		return ""
 	}
 	for _, sw := range s.Lab.Switches {
-		if sw.ExternalLink == id {
+		if lab.SwitchHasExternalLink(sw, id) {
 			return sw.ID
 		}
 	}

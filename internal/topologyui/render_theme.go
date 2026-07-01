@@ -26,7 +26,7 @@ func nodeBadgeStyle(nodeType string) string {
 	case NodeSwitch:
 		return ansiYellow + ansiBold
 	case NodeExternal:
-		return ansiCyan + ansiBold
+		return ansiBrightMagenta + ansiBold
 	default:
 		return ansiWhite + ansiBold
 	}
@@ -56,4 +56,20 @@ func stateStyle(state string) string {
 	default:
 		return themeMuted
 	}
+}
+
+func nodeStateStyle(nodeType, state string) string {
+	if nodeType == NodeSwitch {
+		switch state {
+		case "nat", "bridge", "direct", "macnat", "macnat-bridge":
+			return ansiYellow + ansiBold
+		}
+	}
+	if nodeType == NodeExternal {
+		switch state {
+		case "link", "nat", "direct", "macnat":
+			return ansiBrightMagenta + ansiBold
+		}
+	}
+	return stateStyle(state)
 }

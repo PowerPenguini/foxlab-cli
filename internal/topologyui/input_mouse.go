@@ -351,10 +351,11 @@ func (a *App) contextSubmenuActionButtonRect(layout menuLayout, event mouseEvent
 		return rect{}, false
 	}
 	item := layout.sub.items[row].Label
+	action := layout.sub.items[row].Action
 	if a.State.ContextGroup == "nic-menu" && isNICDetail(item) && event.x >= layout.sub.rect.X+layout.sub.rect.W-3 {
 		return rect{X: layout.sub.rect.X + layout.sub.rect.W - 3, Y: event.y, W: 3, H: 1}, true
 	}
-	if a.State.ContextGroup == "uplink-menu" && isSwitchUplinkMenuDetail(item) && event.x >= layout.sub.rect.X+layout.sub.rect.W-3 {
+	if a.State.ContextGroup == "uplink-menu" && isSwitchUplinkMenuDetail(action) && event.x >= layout.sub.rect.X+layout.sub.rect.W-3 {
 		return rect{X: layout.sub.rect.X + layout.sub.rect.W - 3, Y: event.y, W: 3, H: 1}, true
 	}
 	if a.State.ContextGroup != "disk-menu" {

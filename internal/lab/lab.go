@@ -77,10 +77,11 @@ type ContainerNetwork struct {
 }
 
 type Switch struct {
-	ID           string `json:"id" yaml:"id"`
-	Name         string `json:"name,omitempty" yaml:"name,omitempty"`
-	Mode         string `json:"mode" yaml:"mode"`
-	ExternalLink string `json:"externalLink,omitempty" yaml:"externalLink,omitempty"`
+	ID            string   `json:"id" yaml:"id"`
+	Name          string   `json:"name,omitempty" yaml:"name,omitempty"`
+	Mode          string   `json:"mode" yaml:"mode"`
+	ExternalLink  string   `json:"externalLink,omitempty" yaml:"externalLink,omitempty"`
+	ExternalLinks []string `json:"externalLinks,omitempty" yaml:"externalLinks,omitempty"`
 }
 
 type ExternalLink struct {

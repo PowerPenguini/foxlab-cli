@@ -23,7 +23,7 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 	}
 	drawInspectorHeader(g, node, x, y, w)
 	y += 2
-	g.Text(x, y, fit("state  "+displayNodeState(node.State, state.AnimationFrame), w), stateStyle(node.State))
+	g.Text(x, y, fit("state  "+displayNodeState(node.State, state.AnimationFrame), w), nodeStateStyle(node.Type, node.State))
 	y++
 	if node.DesiredState != "" {
 		g.Text(x, y, fit("want   "+node.DesiredState, w), themeMuted)
@@ -63,8 +63,11 @@ func inspectorLines(node Node) []string {
 	case NodeContainer:
 		return compactDetailLines(node, []string{"image", "command", "disk"}, 7)
 	case NodeSwitch:
-		lines := compactDetailLines(node, []string{"mode", "uplink", "external"}, 5)
-		lines = append(lines, "links  "+strconv.Itoa(len(nicDetails(node.Details))))
+		links := len(nicDetails(node.Details))
+		configNode := node
+		configNode.Details = switchConfigurationDetails(node.Details)
+		lines := compactDetailLines(configNode, []string{"mode"}, 5)
+		lines = append(lines, "links  "+strconv.Itoa(links))
 		return lines
 	case NodeExternal:
 		return compactDetailLines(node, []string{"interface", "mode"}, 5)

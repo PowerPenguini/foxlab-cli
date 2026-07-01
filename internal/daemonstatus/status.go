@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,7 +73,7 @@ func Start(ctx context.Context, path string, store *Store) (string, <-chan error
 			return "", nil, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := prepareSocketDir(filepath.Dir(path)); err != nil {
 		return "", nil, err
 	}
 	if err := removeSocketFile(path); err != nil {
@@ -82,6 +84,7 @@ func Start(ctx context.Context, path string, store *Store) (string, <-chan error
 		return "", nil, err
 	}
 	_ = os.Chmod(path, 0o666)
+	chownPathForSudoUser(path)
 	errs := make(chan error, 1)
 	go serveListener(ctx, path, listener, store, errs)
 	return path, errs, nil
@@ -120,6 +123,44 @@ func removeSocketFile(path string) error {
 		return fmt.Errorf("status socket path %q exists and is not a socket", path)
 	}
 	return os.Remove(path)
+}
+
+func prepareSocketDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if os.Geteuid() == 0 {
+		chownPathForSudoUser(dir)
+	}
+	return os.Chmod(dir, 0o755)
+}
+
+func chownPathForSudoUser(path string) {
+	uid, gid, ok := sudoUserIDs()
+	if !ok {
+		return
+	}
+	_ = os.Chown(path, uid, gid)
+}
+
+func sudoUserIDs() (int, int, bool) {
+	if os.Geteuid() != 0 {
+		return 0, 0, false
+	}
+	name := strings.TrimSpace(os.Getenv("SUDO_USER"))
+	if name == "" || name == "root" {
+		return 0, 0, false
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0, 0, false
+	}
+	uid, uidErr := strconv.Atoi(u.Uid)
+	gid, gidErr := strconv.Atoi(u.Gid)
+	if uidErr != nil || gidErr != nil {
+		return 0, 0, false
+	}
+	return uid, gid, true
 }
 
 func Query(ctx context.Context, path string) (Snapshot, error) {

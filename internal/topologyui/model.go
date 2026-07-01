@@ -29,8 +29,8 @@ func MockModel() Model {
 			{ID: "web", Type: NodeContainer, Badge: "CT", Label: "web", State: "missing", X: 4, Y: 19, Details: []string{"image=docker.io/library/nginx:latest", "nic0 → lan"}},
 			{ID: "edge", Type: NodeSwitch, Badge: "SW", Label: "edge", State: "bridge", X: 28, Y: 5, Details: []string{"mode=macnat-bridge", "uplink=uplink0"}},
 			{ID: "lan", Type: NodeSwitch, Badge: "SW", Label: "lan", State: "nat", X: 28, Y: 13, Details: []string{"mode=nat", "dhcp=on"}},
-			{ID: "uplink0", Type: NodeExternal, Badge: "UP", Label: "wlp0s20f3", State: "link", X: 52, Y: 5, Details: []string{"interface=wlp0s20f3"}},
-			{ID: "hostnet", Type: NodeExternal, Badge: "UP", Label: "br0", State: "link", X: 52, Y: 13, Details: []string{"interface=br0"}},
+			{ID: "uplink0", Type: NodeExternal, Badge: "UP", Label: "wlp0s20f3", State: lab.ExternalModeNAT, X: 52, Y: 5, Details: []string{"interface=wlp0s20f3", "mode=nat"}},
+			{ID: "hostnet", Type: NodeExternal, Badge: "UP", Label: "br0", State: lab.ExternalModeDirect, X: 52, Y: 13, Details: []string{"interface=br0", "mode=direct"}},
 		},
 		Edges: []Edge{
 			{From: NodeKey(NodeVM, "router"), To: NodeKey(NodeSwitch, "edge")},
@@ -87,7 +87,7 @@ func ModelFromLab(l *lab.Lab) Model {
 			Type:         NodeVM,
 			Badge:        "VM",
 			Label:        firstNonEmpty(vm.Name, vm.ID),
-			State:        displayWorkloadState(lab.DesiredState(vm.DesiredState), "defined"),
+			State:        displayNodeWorkloadState(NodeVM, lab.DesiredState(vm.DesiredState), "defined", true, false),
 			DesiredState: lab.DesiredState(vm.DesiredState),
 			X:            layoutX(l, vm.ID, NodeVM, i),
 			Y:            layoutY(l, vm.ID, i),
@@ -134,7 +134,7 @@ func ModelFromLab(l *lab.Lab) Model {
 			Type:         NodeContainer,
 			Badge:        "CT",
 			Label:        firstNonEmpty(ct.Name, ct.ID),
-			State:        displayWorkloadState(lab.DesiredState(ct.DesiredState), "missing"),
+			State:        displayNodeWorkloadState(NodeContainer, lab.DesiredState(ct.DesiredState), "missing", true, false),
 			DesiredState: lab.DesiredState(ct.DesiredState),
 			X:            layoutX(l, ct.ID, NodeContainer, i),
 			Y:            layoutY(l, ct.ID, i),
@@ -143,9 +143,9 @@ func ModelFromLab(l *lab.Lab) Model {
 	}
 	for i, sw := range l.Switches {
 		details := []string{"mode=" + firstNonEmpty(sw.Mode, "bridge")}
-		if sw.ExternalLink != "" {
-			details = append(details, "uplink="+sw.ExternalLink)
-			m.Edges = append(m.Edges, Edge{From: NodeKey(NodeSwitch, sw.ID), To: NodeKey(NodeExternal, sw.ExternalLink)})
+		for _, externalID := range lab.SwitchExternalLinks(sw) {
+			details = append(details, "uplink="+externalID)
+			m.Edges = append(m.Edges, Edge{From: NodeKey(NodeSwitch, sw.ID), To: NodeKey(NodeExternal, externalID)})
 		}
 		m.Nodes = append(m.Nodes, Node{
 			ID:      sw.ID,
@@ -180,11 +180,35 @@ func ModelFromLab(l *lab.Lab) Model {
 }
 
 func displayWorkloadState(desired, actual string) string {
+	return displayWorkloadStateWithTransitions(desired, actual, true)
+}
+
+func displayNodeWorkloadState(typ, desired, actual string, transitions, pendingStart bool) string {
 	actual = normalizeRuntimeState(actual)
+	if pendingStart && desired == lab.DesiredStateRunning && actual == "missing" {
+		return "starting"
+	}
+	if typ == NodeVM && desired == lab.DesiredStateStopped && actual == "missing" {
+		return "defined"
+	}
+	return displayWorkloadStateWithTransitions(desired, actual, transitions)
+}
+
+func displayWorkloadStateWithTransitions(desired, actual string, transitions bool) string {
+	actual = normalizeRuntimeState(actual)
+	if !transitions {
+		return actual
+	}
 	if desired == lab.DesiredStateRunning {
 		switch actual {
-		case "", "missing", "created", "defined", "stopped", "shutoff":
+		case "", "created", "defined", "stopped", "shutoff":
 			return "starting"
+		}
+	}
+	if desired == lab.DesiredStateStopped {
+		switch actual {
+		case "running", "starting", "loading", "pulling", "creating":
+			return "stopping"
 		}
 	}
 	return actual

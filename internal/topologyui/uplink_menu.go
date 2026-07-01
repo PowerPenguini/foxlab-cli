@@ -2,14 +2,58 @@ package topologyui
 
 import "strings"
 
-const attachUplinkMenuItem = "Attach Uplink"
+const (
+	attachUplinkMenuItem     = "Attach Uplink"
+	switchUplinkActionPrefix = "uplink:"
+)
 
 func switchUplinkMenuItems(node Node) []string {
 	items := []string{attachUplinkMenuItem}
-	if id := switchConnectedUplinkID(node); id != "" {
+	for _, id := range switchConnectedUplinkIDs(node) {
 		items = append(items, id)
 	}
 	return items
+}
+
+func switchUplinkMenuActions(node Node) []string {
+	items := []string{attachUplinkMenuItem}
+	for _, id := range switchConnectedUplinkIDs(node) {
+		items = append(items, switchUplinkMenuAction(id))
+	}
+	return items
+}
+
+func switchUplinkMenuItemsForModel(m Model, node Node) []MenuItem {
+	items := []MenuItem{{
+		ID:      "attach-uplink",
+		Label:   attachUplinkMenuItem,
+		Action:  "attach-uplink",
+		Kind:    menuItemAction,
+		Enabled: len(attachableUplinkIDsInModel(m)) > 0,
+	}}
+	for _, id := range switchConnectedUplinkIDs(node) {
+		action := switchUplinkMenuAction(id)
+		items = append(items, MenuItem{
+			ID:      action,
+			Label:   switchUplinkMenuLabel(m, id),
+			Action:  action,
+			Kind:    menuItemAction,
+			Enabled: true,
+			RowKind: "uplink",
+		})
+	}
+	return items
+}
+
+func switchUplinkMenuLabel(m Model, id string) string {
+	if node, ok := nodeByKey(m, NodeKey(NodeExternal, id)); ok {
+		return firstNonEmpty(node.Label, id)
+	}
+	return id
+}
+
+func switchUplinkMenuAction(id string) string {
+	return switchUplinkActionPrefix + id
 }
 
 func switchUplinkMenuKinds(items []string) []string {
@@ -27,6 +71,10 @@ func switchUplinkMenuExternalID(item string) (string, bool) {
 	if item == "" || item == attachUplinkMenuItem {
 		return "", false
 	}
+	if strings.HasPrefix(item, switchUplinkActionPrefix) {
+		id := strings.TrimSpace(strings.TrimPrefix(item, switchUplinkActionPrefix))
+		return id, id != ""
+	}
 	return item, true
 }
 
@@ -36,14 +84,27 @@ func isSwitchUplinkMenuDetail(item string) bool {
 }
 
 func switchConnectedUplinkID(node Node) string {
-	if node.Type != NodeSwitch {
+	ids := switchConnectedUplinkIDs(node)
+	if len(ids) == 0 {
 		return ""
 	}
-	value := nodeDetailValue(node, "uplink", "")
-	if _, id, ok := strings.Cut(value, "="); ok {
-		return strings.TrimSpace(id)
+	return ids[0]
+}
+
+func switchConnectedUplinkIDs(node Node) []string {
+	if node.Type != NodeSwitch {
+		return nil
 	}
-	return ""
+	ids := []string{}
+	for _, detail := range node.Details {
+		if key, id, ok := strings.Cut(detail, "="); ok && strings.TrimSpace(key) == "uplink" {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 func externalConnectedInModel(m Model, id string) bool {
@@ -75,7 +136,8 @@ func attachableUplinkIDsInModel(m Model) []string {
 }
 
 func switchUplinkMenuItemEnabled(m Model, item string) bool {
-	if strings.TrimSpace(item) != attachUplinkMenuItem {
+	item = strings.TrimSpace(item)
+	if item != attachUplinkMenuItem && item != "attach-uplink" {
 		return true
 	}
 	return len(attachableUplinkIDsInModel(m)) > 0

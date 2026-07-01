@@ -86,7 +86,7 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		a.setContextSelectGroup("interface-menu")
 		return
 	}
-	if ok && isExternalModeField(node, subItems[selected]) {
+	if ok && isModeField(node, subItems[selected]) {
 		a.setContextSelectGroup("mode-menu")
 		return
 	}
@@ -113,7 +113,7 @@ func (a *App) handleContextSelectEnter(node Node, ok bool, selectItems []string)
 	case "interface-menu":
 		a.selectExternalInterface(node, selectItems[selected])
 	case "mode-menu":
-		a.selectExternalMode(node, selectItems[selected])
+		a.selectNodeMode(node, selectItems[selected])
 	}
 }
 
@@ -170,7 +170,7 @@ func (a *App) handleContextHorizontalKey(node Node, ok bool, key string, rootIte
 			a.setContextSelectGroup("interface-menu")
 			return
 		}
-		if ok && isExternalModeField(node, subItems[selected]) {
+		if ok && isModeField(node, subItems[selected]) {
 			a.setContextSelectGroup("mode-menu")
 			return
 		}

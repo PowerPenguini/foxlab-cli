@@ -14,7 +14,7 @@ func layoutNodeRectsWithPan(m Model, pane rect, panX, panY int) map[string]rect 
 	for _, node := range m.Nodes {
 		x := pane.X + node.X + panX
 		y := pane.Y + node.Y + panY
-		out[node.Key()] = rect{X: x, Y: y, W: nodeWidth, H: nodeHeight}
+		out[node.Key()] = rect{X: x, Y: y, W: nodeWidthForNode(node), H: nodeHeightForNode(node)}
 	}
 	return out
 }
@@ -38,7 +38,7 @@ func rectIntersects(r rect, bounds rect) bool {
 }
 
 func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int) {
-	stateStyleValue := stateStyle(node.State)
+	stateStyleValue := nodeStateStyle(node.Type, node.State)
 	clearRect(g, r)
 	drawNodeBox(g, r, selectedBorderStyle(selected, graphFocused))
 	kind := "[" + firstNonEmpty(node.Badge, NodeKind(node.Type)) + "]"
@@ -52,7 +52,56 @@ func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int
 	} else {
 		g.Text(contentX, r.Y+1, fit(fullLabel, contentWidth), nodeLabelStyle(node.Type))
 	}
-	g.Text(r.X+1, r.Y+2, fit(nodeCardLine(node, frame, r.W-2), r.W-2), stateStyleValue)
+	lines := nodeCardLines(node, frame, r.W-2)
+	for i, line := range lines {
+		y := r.Y + 2 + i
+		if y >= r.Y+r.H-1 {
+			break
+		}
+		drawNodeCardLine(g, node, r.X+1, y, r.W-2, line, stateStyleValue)
+	}
+}
+
+func drawNodeCardLine(g *grid, node Node, x, y, width int, line, valueStyle string) {
+	line = fit(line, width)
+	if node.Type != NodeExternal && node.Type != NodeSwitch {
+		g.Text(x, y, line, valueStyle)
+		return
+	}
+	label, value, ok := strings.Cut(line, ": ")
+	if !ok || label == "" || value == "" {
+		g.Text(x, y, line, valueStyle)
+		return
+	}
+	prefix := label + ":"
+	labelWidth := nodeDetailLabelWidth(node.Type)
+	if labelWidth >= width {
+		g.Text(x, y, fit(prefix, width), nodeDetailLabelStyle(node.Type))
+		return
+	}
+	g.Text(x, y, fit(prefix, labelWidth), nodeDetailLabelStyle(node.Type))
+	if padding := labelWidth - runeLen(prefix); padding > 0 {
+		g.Text(x+runeLen(prefix), y, strings.Repeat(" ", padding), nodeDetailLabelStyle(node.Type))
+	}
+	g.Text(x+labelWidth, y, fit(value, width-labelWidth), valueStyle)
+}
+
+func nodeDetailLabelStyle(nodeType string) string {
+	switch nodeType {
+	case NodeSwitch:
+		return ansiYellow + ansiDim
+	case NodeExternal:
+		return ansiBrightMagenta + ansiDim
+	default:
+		return themeMuted
+	}
+}
+
+func nodeDetailLabelWidth(nodeType string) int {
+	if nodeType == NodeExternal {
+		return runeLen("Iface: ")
+	}
+	return runeLen("Mode: ")
 }
 
 func drawNodeBox(g *grid, r rect, style string) {
@@ -80,7 +129,7 @@ func displayNodeState(state string, frame int) string {
 	if glyph := stateGlyph(state); glyph != "" {
 		return glyph + " " + state
 	}
-	return state
+	return modeDisplayLabel(state)
 }
 
 func stateGlyph(state string) string {

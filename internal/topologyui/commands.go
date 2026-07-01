@@ -39,7 +39,7 @@ func (a *App) executeCommand(command string) bool {
 		a.executeShellCommand(fields)
 	case "switch", "sw":
 		a.executeSwitchCommand(fields)
-	case "external", "ext":
+	case "uplink", "up", "external", "ext":
 		a.executeExternalCommand(fields)
 	case "link", "links":
 		a.executeLinkCommand(fields)
@@ -220,7 +220,7 @@ func (a *App) executeContainerCommand(fields []string) {
 		a.containerCreate(fields[2], args)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID|external=ID"
+			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID|uplink=ID"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -293,7 +293,7 @@ func (a *App) executeSwitchCommand(fields []string) {
 	switch fields[1] {
 	case "create", "new":
 		if len(fields) < 3 {
-			a.State.Message = "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [external=ID]"
+			a.State.Message = "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [uplink=ID]"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -304,7 +304,7 @@ func (a *App) executeSwitchCommand(fields []string) {
 		a.switchCreate(fields[2], args)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: switch set <id> mode=bridge external=ID"
+			a.State.Message = "usage: switch set <id> mode=bridge uplink=ID"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -325,13 +325,13 @@ func (a *App) executeSwitchCommand(fields []string) {
 
 func (a *App) executeExternalCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: external <create|set|delete> ..."
+		a.State.Message = "usage: uplink <create|set|delete> ..."
 		return
 	}
 	switch fields[1] {
 	case "create", "new":
 		if len(fields) < 3 {
-			a.State.Message = "usage: external create <id> interface=IFACE [mode=nat|direct|macnat]"
+			a.State.Message = "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -342,7 +342,7 @@ func (a *App) executeExternalCommand(fields []string) {
 		a.externalCreate(fields[2], args)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: external set <id> interface=IFACE name=NAME mode=nat|direct|macnat"
+			a.State.Message = "usage: uplink set <id> interface=IFACE name=NAME mode=nat|direct|macnat"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -352,12 +352,12 @@ func (a *App) executeExternalCommand(fields []string) {
 		}
 		a.externalSet(fields[2], args)
 	case "delete", "rm":
-		if !a.requireExactCommandArgs(fields, 3, "usage: external delete <id>") {
+		if !a.requireExactCommandArgs(fields, 3, "usage: uplink delete <id>") {
 			return
 		}
 		a.externalDelete(fields[2])
 	default:
-		a.State.Message = "unknown external command: " + fields[1]
+		a.State.Message = "unknown uplink command: " + fields[1]
 	}
 }
 
@@ -369,7 +369,7 @@ func (a *App) executeVMCommand(fields []string) {
 	switch fields[1] {
 	case "create", "new":
 		if len(fields) < 3 {
-			a.State.Message = "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|external=ID]"
+			a.State.Message = "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|uplink=ID]"
 			return
 		}
 		args, err := parseArgs(fields[3:])

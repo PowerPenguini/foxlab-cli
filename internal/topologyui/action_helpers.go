@@ -67,7 +67,7 @@ func (a *App) createVMHint(node Node) string {
 	case NodeSwitch:
 		return " switch=" + node.ID
 	case NodeExternal:
-		return " external=" + node.ID
+		return " uplink=" + node.ID
 	default:
 		if a.Lab != nil && len(a.Lab.Switches) > 0 {
 			return " switch=" + a.Lab.Switches[0].ID

@@ -37,6 +37,7 @@ func unexpectedVMCreateArgs(args map[string]string) []string {
 		"disk":     {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 	}
 	var invalid []string
 	for key := range args {
@@ -58,6 +59,7 @@ func unexpectedVMSetArgs(args map[string]string) []string {
 		"mem":      {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 	}
 	var invalid []string
 	for key := range args {

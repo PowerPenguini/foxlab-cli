@@ -3,11 +3,27 @@ package topologyui
 import "io"
 
 const (
-	minWidth   = 56
-	minHeight  = 14
-	nodeWidth  = 16
-	nodeHeight = 4
+	minWidth         = 56
+	minHeight        = 14
+	nodeWidth        = 16
+	uplinkNodeWidth  = 18
+	nodeHeight       = 4
+	uplinkNodeHeight = 5
 )
+
+func nodeWidthForNode(node Node) int {
+	if node.Type == NodeExternal {
+		return uplinkNodeWidth
+	}
+	return nodeWidth
+}
+
+func nodeHeightForNode(node Node) int {
+	if node.Type == NodeExternal {
+		return uplinkNodeHeight
+	}
+	return nodeHeight
+}
 
 func Render(w io.Writer, m Model, state ViewState, width, height int, ansi bool) error {
 	_, err := io.WriteString(w, RenderString(m, state, width, height, ansi))

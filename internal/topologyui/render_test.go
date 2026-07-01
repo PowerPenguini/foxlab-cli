@@ -301,7 +301,7 @@ func TestRenderSelectedRouteKeepsBorderStyle(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "macnat-bridge", X: 12, Y: 2},
-			{ID: "hello", Type: NodeVM, Label: "hello", State: "missing", X: 24, Y: 6},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "missing", X: 24, Y: 8},
 		},
 		Edges: []Edge{{From: NodeKey(NodeSwitch, "sw1"), To: NodeKey(NodeVM, "hello")}},
 	}
@@ -334,7 +334,7 @@ func TestRenderNodeBordersKeepUniformStyleAfterEdges(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "macnat-bridge", X: 12, Y: 2},
-			{ID: "hello", Type: NodeVM, Label: "hello", State: "missing", X: 24, Y: 6},
+			{ID: "hello", Type: NodeVM, Label: "hello", State: "missing", X: 24, Y: 8},
 		},
 		Edges: []Edge{{From: NodeKey(NodeSwitch, "sw1"), To: NodeKey(NodeVM, "hello")}},
 	}
@@ -541,10 +541,10 @@ func TestRenderKeepsPannedVisibleNodeConnectedToOffscreenEndpoint(t *testing.T) 
 func TestRenderClipsPartiallyVisibleNodes(t *testing.T) {
 	m := Model{Nodes: []Node{{ID: "partial", Type: NodeSwitch, X: 50, Y: 5, Label: "partial", State: "bridge"}}}
 	out := RenderString(m, ViewState{Focus: FocusGraph}, 56, 20, false)
-	if !strings.Contains(out, "[SW]") || !strings.Contains(out, "bridg") {
+	if !strings.Contains(out, "[SW]") || !strings.Contains(out, "Mode:") {
 		t.Fatalf("render did not clip partially visible node:\n%s", out)
 	}
-	if strings.Contains(out, "partial") || strings.Contains(out, "bridge ") {
+	if strings.Contains(out, "partial") || strings.Contains(out, "Bridge ") {
 		t.Fatalf("render did not cut node at viewport edge:\n%s", out)
 	}
 }
@@ -613,18 +613,32 @@ func TestRenderSwitchUplinkSubmenuShowsUplinks(t *testing.T) {
 		Selected:         3,
 		Focus:            FocusGraph,
 		ContextMenu:      true,
+		ContextGroup:     "config-menu",
+		ContextInSubmenu: true,
+	}, 100, 30, false)
+	if strings.Contains(out, " uplink=") || strings.Contains(out, " external=") {
+		t.Fatalf("render showed single uplink field in switch configuration:\n%s", out)
+	}
+
+	out = RenderString(MockModel(), ViewState{
+		Selected:         3,
+		Focus:            FocusGraph,
+		ContextMenu:      true,
 		ContextSelected:  1,
 		ContextGroup:     "uplink-menu",
 		ContextInSubmenu: true,
 	}, 100, 30, false)
 	for _, want := range []string{
 		" Attach Uplink",
-		" uplink0",
+		" wlp0s20f3",
 		" X ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing switch uplink submenu item %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, " uplink0") {
+		t.Fatalf("render showed uplink id instead of name:\n%s", out)
 	}
 	if strings.Contains(out, " hostnet") {
 		t.Fatalf("render showed unrelated uplink in switch submenu:\n%s", out)
@@ -702,6 +716,116 @@ func TestRenderInspectorSeparatesNodeTypeAndName(t *testing.T) {
 	}
 	if !strings.Contains(ansiOut, nodeLabelStyle(NodeContainer)+"Kali") {
 		t.Fatalf("ANSI render missing separate container label style:\n%q", ansiOut)
+	}
+}
+
+func TestSwitchInspectorOmitsUplinkConfigurationDetails(t *testing.T) {
+	lines := inspectorLines(Node{
+		Type:    NodeSwitch,
+		Details: []string{"mode=bridge", "uplink=uplink1", "external=uplink2", "nic0 → vm1"},
+	})
+	out := strings.Join(lines, "\n")
+	if !strings.Contains(out, "mode") || !strings.Contains(out, "Bridge") {
+		t.Fatalf("switch inspector missing mode:\n%s", out)
+	}
+	if strings.Contains(out, "uplink") || strings.Contains(out, "external") {
+		t.Fatalf("switch inspector showed uplink configuration details:\n%s", out)
+	}
+}
+
+func TestRenderUplinkUsesMagentaAccent(t *testing.T) {
+	m := Model{
+		ID: "demo",
+		Nodes: []Node{{
+			ID:    "uplink1",
+			Type:  NodeExternal,
+			Badge: "UP",
+			Label: "wg0",
+			State: "link",
+			X:     4,
+			Y:     3,
+		}},
+	}
+
+	ansiOut := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 80, 20, true)
+	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiBold+"[UP]") {
+		t.Fatalf("ANSI render missing magenta uplink badge:\n%q", ansiOut)
+	}
+	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiBold+"● link") {
+		t.Fatalf("ANSI render missing magenta legacy uplink state:\n%q", ansiOut)
+	}
+}
+
+func TestRenderSwitchUsesYellowModeAccent(t *testing.T) {
+	m := Model{
+		ID: "demo",
+		Nodes: []Node{{
+			ID:      "sw1",
+			Type:    NodeSwitch,
+			Badge:   "SW",
+			Label:   "sw1",
+			State:   "bridge",
+			X:       4,
+			Y:       3,
+			Details: []string{"uplink=uplink6"},
+		}},
+	}
+
+	ansiOut := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 80, 20, true)
+	if !strings.Contains(ansiOut, ansiYellow+ansiBold+"[SW]") {
+		t.Fatalf("ANSI render missing yellow switch badge:\n%q", ansiOut)
+	}
+	if !strings.Contains(ansiOut, ansiYellow+ansiDim+"Mode: ") {
+		t.Fatalf("ANSI render missing dim switch mode label:\n%q", ansiOut)
+	}
+	if !strings.Contains(ansiOut, ansiYellow+ansiBold+"Bridge") {
+		t.Fatalf("ANSI render missing yellow switch mode:\n%q", ansiOut)
+	}
+	if strings.Contains(ansiOut, "Mode: Bridge uplink6") {
+		t.Fatalf("ANSI render should not include switch uplink in card status:\n%q", ansiOut)
+	}
+}
+
+func TestRenderUplinkShowsModeAndInterfaceLines(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{
+		ID:            "demo",
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Name: "Internet", Interface: "wlp0s20f3", Mode: lab.ExternalModeNAT}},
+	})
+
+	out := RenderString(m, ViewState{Focus: FocusGraph}, 80, 20, false)
+	if !strings.Contains(out, "Mode:  NAT") {
+		t.Fatalf("render missing uplink mode line:\n%s", out)
+	}
+	if !strings.Contains(out, "Iface: wlp0s20f3") {
+		t.Fatalf("render missing uplink interface line:\n%s", out)
+	}
+	if strings.Contains(out, "nat wlp0s20f3") {
+		t.Fatalf("render kept compressed uplink summary:\n%s", out)
+	}
+	ansiOut := RenderString(m, ViewState{Focus: FocusGraph}, 80, 20, true)
+	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiDim+"Mode:  ") {
+		t.Fatalf("ANSI render missing dim uplink mode label:\n%q", ansiOut)
+	}
+	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiBold+"NAT") {
+		t.Fatalf("ANSI render missing accented uplink mode value:\n%q", ansiOut)
+	}
+}
+
+func TestOnlyUplinkNodesUseTallCards(t *testing.T) {
+	m := Model{Nodes: []Node{
+		{ID: "vm1", Type: NodeVM, X: 2, Y: 2},
+		{ID: "uplink1", Type: NodeExternal, X: 20, Y: 2},
+	}}
+
+	rects := layoutNodeRects(m, rect{X: 0, Y: 0, W: 80, H: 20})
+	if got := rects[NodeKey(NodeVM, "vm1")].H; got != nodeHeight {
+		t.Fatalf("vm card height = %d, want %d", got, nodeHeight)
+	}
+	if got := rects[NodeKey(NodeExternal, "uplink1")].H; got != uplinkNodeHeight {
+		t.Fatalf("uplink card height = %d, want %d", got, uplinkNodeHeight)
+	}
+	if got := rects[NodeKey(NodeExternal, "uplink1")].W; got != uplinkNodeWidth {
+		t.Fatalf("uplink card width = %d, want %d", got, uplinkNodeWidth)
 	}
 }
 
@@ -1413,12 +1537,57 @@ func TestRenderExternalModeChoiceMenu(t *testing.T) {
 		ContextSelectGroup:    "mode-menu",
 		ContextSelectSelected: 0,
 	}, 100, 30, false)
-	if !strings.Contains(out, "Mode        nat") {
+	if !strings.Contains(out, "Mode        NAT") {
 		t.Fatalf("render missing config mode row:\n%s", out)
 	}
-	for _, want := range []string{"nat", "direct", "macnat"} {
+	for _, want := range []string{"NAT", "Direct", "MACNAT"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing mode choice %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderSwitchModeChoiceMenu(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	})
+	node := m.Nodes[0]
+	out := RenderString(m, ViewState{
+		Focus:                 FocusGraph,
+		Selected:              0,
+		ContextMenu:           true,
+		ContextGroup:          "config-menu",
+		ContextInSubmenu:      true,
+		ContextSubSelected:    switchModeFieldIndex(node),
+		ContextSelectGroup:    "mode-menu",
+		ContextSelectSelected: 0,
+	}, 100, 30, false)
+	if !strings.Contains(out, "Mode        Bridge") {
+		t.Fatalf("render missing switch config mode row:\n%s", out)
+	}
+	for _, want := range []string{"Bridge", "NAT", "MACNAT"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing switch mode choice %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderVMCardShowsFullStatusWithoutResourceSummary(t *testing.T) {
+	m := Model{ID: "demo", Nodes: []Node{
+		{ID: "vm1", Type: NodeVM, Badge: "VM", Label: "vm1", State: "running", X: 4, Y: 3, Details: []string{"cpu=2", "mem=2048M"}},
+		{ID: "vm2", Type: NodeVM, Badge: "VM", Label: "vm2", State: "missing", X: 4, Y: 11, Details: []string{"cpu=2", "mem=2048M"}},
+	}}
+
+	out := RenderString(m, ViewState{Focus: FocusGraph}, 80, 24, false)
+	for _, want := range []string{"● running", "! missing"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing full VM status %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"2c", "2G"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("render leaked VM resource summary %q:\n%s", unwanted, out)
 		}
 	}
 }
@@ -1450,7 +1619,7 @@ func TestModelFromLabOmitsEmptyDiskDetail(t *testing.T) {
 	}
 }
 
-func TestModelFromLabShowsStartingForDesiredRunningContainer(t *testing.T) {
+func TestModelFromLabShowsMissingForDesiredRunningContainer(t *testing.T) {
 	m := ModelFromLab(&lab.Lab{
 		ID:         "demo",
 		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
@@ -1459,7 +1628,27 @@ func TestModelFromLabShowsStartingForDesiredRunningContainer(t *testing.T) {
 	if !ok {
 		t.Fatal("container node not found")
 	}
-	if node.State != "starting" {
-		t.Fatalf("container state = %q, want starting", node.State)
+	if node.State != "missing" {
+		t.Fatalf("container state = %q, want missing", node.State)
+	}
+}
+
+func TestDisplayWorkloadStateShowsDesiredTransitions(t *testing.T) {
+	tests := []struct {
+		name    string
+		desired string
+		actual  string
+		want    string
+	}{
+		{name: "running missing remains missing", desired: lab.DesiredStateRunning, actual: "missing", want: "missing"},
+		{name: "start defined", desired: lab.DesiredStateRunning, actual: "defined", want: "starting"},
+		{name: "stop running", desired: lab.DesiredStateStopped, actual: "running", want: "stopping"},
+		{name: "stop starting", desired: lab.DesiredStateStopped, actual: "starting", want: "stopping"},
+		{name: "stopped remains stopped", desired: lab.DesiredStateStopped, actual: "shutoff", want: "shutoff"},
+	}
+	for _, tt := range tests {
+		if got := displayWorkloadState(tt.desired, tt.actual); got != tt.want {
+			t.Fatalf("%s: displayWorkloadState(%q, %q) = %q, want %q", tt.name, tt.desired, tt.actual, got, tt.want)
+		}
 	}
 }

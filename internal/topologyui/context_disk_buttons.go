@@ -9,8 +9,8 @@ func (a *App) handleContextInlineActionEnter(node Node, subItems []string, selec
 		}
 	}
 	if a.State.ContextDeleteUplink {
-		if isSwitchUplinkMenuDetail(subItems[selected]) {
-			a.switchDisconnectExternal(node.ID)
+		if externalID, deleteOK := switchUplinkMenuExternalID(subItems[selected]); deleteOK {
+			a.switchDisconnectExternal(node.ID, externalID)
 			a.State.closeContextMenu()
 			return true
 		}

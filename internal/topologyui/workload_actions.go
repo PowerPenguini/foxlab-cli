@@ -1,6 +1,8 @@
 package topologyui
 
 import (
+	"strings"
+
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/workload"
 )
@@ -31,7 +33,27 @@ func (a *App) setWorkloadDesiredState(typ, id, state string) {
 	default:
 		a.State.Message = "desired state is available for vm and container nodes"
 	}
+	message := a.State.Message
 	a.syncFromService()
+	if strings.HasPrefix(message, "desired ") {
+		a.setPendingWorkloadStart(typ, id, state)
+		a.ensureAppliedAfterDesiredState(message)
+	}
+}
+
+func (a *App) setPendingWorkloadStart(typ, id, state string) {
+	key := NodeKey(typ, id)
+	if state != lab.DesiredStateRunning {
+		delete(a.PendingStarts, key)
+		if len(a.PendingStarts) == 0 {
+			a.PendingStarts = nil
+		}
+		return
+	}
+	if a.PendingStarts == nil {
+		a.PendingStarts = map[string]bool{}
+	}
+	a.PendingStarts[key] = true
 }
 
 func workloadRef(typ, id string) workload.Ref {

@@ -48,7 +48,7 @@ func (b *Bridge) macNATSessions(ctx context.Context, l *lab.Lab) ([]macnat.Sessi
 		})
 	}
 	for _, sw := range l.Switches {
-		link, ok := findExternalLink(l, sw.ExternalLink)
+		link, ok := findExternalLink(l, firstSwitchExternalLink(sw))
 		if !ok {
 			continue
 		}
@@ -77,8 +77,16 @@ func switchUsesMacNAT(l *lab.Lab, sw lab.Switch) bool {
 	if sw.Mode == "macnat-bridge" {
 		return true
 	}
-	link, ok := findExternalLink(l, sw.ExternalLink)
+	link, ok := findExternalLink(l, firstSwitchExternalLink(sw))
 	return ok && link.Mode == lab.ExternalModeMacNAT
+}
+
+func firstSwitchExternalLink(sw lab.Switch) string {
+	ids := lab.SwitchExternalLinks(sw)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 func directExternalMACs(l *lab.Lab, externalID string) []string {

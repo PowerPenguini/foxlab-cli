@@ -13,9 +13,9 @@ func helpLines(topic string) []string {
 		}
 	case "add":
 		return []string{
-			"add: open the global add menu, then click VM, container, switch, disk, or external",
+			"add: open the global add menu, then click VM, container, switch, disk, or uplink",
 			"defaults: new nodes get generated ids and can be edited from Configuration",
-			"node add: click add actions from a switch/external to preconnect where supported",
+			"node add: click add actions from a switch/uplink to preconnect where supported",
 		}
 	case "vm", "vms":
 		return []string{
@@ -40,23 +40,23 @@ func helpLines(topic string) []string {
 	case "link", "links":
 		return []string{
 			"link: use NIC menu on a VM/container and choose a NIC to enter connect mode",
-			"link target: click a switch/external/workload, then choose or create target NIC",
+			"link target: click a switch/uplink/workload, then choose or create target NIC",
 			"link delete: click X on a NIC row",
 		}
 	case "switch", "switches":
 		return []string{
-			"switch: Configuration edits name, mode, and external link",
-			"switch actions: Uplink menu, Add VM, Add Container, Move, and Delete are menu actions",
+			"switch: Configuration edits name and mode",
+			"switch actions: Uplink menu attaches/detaches uplinks; Move and Delete are menu actions",
 		}
-	case "external":
+	case "uplink", "external":
 		return []string{
-			"external: Configuration edits name and interface",
-			"external actions: Connect, Add Switch, Move, and Delete are menu actions",
+			"uplink: Configuration edits name, interface, and mode",
+			"uplink actions: Connect, Add Switch, Move, and Delete are menu actions",
 		}
 	default:
 		return []string{
 			"unknown help topic: " + topic,
-			"topics: add, vm, container, disk, link, switch, external",
+			"topics: add, vm, container, disk, link, switch, uplink",
 		}
 	}
 }

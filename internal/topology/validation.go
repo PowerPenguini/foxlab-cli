@@ -25,22 +25,24 @@ func validExternalMode(mode string) bool {
 	}
 }
 
-func (s *Service) validateSwitchConfig(id, mode, external string) error {
+func (s *Service) validateSwitchConfig(id, mode string, externals []string) error {
 	if !validSwitchMode(mode) {
 		return fmt.Errorf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", id, mode)
 	}
-	if mode == "macnat-bridge" && external == "" {
-		return fmt.Errorf("switch %q macnat-bridge mode requires externalLink", id)
+	if mode == "macnat-bridge" && len(externals) == 0 {
+		return fmt.Errorf("switch %q macnat-bridge mode requires externalLinks", id)
 	}
-	if external != "" && !s.HasLabExternal(external) {
-		return fmt.Errorf("switch %q references missing external link %q", id, external)
+	for _, external := range externals {
+		if external != "" && !s.HasLabExternal(external) {
+			return fmt.Errorf("switch %q references missing uplink %q", id, external)
+		}
 	}
 	return nil
 }
 
 func validateExternalConfig(id, mode string) error {
 	if !validExternalMode(mode) {
-		return fmt.Errorf("external link %q uses unsupported mode %q; supported modes are nat, direct and macnat", id, mode)
+		return fmt.Errorf("uplink %q uses unsupported mode %q; supported modes are nat, direct and macnat", id, mode)
 	}
 	return nil
 }
@@ -53,7 +55,7 @@ func (s *Service) validateVMNetworkRefs(id, switchRef, externalRef string) error
 		return fmt.Errorf("vm %q references missing switch %q", id, switchRef)
 	}
 	if externalRef != "" && !s.HasLabExternal(externalRef) {
-		return fmt.Errorf("vm %q references missing external link %q", id, externalRef)
+		return fmt.Errorf("vm %q references missing uplink %q", id, externalRef)
 	}
 	return nil
 }
@@ -66,7 +68,7 @@ func (s *Service) validateContainerNetworkRefs(id, switchRef, externalRef string
 		return fmt.Errorf("container %q references missing switch %q", id, switchRef)
 	}
 	if externalRef != "" && !s.HasLabExternal(externalRef) {
-		return fmt.Errorf("container %q references missing external link %q", id, externalRef)
+		return fmt.Errorf("container %q references missing uplink %q", id, externalRef)
 	}
 	return nil
 }

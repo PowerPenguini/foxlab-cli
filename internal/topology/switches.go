@@ -7,7 +7,7 @@ func (s *Service) SwitchCreate(id string, args map[string]string) string {
 		return "switch create needs a loaded .lab file"
 	}
 	if id == "" {
-		return "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [external=ID]"
+		return "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [uplink=ID]"
 	}
 	if !lab.ValidID(id) {
 		return "invalid switch id: " + id
@@ -22,8 +22,8 @@ func (s *Service) SwitchCreate(id string, args map[string]string) string {
 		return "unsupported switch create argument: " + invalid[0]
 	}
 	mode := firstNonEmpty(args["mode"], "bridge")
-	external := firstNonEmpty(args["external"], args["externallink"])
-	if err := s.validateSwitchConfig(id, mode, external); err != nil {
+	externals := switchExternalArgs(args)
+	if err := s.validateSwitchConfig(id, mode, externals); err != nil {
 		return "switch create failed: " + err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -31,10 +31,10 @@ func (s *Service) SwitchCreate(id string, args map[string]string) string {
 	}
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.Switches = append(s.Lab.Switches, lab.Switch{
-		ID:           id,
-		Name:         args["name"],
-		Mode:         mode,
-		ExternalLink: external,
+		ID:            id,
+		Name:          args["name"],
+		Mode:          mode,
+		ExternalLinks: externals,
 	})
 	if s.Lab.Layout.Nodes == nil {
 		s.Lab.Layout.Nodes = map[string]lab.Position{}
@@ -61,8 +61,9 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 			return "configured switch:" + id
 		}
 		mode := firstNonEmpty(args["mode"], s.Lab.Switches[i].Mode)
-		external := firstNonEmpty(args["external"], args["externallink"], s.Lab.Switches[i].ExternalLink)
-		if err := s.validateSwitchConfig(id, mode, external); err != nil {
+		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
+		externals = appendSwitchExternalLinks(externals, switchExternalArgs(args)...)
+		if err := s.validateSwitchConfig(id, mode, externals); err != nil {
 			return "switch config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
@@ -78,11 +79,12 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 			}
 			s.Lab.Switches[i].Mode = value
 		}
-		if value := firstNonEmpty(args["external"], args["externallink"]); value != "" {
+		if value := firstNonEmpty(args["uplink"], args["external"], args["externallink"]); value != "" {
 			if err := s.requireSavePath(); err != nil {
 				return "switch config failed: " + err.Error()
 			}
-			s.Lab.Switches[i].ExternalLink = value
+			s.Lab.Switches[i].ExternalLinks = externals
+			s.Lab.Switches[i].ExternalLink = ""
 		}
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "switch config failed: " + err.Error()
@@ -92,7 +94,7 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 	return "switch not found: " + id
 }
 
-func (s *Service) SwitchDisconnectExternal(id string) string {
+func (s *Service) SwitchDisconnectExternal(id string, externalIDs ...string) string {
 	if s.Lab == nil {
 		return "switch set needs a loaded .lab file"
 	}
@@ -100,15 +102,32 @@ func (s *Service) SwitchDisconnectExternal(id string) string {
 		if s.Lab.Switches[i].ID != id {
 			continue
 		}
-		if s.Lab.Switches[i].ExternalLink == "" {
+		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
+		if len(externals) == 0 {
 			return "switch uplink already empty:" + id
+		}
+		removeID := firstNonEmpty(externalIDs...)
+		if removeID != "" && !containsString(externals, removeID) {
+			return "switch uplink not attached:" + id + ":" + removeID
 		}
 		if err := s.requireSavePath(); err != nil {
 			return "switch config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
+		if removeID == "" {
+			externals = nil
+		} else {
+			next := externals[:0]
+			for _, externalID := range externals {
+				if externalID != removeID {
+					next = append(next, externalID)
+				}
+			}
+			externals = next
+		}
+		s.Lab.Switches[i].ExternalLinks = append([]string(nil), externals...)
 		s.Lab.Switches[i].ExternalLink = ""
-		if s.Lab.Switches[i].Mode == "macnat-bridge" {
+		if len(externals) == 0 && s.Lab.Switches[i].Mode == "macnat-bridge" {
 			s.Lab.Switches[i].Mode = "bridge"
 		}
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
@@ -117,6 +136,42 @@ func (s *Service) SwitchDisconnectExternal(id string) string {
 		return "disconnected uplink from switch:" + id
 	}
 	return "switch not found: " + id
+}
+
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func switchExternalArgs(args map[string]string) []string {
+	id := firstNonEmpty(args["uplink"], args["external"], args["externallink"])
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
+func appendSwitchExternalLinks(existing []string, ids ...string) []string {
+	out := append([]string(nil), existing...)
+	seen := map[string]struct{}{}
+	for _, id := range out {
+		seen[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Service) SwitchDelete(id string) string {

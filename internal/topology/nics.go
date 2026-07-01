@@ -207,7 +207,7 @@ func (s *Service) ContainerNICDelete(id, indexValue string) string {
 func (s *Service) resolveVMNICEndpoint(args map[string]string) (string, string, error) {
 	target := firstNonEmpty(args["to"], args["target"])
 	switchRef := args["switch"]
-	externalRef := args["external"]
+	externalRef := firstNonEmpty(args["uplink"], args["external"])
 	if target != "" {
 		if switchRef != "" || externalRef != "" {
 			return "", "", errors.New("vm nic connect accepts to=ID or a compatibility alias, not both")
@@ -228,7 +228,7 @@ func (s *Service) resolveVMNICEndpoint(args map[string]string) (string, string, 
 		return "", "", errors.New("switch not found: " + switchRef)
 	}
 	if externalRef != "" && !s.HasLabExternal(externalRef) {
-		return "", "", errors.New("external not found: " + externalRef)
+		return "", "", errors.New("uplink not found: " + externalRef)
 	}
 	return switchRef, externalRef, nil
 }
@@ -236,7 +236,7 @@ func (s *Service) resolveVMNICEndpoint(args map[string]string) (string, string, 
 func (s *Service) resolveContainerNICEndpoint(args map[string]string) (string, string, error) {
 	target := firstNonEmpty(args["to"], args["target"])
 	switchRef := args["switch"]
-	externalRef := args["external"]
+	externalRef := firstNonEmpty(args["uplink"], args["external"])
 	if target == "" {
 		if (switchRef == "") == (externalRef == "") {
 			return "", "", errors.New("container nic connect needs exactly one endpoint")
@@ -245,7 +245,7 @@ func (s *Service) resolveContainerNICEndpoint(args map[string]string) (string, s
 			return "", "", errors.New("switch not found: " + switchRef)
 		}
 		if externalRef != "" && !s.HasLabExternal(externalRef) {
-			return "", "", errors.New("external not found: " + externalRef)
+			return "", "", errors.New("uplink not found: " + externalRef)
 		}
 		return switchRef, externalRef, nil
 	}

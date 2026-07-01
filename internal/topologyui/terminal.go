@@ -16,6 +16,8 @@ const (
 	ansiInverse        = "\x1b[7m"
 	ansiCyan           = "\x1b[36m"
 	ansiBrightCyan     = "\x1b[96m"
+	ansiMagenta        = "\x1b[35m"
+	ansiBrightMagenta  = "\x1b[95m"
 	ansiBlack          = "\x1b[30m"
 	ansiWhite          = "\x1b[97m"
 	ansiBgCyan         = "\x1b[46m"

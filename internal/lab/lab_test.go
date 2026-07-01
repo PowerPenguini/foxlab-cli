@@ -643,6 +643,32 @@ func TestValidateAcceptsMACNATBridgeSwitch(t *testing.T) {
 	}
 }
 
+func TestNormalizeMigratesSwitchExternalLinkToExternalLinks(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		ExternalLinks: []ExternalLink{
+			{ID: "uplink1", Interface: "eth0"},
+			{ID: "uplink2", Interface: "eth1"},
+		},
+		Switches: []Switch{{
+			ID:            "sw1",
+			Mode:          "bridge",
+			ExternalLink:  " uplink1 ",
+			ExternalLinks: []string{" uplink2 ", "uplink1"},
+		}},
+	}
+	l.Normalize()
+	if l.Switches[0].ExternalLink != "" {
+		t.Fatalf("legacy externalLink kept after normalize: %#v", l.Switches[0])
+	}
+	if got, want := SwitchExternalLinks(l.Switches[0]), []string{"uplink2", "uplink1"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("switch externalLinks = %#v, want %#v", got, want)
+	}
+	if err := l.Validate(); err != nil {
+		t.Fatalf("expected multi-uplink switch config to validate, got %v", err)
+	}
+}
+
 func TestValidateAcceptsSwitchWithoutExternalLink(t *testing.T) {
 	for _, mode := range []string{"bridge", "nat"} {
 		l := &Lab{

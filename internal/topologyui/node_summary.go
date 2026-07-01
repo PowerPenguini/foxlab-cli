@@ -2,7 +2,20 @@ package topologyui
 
 import "strings"
 
+func nodeCardLines(node Node, frame, width int) []string {
+	if node.Type == NodeExternal {
+		return externalNodeCardLines(node, frame, width)
+	}
+	return []string{nodeCardLine(node, frame, width)}
+}
+
 func nodeCardLine(node Node, frame, width int) string {
+	if node.Type == NodeVM {
+		return displayNodeState(node.State, frame)
+	}
+	if node.Type == NodeSwitch {
+		return fit("Mode: "+displayNodeState(node.State, frame), width)
+	}
 	base := displayNodeState(node.State, frame)
 	extra := nodeCardExtra(node)
 	if extra == "" {
@@ -20,27 +33,31 @@ func nodeCardLine(node Node, frame, width int) string {
 	return base
 }
 
+func externalNodeCardLines(node Node, frame, width int) []string {
+	mode := nodeDetailRawValue(node, "mode")
+	if mode == "" {
+		mode = node.State
+	}
+	if mode == "" {
+		mode = "link"
+	}
+	iface := nodeDetailRawValue(node, "interface")
+	lines := []string{"Mode: " + modeDisplayLabel(mode)}
+	if iface != "" && iface != "-" {
+		lines = append(lines, "Iface: "+iface)
+	} else {
+		lines[0] = displayNodeState(mode, frame)
+	}
+	for i := range lines {
+		lines[i] = fit(lines[i], width)
+	}
+	return lines
+}
+
 func nodeCardExtra(node Node) string {
 	switch node.Type {
-	case NodeVM:
-		parts := []string{}
-		if cpu := nodeDetailRawValue(node, "cpu"); cpu != "" {
-			parts = append(parts, cpu+"c")
-		}
-		if mem := nodeDetailRawValue(node, "mem"); mem != "" {
-			parts = append(parts, shortMemory(mem))
-		}
-		return strings.Join(parts, " ")
 	case NodeContainer:
 		return shortImage(nodeDetailRawValue(node, "image"))
-	case NodeSwitch:
-		return nodeDetailRawValue(node, "uplink")
-	case NodeExternal:
-		value := nodeDetailRawValue(node, "interface")
-		if value == node.Label {
-			return ""
-		}
-		return value
 	default:
 		return ""
 	}
@@ -100,6 +117,54 @@ func shortDetailValue(key, value string) string {
 		return shortImage(value)
 	case "mem", "memory":
 		return shortMemory(value)
+	default:
+		if key == "mode" {
+			return modeDisplayLabel(value)
+		}
+		return value
+	}
+}
+
+func modeDisplayLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "bridge":
+		return "Bridge"
+	case "nat":
+		return "NAT"
+	case "macnat", "macnat-bridge":
+		return "MACNAT"
+	case "direct":
+		return "Direct"
+	default:
+		return value
+	}
+}
+
+func modeValueForNode(nodeType, label string) string {
+	value := strings.ToLower(strings.TrimSpace(label))
+	switch nodeType {
+	case NodeSwitch:
+		switch value {
+		case "bridge":
+			return "bridge"
+		case "nat":
+			return "nat"
+		case "macnat", "macnat-bridge":
+			return "macnat-bridge"
+		default:
+			return value
+		}
+	case NodeExternal:
+		switch value {
+		case "nat":
+			return "nat"
+		case "direct":
+			return "direct"
+		case "macnat", "macnat-bridge":
+			return "macnat"
+		default:
+			return value
+		}
 	default:
 		return value
 	}

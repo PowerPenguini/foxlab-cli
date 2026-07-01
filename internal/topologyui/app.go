@@ -41,11 +41,15 @@ type App struct {
 	HistoryIndex          int
 	PendingShell          *shellCommand
 	PendingVNC            *shellCommand
+	PendingStarts         map[string]bool
 	In                    *os.File
 	Out                   *os.File
 	ViewWidth             int
 	ViewHeight            int
 	RouteCacheKey         string
+	RouteCacheStableKey   string
+	RouteCachePanX        int
+	RouteCachePanY        int
 	RouteCacheRoutes      []visibleEdge
 	StatusRefreshInterval time.Duration
 	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
@@ -116,6 +120,9 @@ func (a *App) syncFromService() {
 
 func (a *App) resetRouteCache() {
 	a.RouteCacheKey = ""
+	a.RouteCacheStableKey = ""
+	a.RouteCachePanX = 0
+	a.RouteCachePanY = 0
 	a.RouteCacheRoutes = nil
 }
 
@@ -331,11 +338,16 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 			if update.lab != nil && update.lab != a.Lab {
 				continue
 			}
+			if update.applyStatusReceived {
+				a.updateApplyLabState(update.applyStatus)
+				changed = true
+			}
 			if update.states != nil {
 				a.WorkloadStates = cloneRuntimeStateMap(update.states)
 				if a.Service != nil {
 					a.Service.States = a.WorkloadStates
 				}
+				a.clearPendingStartsFromStates(a.WorkloadStates, update.message != "")
 				a.applyWorkloadStates()
 				changed = true
 			}
@@ -351,10 +363,6 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 				a.State.Message = ""
 				changed = true
 			}
-			if update.applyStatusReceived {
-				a.updateApplyLabState(update.applyStatus)
-				changed = true
-			}
 		default:
 			return changed
 		}
@@ -363,13 +371,22 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 
 func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	key := renderRouteCacheKey(a.Model, width, height, a.State.PanX, a.State.PanY)
+	stableKey := renderRouteCacheStableKey(a.Model, width, height)
 	reuseMovingRoutes := a.State.MoveMode && a.RouteCacheKey != "" && len(a.RouteCacheRoutes) > 0
-	if key != a.RouteCacheKey && !reuseMovingRoutes {
+	reusePanningRoutes := a.mousePanActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
+	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
 		_, routes := planRenderRoutes(a.Model, a.State, width, height)
 		a.RouteCacheKey = key
+		a.RouteCacheStableKey = stableKey
+		a.RouteCachePanX = a.State.PanX
+		a.RouteCachePanY = a.State.PanY
 		a.RouteCacheRoutes = routes
 	}
-	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, a.State, width, height, a.RouteCacheRoutes).String(ansi))
+	routes := a.RouteCacheRoutes
+	if key != a.RouteCacheKey && reusePanningRoutes {
+		routes = translateVisibleEdges(routes, a.State.PanX-a.RouteCachePanX, a.State.PanY-a.RouteCachePanY)
+	}
+	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, a.State, width, height, routes).String(ansi))
 	return err
 }
 
@@ -462,6 +479,36 @@ func (a *App) applyOpenLab() {
 	a.refreshWorkloadStates()
 }
 
+func (a *App) ensureAppliedAfterDesiredState(message string) {
+	current, err := a.currentLabAbsPath()
+	if err != nil {
+		a.State.Message = message + "; apply lab failed: no open lab file"
+		a.State.ApplyLabDisabled = true
+		return
+	}
+	a.ensureDaemonController()
+	ctx, cancel := context.WithTimeout(context.Background(), daemonApplyTimeout)
+	defer cancel()
+	if status, err := a.daemonStatus(ctx); err == nil && status.Active && sameLabPath(status.LabPath, current) {
+		a.State.Message = message
+		a.State.ApplyLabDisabled = true
+		a.refreshWorkloadStates()
+		return
+	}
+	if err := a.DaemonController.Apply(ctx, DaemonApplyRequest{
+		LabPath:           current,
+		LibvirtURI:        a.LibvirtURI,
+		ContainerdAddress: a.ContainerdAddress,
+	}); err != nil {
+		a.State.Message = message + "; apply lab failed: " + err.Error()
+		a.refreshApplyLabState()
+		return
+	}
+	a.State.Message = message + "; applied lab " + filepath.Base(current)
+	a.State.ApplyLabDisabled = true
+	a.refreshWorkloadStates()
+}
+
 func (a *App) refreshWorkloadStates() bool {
 	a.ensureService()
 	if a.Lab == nil {
@@ -507,7 +554,7 @@ func (a *App) queryDaemonSnapshot(ctx context.Context) (daemonstatus.Snapshot, b
 	if a.StatusQuery != nil {
 		query = a.StatusQuery
 	}
-	snapshot, err := query(ctx, a.StatusSocket)
+	snapshot, err := query(ctx, a.statusSocketPath())
 	if err != nil {
 		return daemonstatus.Snapshot{}, false
 	}
@@ -515,6 +562,17 @@ func (a *App) queryDaemonSnapshot(ctx context.Context) (daemonstatus.Snapshot, b
 		return daemonstatus.Snapshot{}, false
 	}
 	return snapshot, true
+}
+
+func (a *App) statusSocketPath() string {
+	if strings.TrimSpace(a.StatusSocket) != "" {
+		return a.StatusSocket
+	}
+	path, err := userStatusSocketPath()
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.Snapshot) statusUpdate {
@@ -537,6 +595,7 @@ func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
 	a.WorkloadStates = cloneRuntimeStateMap(snapshot.States)
 	a.Service.States = a.WorkloadStates
 	a.VNCPorts = cloneRuntimePortMap(snapshot.VNCPorts)
+	a.clearPendingStartsFromStates(a.WorkloadStates, len(snapshot.Errors) > 0)
 	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
 	if len(snapshot.Errors) > 0 {
 		a.State.Message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
@@ -598,16 +657,39 @@ func cloneRuntimePortMap(in map[string]int) map[string]int {
 }
 
 func (a *App) applyWorkloadStates() {
+	transitions := a.reconcileTransitionsActive()
 	for i := range a.Model.Nodes {
 		node := &a.Model.Nodes[i]
 		key := NodeKey(node.Type, node.ID)
 		if state, ok := a.WorkloadStates[key]; ok {
-			node.State = displayWorkloadState(node.DesiredState, state)
+			pendingStart := a.PendingStarts[key]
+			node.State = displayNodeWorkloadState(node.Type, node.DesiredState, state, transitions, pendingStart)
 		}
 		if node.Type == NodeVM {
 			node.Details = withVNCDetailPort(node.Details, a.VNCPorts[key])
 		}
 	}
+}
+
+func (a *App) clearPendingStartsFromStates(states map[string]string, clearMissing bool) {
+	if len(a.PendingStarts) == 0 {
+		return
+	}
+	for key, state := range states {
+		if clearMissing || normalizeRuntimeState(state) != "missing" {
+			delete(a.PendingStarts, key)
+		}
+	}
+	if len(a.PendingStarts) == 0 {
+		a.PendingStarts = nil
+	}
+}
+
+func (a *App) reconcileTransitionsActive() bool {
+	if _, err := a.currentLabAbsPath(); err != nil {
+		return false
+	}
+	return a.State.ApplyLabDisabled
 }
 
 func runtimeVNCPorts(ctx context.Context, runtime WorkloadRuntime, l *lab.Lab) (map[string]int, error) {
@@ -633,7 +715,7 @@ func (a *App) contextMenuSubmenuItems(node Node, ok bool) []string {
 		return a.State.DiskMenuItems
 	}
 	if a.State.ContextGroup == "uplink-menu" && node.Type == NodeSwitch {
-		return switchUplinkMenuItems(node)
+		return switchUplinkMenuActions(node)
 	}
 	return contextMenuItems(node, a.State.ContextGroup)
 }

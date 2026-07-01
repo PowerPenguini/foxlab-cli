@@ -16,7 +16,7 @@ func (a *App) runGlobalMenuAction(action string) {
 		a.openCreateSwitchCommand(Node{})
 	case "add disk", "create-disk":
 		a.openCreateDiskCommand()
-	case "create external", "create-external":
+	case "add uplink", "create uplink", "create external", "create-external":
 		a.openCreateExternalCommand()
 	case "link", "create-link":
 		a.openCreateLink()
@@ -87,7 +87,7 @@ func (a *App) runMenuAction(node Node, action string) {
 		a.openCreateSwitchCommand(node)
 	case "add disk", "create-disk":
 		a.openCreateDiskCommand()
-	case "create external", "create-external":
+	case "add uplink", "create uplink", "create external", "create-external":
 		a.openCreateExternalCommand()
 	case "link", "create-link":
 		a.openCreateLink()

@@ -11,7 +11,7 @@ func (s *Service) VMCreate(id string, args map[string]string) string {
 		return "vm create needs a loaded .lab file"
 	}
 	if id == "" {
-		return "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|external=ID]"
+		return "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|uplink=ID]"
 	}
 	if !lab.ValidID(id) {
 		return "invalid vm id: " + id
@@ -46,7 +46,7 @@ func (s *Service) VMCreate(id string, args map[string]string) string {
 		memory = value
 	}
 	switchRef := args["switch"]
-	externalRef := args["external"]
+	externalRef := firstNonEmpty(args["uplink"], args["external"])
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
 		switchRef = s.Lab.Switches[0].ID
 	}
@@ -123,7 +123,8 @@ func (s *Service) VMSet(id string, args map[string]string) string {
 			}
 			memory = value
 		}
-		if err := s.validateVMNetworkRefs(id, args["switch"], args["external"]); err != nil {
+		externalRef := firstNonEmpty(args["uplink"], args["external"])
+		if err := s.validateVMNetworkRefs(id, args["switch"], externalRef); err != nil {
 			return "config failed: " + err.Error()
 		}
 		if err := s.requireSavePath(); err != nil {
@@ -152,7 +153,7 @@ func (s *Service) VMSet(id string, args map[string]string) string {
 			s.removeNetworkLinksForNode("vm", id)
 			s.Lab.VMs[i].Networks = []lab.VMNetwork{{Switch: value}}
 		}
-		if value := args["external"]; value != "" {
+		if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
 			s.removeNetworkLinksForNode("vm", id)
 			s.Lab.VMs[i].Networks = []lab.VMNetwork{{ExternalLink: value}}
 		}
@@ -224,7 +225,7 @@ func (s *Service) ContainerCreate(id string, args map[string]string) string {
 		return err.Error()
 	}
 	switchRef := args["switch"]
-	externalRef := args["external"]
+	externalRef := firstNonEmpty(args["uplink"], args["external"])
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
 		switchRef = s.Lab.Switches[0].ID
 	}
@@ -277,7 +278,8 @@ func (s *Service) ContainerSet(id string, args map[string]string) string {
 		if err := validateNICMACArg("container nic", args["mac"]); err != nil {
 			return err.Error()
 		}
-		if err := s.validateContainerNetworkRefs(id, args["switch"], args["external"]); err != nil {
+		externalRef := firstNonEmpty(args["uplink"], args["external"])
+		if err := s.validateContainerNetworkRefs(id, args["switch"], externalRef); err != nil {
 			return "container config failed: " + err.Error()
 		}
 		if err := s.requireSavePath(); err != nil {
@@ -303,7 +305,7 @@ func (s *Service) ContainerSet(id string, args map[string]string) string {
 			s.removeNetworkLinksForNode("container", id)
 			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: value, MAC: args["mac"]}}
 		}
-		if value := args["external"]; value != "" {
+		if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
 			s.removeNetworkLinksForNode("container", id)
 			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: value, MAC: args["mac"]}}
 		} else if value := args["mac"]; value != "" && len(s.Lab.Containers[i].Networks) > 0 {

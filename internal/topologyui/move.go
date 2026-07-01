@@ -53,7 +53,13 @@ func (a *App) moveBounds() (int, int) {
 	if height <= 0 {
 		height = minHeight
 	}
-	return max(0, width-nodeWidth), max(0, height-nodeHeight-1)
+	nodeH := nodeHeight
+	nodeW := nodeWidth
+	if index, ok := a.moveNodeIndex(); ok {
+		nodeW = nodeWidthForNode(a.Model.Nodes[index])
+		nodeH = nodeHeightForNode(a.Model.Nodes[index])
+	}
+	return max(0, width-nodeW), max(0, height-nodeH-1)
 }
 
 func (a *App) saveActiveMove() {

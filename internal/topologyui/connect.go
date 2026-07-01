@@ -3,6 +3,8 @@ package topologyui
 import (
 	"strconv"
 	"strings"
+
+	"foxlab-cli/internal/lab"
 )
 
 func (a *App) startConnectNICIndex(node Node, index string) {
@@ -61,7 +63,7 @@ func (a *App) externalConnected(id string) bool {
 		return externalConnectedInModel(a.Model, id)
 	}
 	for _, sw := range a.Lab.Switches {
-		if sw.ExternalLink == id {
+		if lab.SwitchHasExternalLink(sw, id) {
 			return true
 		}
 	}
@@ -264,9 +266,9 @@ func (a *App) connectEndpointLabel() string {
 	case NodeExternal:
 		return "switch endpoint"
 	case NodeContainer:
-		return "switch, external or workload endpoint"
+		return "switch, uplink or workload endpoint"
 	default:
-		return "switch, external or workload endpoint"
+		return "switch, uplink or workload endpoint"
 	}
 }
 

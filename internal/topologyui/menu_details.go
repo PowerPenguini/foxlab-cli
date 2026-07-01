@@ -12,6 +12,21 @@ func nonNICDetails(details []string) []string {
 	return out
 }
 
+func switchConfigurationDetails(details []string) []string {
+	out := make([]string, 0, len(details))
+	for _, detail := range nonNICDetails(details) {
+		key, _, ok := strings.Cut(strings.TrimSpace(detail), "=")
+		if ok {
+			switch strings.ToLower(key) {
+			case "uplink", "external", "externallink":
+				continue
+			}
+		}
+		out = append(out, detail)
+	}
+	return out
+}
+
 func nicDetails(details []string) []string {
 	out := make([]string, 0, len(details))
 	for _, detail := range details {

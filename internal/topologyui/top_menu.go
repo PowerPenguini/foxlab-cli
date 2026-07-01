@@ -30,8 +30,8 @@ func topMenuLabel(item string) string {
 		return "Add SW"
 	case "add disk":
 		return "Add Disk"
-	case "create external":
-		return "External"
+	case "create external", "add uplink", "create uplink":
+		return "Uplink"
 	case "exit":
 		return "Exit"
 	default:

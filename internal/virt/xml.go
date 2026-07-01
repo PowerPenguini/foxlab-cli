@@ -142,10 +142,10 @@ func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 		data.DHCPStart = start
 		data.DHCPEnd = end
 	}
-	if sw.ExternalLink != "" && !switchUsesMacNAT(l, sw) {
-		link, ok := findExternalLink(l, sw.ExternalLink)
+	if externalID := firstSwitchExternalLink(sw); externalID != "" && !switchUsesMacNAT(l, sw) {
+		link, ok := findExternalLink(l, externalID)
 		if !ok {
-			return "", fmt.Errorf("switch %q references missing external link %q", sw.ID, sw.ExternalLink)
+			return "", fmt.Errorf("switch %q references missing external link %q", sw.ID, externalID)
 		}
 		if sw.Mode == "nat" {
 			data.NATInterface = link.Interface
@@ -212,8 +212,16 @@ func switchUsesMacNAT(l *lab.Lab, sw lab.Switch) bool {
 	if sw.Mode == "macnat-bridge" {
 		return true
 	}
-	link, ok := findExternalLink(l, sw.ExternalLink)
+	link, ok := findExternalLink(l, firstSwitchExternalLink(sw))
 	return ok && link.Mode == lab.ExternalModeMacNAT
+}
+
+func firstSwitchExternalLink(sw lab.Switch) string {
+	ids := lab.SwitchExternalLinks(sw)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 func firstNonEmpty(values ...string) string {

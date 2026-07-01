@@ -48,6 +48,8 @@ func contextFieldItem(key, value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "?" {
 		value = contextEditPlaceholder
+	} else if key == "mode" {
+		value = modeDisplayLabel(value)
 	}
 	return contextFieldLabel(key) + strings.Repeat(" ", max(1, 12-runeLen(contextFieldLabel(key)))) + value
 }
@@ -84,7 +86,7 @@ func contextDisplayKey(item string) (string, bool) {
 		{"Command", "command"},
 		{"Switch", "switch"},
 		{"Mode", "mode"},
-		{"External", "external"},
+		{"Uplink", "uplink"},
 		{"Interface", "interface"},
 	} {
 		if item == field.label || strings.HasPrefix(item, field.label+" ") {

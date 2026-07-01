@@ -132,3 +132,31 @@ func TestStartReplacesStaleSocketAndRemovesSocketOnStop(t *testing.T) {
 		t.Fatalf("socket path after stop = %v, want removed", err)
 	}
 }
+
+func TestStartPreparesSocketDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	path := filepath.Join(dir, "foxlabd.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, errs, err := Start(ctx, path, NewStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cancel()
+		select {
+		case <-errs:
+		case <-time.After(time.Second):
+			t.Fatal("listener did not stop")
+		}
+	}()
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("socket dir mode = %o, want 755", got)
+	}
+}

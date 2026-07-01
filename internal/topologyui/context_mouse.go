@@ -20,6 +20,9 @@ func (a *App) handleContextMenuMouse(event mouseEvent) bool {
 		if !rowOK {
 			return false
 		}
+		if a.State.ContextEdit && row != a.State.ContextSubSelected {
+			a.State.clearContextEditState()
+		}
 		a.State.ContextInSubmenu = true
 		a.State.ContextSubSelected = row
 		a.State.closeContextSelectMenu()

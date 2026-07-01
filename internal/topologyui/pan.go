@@ -24,12 +24,12 @@ func panBoundsForModel(m Model, bounds rect) (int, int, int, int) {
 		return 0, 0, 0, 0
 	}
 	minNodeX, minNodeY := m.Nodes[0].X, m.Nodes[0].Y
-	maxNodeX, maxNodeY := m.Nodes[0].X+nodeWidth, m.Nodes[0].Y+nodeHeight
+	maxNodeX, maxNodeY := m.Nodes[0].X+nodeWidthForNode(m.Nodes[0]), m.Nodes[0].Y+nodeHeightForNode(m.Nodes[0])
 	for _, node := range m.Nodes[1:] {
 		minNodeX = min(minNodeX, node.X)
 		minNodeY = min(minNodeY, node.Y)
-		maxNodeX = max(maxNodeX, node.X+nodeWidth)
-		maxNodeY = max(maxNodeY, node.Y+nodeHeight)
+		maxNodeX = max(maxNodeX, node.X+nodeWidthForNode(node))
+		maxNodeY = max(maxNodeY, node.Y+nodeHeightForNode(node))
 	}
 	minPanX := min(0, -maxNodeX)
 	maxPanX := max(0, bounds.W-minNodeX)

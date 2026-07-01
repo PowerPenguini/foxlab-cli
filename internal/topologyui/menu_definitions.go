@@ -10,7 +10,7 @@ func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
 	switch group {
 	case "create-menu":
-		return []string{"add vm", "add cont", "add sw", "add disk", "create external"}
+		return []string{"add vm", "add cont", "add sw", "add disk", "add uplink"}
 	default:
 		return nil
 	}
@@ -92,10 +92,11 @@ func switchContextMenuItems(node Node, group string) []string {
 		return configMenuItems([]string{
 			contextFieldItem("name", node.ID),
 			contextFieldItem("mode", nodeDetailValue(node, "mode", "mode=bridge")),
-			contextFieldItem("external", nodeDetailValue(node, "external", "external=?")),
-		}, node.Details)
+		}, switchConfigurationDetails(node.Details))
 	case "uplink-menu":
 		return []string{"Attach Uplink"}
+	case "mode-menu":
+		return []string{"Bridge", "NAT", "MACNAT"}
 	case "":
 		return []string{"Configuration >", "Uplink >", "Move", "Delete"}
 	default:
@@ -114,9 +115,9 @@ func externalContextMenuItems(node Node, group string) []string {
 	case "interface-menu":
 		return hostInterfaceMenuItems()
 	case "mode-menu":
-		return []string{lab.ExternalModeNAT, lab.ExternalModeDirect, lab.ExternalModeMacNAT}
+		return []string{"NAT", "Direct", "MACNAT"}
 	case "":
-		return []string{"Configuration >", "Connect", "Add SW", "Move", "Delete"}
+		return []string{"Configuration >", "Connect", "Move", "Delete"}
 	default:
 		return nil
 	}

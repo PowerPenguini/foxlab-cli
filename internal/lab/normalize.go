@@ -50,7 +50,9 @@ func (l *Lab) Normalize() {
 		l.Switches[i].Name = strings.TrimSpace(l.Switches[i].Name)
 		l.Switches[i].Mode = strings.TrimSpace(l.Switches[i].Mode)
 		l.Switches[i].ExternalLink = strings.TrimSpace(l.Switches[i].ExternalLink)
-		if l.Switches[i].ExternalLink != "" && l.Switches[i].Mode == "" {
+		l.Switches[i].ExternalLinks = normalizeSwitchExternalLinks(l.Switches[i])
+		l.Switches[i].ExternalLink = ""
+		if len(l.Switches[i].ExternalLinks) > 0 && l.Switches[i].Mode == "" {
 			l.Switches[i].Mode = "bridge"
 		}
 		if l.Switches[i].Mode == "" {
@@ -85,6 +87,28 @@ func (l *Lab) Normalize() {
 		l.Disks[i].AttachedTo = strings.TrimSpace(l.Disks[i].AttachedTo)
 		l.Disks[i].MountPath = strings.TrimSpace(l.Disks[i].MountPath)
 	}
+}
+
+func normalizeSwitchExternalLinks(sw Switch) []string {
+	out := make([]string, 0, len(sw.ExternalLinks)+1)
+	seen := map[string]struct{}{}
+	for _, id := range sw.ExternalLinks {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if id := strings.TrimSpace(sw.ExternalLink); id != "" {
+		if _, exists := seen[id]; !exists {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func DesiredState(value string) string {

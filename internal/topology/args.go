@@ -14,6 +14,7 @@ func unexpectedVMCreateArgs(args map[string]string) []string {
 		"disk":     {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 	}
 	var invalid []string
 	for key := range args {
@@ -35,6 +36,7 @@ func unexpectedVMSetArgs(args map[string]string) []string {
 		"mem":      {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 	}
 	var invalid []string
 	for key := range args {
@@ -64,6 +66,7 @@ func unexpectedVMNICConnectArgs(args map[string]string) []string {
 		"target":   {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 		"mac":      {},
 	}
 	var invalid []string
@@ -94,6 +97,7 @@ func unexpectedContainerNICConnectArgs(args map[string]string) []string {
 		"target":   {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 		"mac":      {},
 	}
 	var invalid []string
@@ -111,6 +115,7 @@ func unexpectedSwitchArgs(args map[string]string) []string {
 		"mode":         {},
 		"external":     {},
 		"externallink": {},
+		"uplink":       {},
 	}
 	var invalid []string
 	for key := range args {
@@ -245,6 +250,7 @@ func unexpectedContainerArgs(args map[string]string) []string {
 		"env":      {},
 		"switch":   {},
 		"external": {},
+		"uplink":   {},
 		"mac":      {},
 	}
 	var invalid []string

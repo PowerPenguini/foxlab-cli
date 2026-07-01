@@ -7,7 +7,7 @@ func Clone(l *Lab) *Lab {
 	out := *l
 	out.VMs = cloneVMs(l.VMs)
 	out.Containers = cloneContainers(l.Containers)
-	out.Switches = append([]Switch(nil), l.Switches...)
+	out.Switches = cloneSwitches(l.Switches)
 	out.ExternalLinks = append([]ExternalLink(nil), l.ExternalLinks...)
 	out.NetworkLinks = append([]NetworkLink(nil), l.NetworkLinks...)
 	out.Disks = append([]Disk(nil), l.Disks...)
@@ -15,6 +15,14 @@ func Clone(l *Lab) *Lab {
 	out.Layout.Links = append([]LayoutLink(nil), l.Layout.Links...)
 	out.Meta = cloneStringMap(l.Meta)
 	return &out
+}
+
+func cloneSwitches(in []Switch) []Switch {
+	out := append([]Switch(nil), in...)
+	for i := range out {
+		out[i].ExternalLinks = append([]string(nil), in[i].ExternalLinks...)
+	}
+	return out
 }
 
 func cloneVMs(in []VM) []VM {

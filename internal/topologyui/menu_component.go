@@ -259,20 +259,24 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 	subLabels := contextMenuSubmenuItems(node, hasNode, contextGroup)
 	subActions := []string(nil)
 	subKinds := []string(nil)
+	subItems := []MenuItem(nil)
 	if contextGroup == "disk-menu" {
 		subLabels = state.DiskMenuItems
 		subActions = state.DiskMenuActions
 		subKinds = state.DiskMenuKinds
 	}
 	if contextGroup == "uplink-menu" && node.Type == NodeSwitch {
-		subLabels = switchUplinkMenuItems(node)
-		subKinds = switchUplinkMenuKinds(subLabels)
+		subItems = switchUplinkMenuItemsForModel(m, node)
+		subLabels = menuItemLabels(subItems)
+		subKinds = menuItemKinds(subItems)
 	}
 	editWidth := contextMenuEditWidth(state, contextGroup, subLabels, subKinds)
-	subItems := menuItemsWithMeta(subLabels, subActions, subKinds)
+	if subItems == nil {
+		subItems = menuItemsWithMeta(subLabels, subActions, subKinds)
+	}
 	if contextGroup == "uplink-menu" && node.Type == NodeSwitch {
 		for i := range subItems {
-			subItems[i].Enabled = switchUplinkMenuItemEnabled(m, subItems[i].Label)
+			subItems[i].Enabled = switchUplinkMenuItemEnabled(m, subItems[i].Action)
 		}
 	}
 	sub, ok := layoutSubmenu(bounds, root, subItems, state.ContextSubSelected, editWidth)
@@ -314,7 +318,7 @@ func contextSelectGroupBelongsToSub(node Node, subItems []string, selected int, 
 	case "interface-menu":
 		return isExternalInterfaceField(node, item)
 	case "mode-menu":
-		return isExternalModeField(node, item)
+		return isModeField(node, item)
 	default:
 		return false
 	}

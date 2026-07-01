@@ -30,8 +30,8 @@ func (l *Lab) Validate() error {
 		if sw.Mode != "bridge" && sw.Mode != "nat" && sw.Mode != "macnat-bridge" {
 			problems = append(problems, fmt.Sprintf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", sw.ID, sw.Mode))
 		}
-		if sw.Mode == "macnat-bridge" && sw.ExternalLink == "" {
-			problems = append(problems, fmt.Sprintf("switch %q macnat-bridge mode requires externalLink", sw.ID))
+		if sw.Mode == "macnat-bridge" && len(SwitchExternalLinks(sw)) == 0 {
+			problems = append(problems, fmt.Sprintf("switch %q macnat-bridge mode requires externalLinks", sw.ID))
 		}
 	}
 
@@ -53,11 +53,10 @@ func (l *Lab) Validate() error {
 	}
 
 	for _, sw := range l.Switches {
-		if sw.ExternalLink == "" {
-			continue
-		}
-		if _, ok := externalLinkIDs[sw.ExternalLink]; !ok {
-			problems = append(problems, fmt.Sprintf("switch %q references missing external link %q", sw.ID, sw.ExternalLink))
+		for _, externalID := range SwitchExternalLinks(sw) {
+			if _, ok := externalLinkIDs[externalID]; !ok {
+				problems = append(problems, fmt.Sprintf("switch %q references missing external link %q", sw.ID, externalID))
+			}
 		}
 	}
 
