@@ -8,18 +8,18 @@ containerd backends.
 
 ![FoxLab topology TUI showcase](docs/showcase/foxlab-topology.png)
 
-The showcase image is generated from the deterministic mock topology:
+The showcase image is captured from the current default lab:
 
 ```sh
-GOCACHE=/tmp/foxlab-cli-go-build GOPROXY=off go run ./cmd/foxlab --mock --no-raw --width 90 --height 24
+GOCACHE=/tmp/foxlab-cli-go-build GOPROXY=off go run ./cmd/foxlab --no-raw --width 140 --height 36
 ```
 
 ## Usage
 
-Render the built-in mock topology:
+Open the default lab:
 
 ```sh
-foxlab --mock
+foxlab
 ```
 
 Open a lab file:
@@ -31,5 +31,5 @@ foxlab --lab path/to/topology.lab
 Run one non-interactive frame for smoke checks:
 
 ```sh
-foxlab --mock --no-raw --width 90 --height 24
+foxlab --no-raw --width 140 --height 36
 ```

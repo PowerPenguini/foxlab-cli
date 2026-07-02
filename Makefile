@@ -56,4 +56,4 @@ dev:
 	GOCACHE="$(GOCACHE)" GOPROXY="$(GOPROXY)" $(GO) run ./cmd/foxlab $(RUN_ARGS)
 
 smoke:
-	GOCACHE="$(GOCACHE)" GOPROXY="$(GOPROXY)" $(GO) run ./cmd/foxlab --mock --no-raw --width 90 --height 24 $(RUN_ARGS)
+	GOCACHE="$(GOCACHE)" GOPROXY="$(GOPROXY)" $(GO) run ./cmd/foxlab --no-raw --width 90 --height 24 $(RUN_ARGS)

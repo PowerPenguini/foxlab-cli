@@ -80,9 +80,6 @@ func (a *App) Run() error {
 	if a.Out == nil {
 		a.Out = os.Stdout
 	}
-	if len(a.Model.Nodes) == 0 && a.Lab == nil {
-		a.Model = MockModel()
-	}
 	a.resetRouteCache()
 	a.ensureDaemonController()
 	a.ensureService()
