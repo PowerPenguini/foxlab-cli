@@ -2,29 +2,25 @@ package topology
 
 import "foxlab-cli/internal/lab"
 
-func (s *Service) ExternalCreate(id string, args map[string]string) string {
+func (s *Service) ExternalCreate(name string, args map[string]string) string {
 	if s.Lab == nil {
 		return "uplink create needs a loaded .lab file"
 	}
-	if id == "" {
-		return "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]"
+	name = firstNonEmpty(args["name"], name)
+	if name == "" {
+		return "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]"
 	}
-	if !lab.ValidID(id) {
-		return "invalid uplink id: " + id
-	}
-	if s.HasLabExternal(id) {
-		return "uplink already exists: " + id
-	}
-	if kind := s.existingNodeKind(id); kind != "" {
-		return "node id already exists as " + kind + ": " + id
+	if err := s.validateNodeName(name, ""); err != "" {
+		return err
 	}
 	if invalid := unexpectedExternalArgs(args); len(invalid) > 0 {
 		return "unsupported uplink create argument: " + invalid[0]
 	}
 	if firstNonEmpty(args["interface"]) == "" {
-		return "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]"
+		return "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]"
 	}
 	mode := firstNonEmpty(args["mode"], lab.ExternalModeNAT)
+	id := newNodeID()
 	if err := validateExternalConfig(id, mode); err != nil {
 		return "uplink create failed: " + err.Error()
 	}
@@ -34,7 +30,7 @@ func (s *Service) ExternalCreate(id string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.ExternalLinks = append(s.Lab.ExternalLinks, lab.ExternalLink{
 		ID:        id,
-		Name:      args["name"],
+		Name:      name,
 		Interface: args["interface"],
 		Mode:      mode,
 	})
@@ -45,15 +41,19 @@ func (s *Service) ExternalCreate(id string, args map[string]string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "uplink create failed: " + err.Error()
 	}
-	return "created uplink:" + id
+	return "created uplink:" + name
 }
 
-func (s *Service) ExternalSet(id string, args map[string]string) string {
+func (s *Service) ExternalSet(ref string, args map[string]string) string {
 	if s.Lab == nil {
 		return "uplink set needs a loaded .lab file"
 	}
 	if invalid := unexpectedExternalArgs(args); len(invalid) > 0 {
 		return "unsupported uplink set argument: " + invalid[0]
+	}
+	id, ok := s.resolveExternalID(ref)
+	if !ok {
+		return "uplink not found: " + ref
 	}
 	for i := range s.Lab.ExternalLinks {
 		if s.Lab.ExternalLinks[i].ID != id {
@@ -68,6 +68,9 @@ func (s *Service) ExternalSet(id string, args map[string]string) string {
 		}
 		snapshot := lab.Clone(s.Lab)
 		if value := args["name"]; value != "" {
+			if err := s.validateNodeName(value, id); err != "" {
+				return err
+			}
 			if err := s.requireSavePath(); err != nil {
 				return "uplink config failed: " + err.Error()
 			}
@@ -93,21 +96,13 @@ func (s *Service) ExternalSet(id string, args map[string]string) string {
 	return "uplink not found: " + id
 }
 
-func (s *Service) ExternalDelete(id string) string {
+func (s *Service) ExternalDelete(ref string) string {
 	if s.Lab == nil {
 		return "uplink delete needs a loaded .lab file"
 	}
-	if id == "" {
-		return "usage: uplink delete <id>"
-	}
-	found := false
-	for _, link := range s.Lab.ExternalLinks {
-		if link.ID == id {
-			found = true
-		}
-	}
-	if !found {
-		return "uplink not found: " + id
+	id, ok := s.resolveExternalID(ref)
+	if !ok {
+		return "uplink not found: " + ref
 	}
 	if err := s.requireSavePath(); err != nil {
 		return "uplink delete failed: " + err.Error()

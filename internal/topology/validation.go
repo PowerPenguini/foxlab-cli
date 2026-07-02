@@ -40,6 +40,21 @@ func (s *Service) validateSwitchConfig(id, mode string, externals []string) erro
 	return nil
 }
 
+func (s *Service) resolveExternalRefs(refs []string) ([]string, error) {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		id, ok := s.resolveExternalID(ref)
+		if !ok {
+			return nil, fmt.Errorf("uplink not found: %s", ref)
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
 func validateExternalConfig(id, mode string) error {
 	if !validExternalMode(mode) {
 		return fmt.Errorf("uplink %q uses unsupported mode %q; supported modes are nat, direct and macnat", id, mode)

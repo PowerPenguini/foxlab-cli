@@ -33,6 +33,17 @@ func (r *Reconciler) Step(ctx context.Context, l *lab.Lab) ReconcileResult {
 		states = cloneStates(states)
 	}
 	result.States = states
+	if cleaner, ok := r.Runtime.(OrphanCleaner); ok {
+		if err := ctx.Err(); err != nil {
+			result.Errors = append(result.Errors, err)
+			return result
+		}
+		actions, err := cleaner.CleanupOrphans(ctx, l)
+		result.Actions = append(result.Actions, actions...)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("cleanup orphans: %w", err))
+		}
+	}
 	for _, vm := range l.VMs {
 		if err := ctx.Err(); err != nil {
 			result.Errors = append(result.Errors, err)

@@ -11,6 +11,20 @@ func (s *Service) NICConnectDirect(sourceType, sourceID, indexValue, targetType,
 	if s.Lab == nil {
 		return "nic connect needs a loaded .lab file"
 	}
+	if !validDirectEndpointType(sourceType) || !validDirectEndpointType(targetType) {
+		return "direct link target must be vm or container"
+	}
+	sourceRef := sourceID
+	targetRef := targetID
+	var ok bool
+	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
+	if !ok {
+		return sourceType + " not found: " + sourceRef
+	}
+	targetID, ok = s.resolveWorkloadID(targetType, targetRef)
+	if !ok {
+		return targetType + " not found: " + targetRef
+	}
 	sourceIndex, ok := nicIndexArg(indexValue)
 	if !ok {
 		return "usage: nic connect <source> <index> <target>"
@@ -38,6 +52,20 @@ func (s *Service) NICConnectDirect(sourceType, sourceID, indexValue, targetType,
 func (s *Service) NICConnectDirectTo(sourceType, sourceID, sourceIndexValue, targetType, targetID, targetIndexValue string) string {
 	if s.Lab == nil {
 		return "nic connect needs a loaded .lab file"
+	}
+	if !validDirectEndpointType(sourceType) || !validDirectEndpointType(targetType) {
+		return "direct link target must be vm or container"
+	}
+	sourceRef := sourceID
+	targetRef := targetID
+	var ok bool
+	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
+	if !ok {
+		return sourceType + " not found: " + sourceRef
+	}
+	targetID, ok = s.resolveWorkloadID(targetType, targetRef)
+	if !ok {
+		return targetType + " not found: " + targetRef
 	}
 	sourceIndex, ok := nicIndexArg(sourceIndexValue)
 	if !ok {
@@ -79,6 +107,15 @@ func (s *Service) NICDisconnect(sourceType, sourceID, indexValue string) string 
 	if s.Lab == nil {
 		return "nic disconnect needs a loaded .lab file"
 	}
+	if !validDirectEndpointType(sourceType) {
+		return "direct link target must be vm or container"
+	}
+	sourceRef := sourceID
+	var ok bool
+	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
+	if !ok {
+		return sourceType + " not found: " + sourceRef
+	}
 	index, ok := nicIndexArg(indexValue)
 	if !ok {
 		return "usage: nic disconnect <source> <index>"
@@ -98,6 +135,10 @@ func (s *Service) NICDisconnect(sourceType, sourceID, indexValue string) string 
 		return "nic disconnect failed: " + err.Error()
 	}
 	return "disconnected nic from " + sourceType + ":" + sourceID + " nic" + indexValue
+}
+
+func validDirectEndpointType(typ string) bool {
+	return typ == "vm" || typ == "container"
 }
 
 func (s *Service) ensureDirectEndpointAvailable(endpoint lab.NetworkEndpoint) error {

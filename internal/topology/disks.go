@@ -32,7 +32,9 @@ func (s *Service) DiskCreate(id string, args map[string]string) string {
 		return "usage: disk create <id> [size=N] [format=qcow2|raw] [to=vm:<id>|container:<id>]"
 	}
 	if attach {
-		if err := s.ensureDiskTarget(targetType, targetID); err != nil {
+		var err error
+		targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
+		if err != nil {
 			return err.Error()
 		}
 	}
@@ -98,7 +100,9 @@ func (s *Service) DiskAttach(id string, args map[string]string) string {
 	if !ok {
 		return "usage: disk attach <id> to=vm:<id>|container:<id>"
 	}
-	if err := s.ensureDiskTarget(targetType, targetID); err != nil {
+	var err error
+	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
+	if err != nil {
 		return err.Error()
 	}
 	if targetType == "container" {
@@ -137,7 +141,9 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 	if _, exists := s.diskByID(layerID); exists {
 		return "disk already exists: " + layerID
 	}
-	if err := s.ensureDiskTarget(targetType, targetID); err != nil {
+	var err error
+	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
+	if err != nil {
 		return err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -198,6 +204,11 @@ func (s *Service) DiskDetach(target string, args map[string]string) string {
 		if err != nil {
 			return err.Error()
 		}
+	}
+	var err error
+	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
+	if err != nil {
+		return err.Error()
 	}
 	diskIndex := s.attachedDiskIndex(targetType, targetID, args["disk"])
 	if diskIndex < 0 {

@@ -43,7 +43,7 @@ func (a *App) vncCommand(node Node) (shellCommand, error) {
 	}
 	vm, ok := a.labVM(node.ID)
 	if !ok {
-		return shellCommand{}, fmt.Errorf("vm not found: %s", node.ID)
+		return shellCommand{}, fmt.Errorf("vm not found: %s", a.displayNodeName(node.Type, node.ID))
 	}
 	if !vm.VNC {
 		return shellCommand{}, fmt.Errorf("vnc is disabled; enable it in Configuration")

@@ -122,6 +122,32 @@ func TestDesiredContainerDiskMountMatchesOverlayRootShape(t *testing.T) {
 	}
 }
 
+func TestDesiredContainerNamesAndManagedPrefix(t *testing.T) {
+	l := &lab.Lab{
+		ID: "default",
+		Containers: []lab.Container{
+			{ID: "323eeeef-8ab2-59a9-97f1-96cfc3ceda53"},
+			{ID: "other"},
+		},
+	}
+
+	if got, want := managedContainerPrefix(l), "foxlab-default-"; got != want {
+		t.Fatalf("managedContainerPrefix() = %q, want %q", got, want)
+	}
+	names := desiredContainerNames(l)
+	for _, want := range []string{
+		"foxlab-default-323eeeef-8ab2-59a9-97f1-96cfc3ceda53",
+		"foxlab-default-other",
+	} {
+		if !names[want] {
+			t.Fatalf("desired names = %#v, missing %q", names, want)
+		}
+	}
+	if names["foxlab-default-ct2"] {
+		t.Fatalf("desired names = %#v, want old ct2 to be orphan", names)
+	}
+}
+
 func cloneContainerForHashTest(ct lab.Container) lab.Container {
 	ct.Command = append([]string(nil), ct.Command...)
 	ct.Networks = append([]lab.ContainerNetwork(nil), ct.Networks...)

@@ -48,12 +48,13 @@ func ModelFromLab(l *lab.Lab) Model {
 		return MockModel()
 	}
 	m := Model{ID: l.ID}
+	nodeNames := labNodeNames(l)
 	directNICDetails := map[string]string{}
 	for _, link := range l.NetworkLinks {
 		fromKey := networkEndpointKey(link.From)
 		toKey := networkEndpointKey(link.To)
-		directNICDetails[fromKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.From.NIC, link.To.ID, link.To.NIC)
-		directNICDetails[toKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.To.NIC, link.From.ID, link.From.NIC)
+		directNICDetails[fromKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.From.NIC, displayNodeRef(nodeNames, link.To.Type, link.To.ID), link.To.NIC)
+		directNICDetails[toKey] = fmt.Sprintf("nic%d ↔ %s:nic%d", link.To.NIC, displayNodeRef(nodeNames, link.From.Type, link.From.ID), link.From.NIC)
 		m.Edges = append(m.Edges, Edge{From: NodeKey(link.From.Type, link.From.ID), To: NodeKey(link.To.Type, link.To.ID)})
 	}
 	for i, vm := range l.VMs {
@@ -75,9 +76,9 @@ func ModelFromLab(l *lab.Lab) Model {
 			}
 			switch {
 			case nic.Switch != "":
-				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, displayNodeRef(nodeNames, NodeSwitch, nic.Switch)))
 			case nic.ExternalLink != "":
-				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.ExternalLink))
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, displayNodeRef(nodeNames, NodeExternal, nic.ExternalLink)))
 			default:
 				details = append(details, fmt.Sprintf("nic%d", idx))
 			}
@@ -120,10 +121,10 @@ func ModelFromLab(l *lab.Lab) Model {
 			}
 			switch {
 			case nic.Switch != "":
-				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.Switch))
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, displayNodeRef(nodeNames, NodeSwitch, nic.Switch)))
 				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeSwitch, nic.Switch)})
 			case nic.ExternalLink != "":
-				details = append(details, fmt.Sprintf("nic%d → %s", idx, nic.ExternalLink))
+				details = append(details, fmt.Sprintf("nic%d → %s", idx, displayNodeRef(nodeNames, NodeExternal, nic.ExternalLink)))
 				m.Edges = append(m.Edges, Edge{From: NodeKey(NodeContainer, ct.ID), To: NodeKey(NodeExternal, nic.ExternalLink)})
 			default:
 				details = append(details, fmt.Sprintf("nic%d", idx))
@@ -144,7 +145,7 @@ func ModelFromLab(l *lab.Lab) Model {
 	for i, sw := range l.Switches {
 		details := []string{"mode=" + firstNonEmpty(sw.Mode, "bridge")}
 		for _, externalID := range lab.SwitchExternalLinks(sw) {
-			details = append(details, "uplink="+externalID)
+			details = append(details, "uplink="+displayNodeRef(nodeNames, NodeExternal, externalID))
 			m.Edges = append(m.Edges, Edge{From: NodeKey(NodeSwitch, sw.ID), To: NodeKey(NodeExternal, externalID)})
 		}
 		m.Nodes = append(m.Nodes, Node{
@@ -177,6 +178,30 @@ func ModelFromLab(l *lab.Lab) Model {
 		return nodeSort(m.Nodes[i]) < nodeSort(m.Nodes[j])
 	})
 	return m
+}
+
+func labNodeNames(l *lab.Lab) map[string]string {
+	names := map[string]string{}
+	for _, vm := range l.VMs {
+		names[NodeKey(NodeVM, vm.ID)] = firstNonEmpty(vm.Name, vm.ID)
+	}
+	for _, ct := range l.Containers {
+		names[NodeKey(NodeContainer, ct.ID)] = firstNonEmpty(ct.Name, ct.ID)
+	}
+	for _, sw := range l.Switches {
+		names[NodeKey(NodeSwitch, sw.ID)] = firstNonEmpty(sw.Name, sw.ID)
+	}
+	for _, link := range l.ExternalLinks {
+		names[NodeKey(NodeExternal, link.ID)] = firstNonEmpty(link.Name, link.Interface, link.ID)
+	}
+	return names
+}
+
+func displayNodeRef(names map[string]string, typ, id string) string {
+	if name := names[NodeKey(typ, id)]; name != "" {
+		return name
+	}
+	return id
 }
 
 func displayWorkloadState(desired, actual string) string {

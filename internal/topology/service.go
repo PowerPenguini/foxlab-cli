@@ -106,7 +106,7 @@ func (s *Service) LabContainer(id string) (lab.Container, bool) {
 		return lab.Container{}, false
 	}
 	for _, ct := range s.Lab.Containers {
-		if ct.ID == id {
+		if ct.ID == id || ct.Name == id {
 			return ct, true
 		}
 	}
@@ -118,7 +118,7 @@ func (s *Service) LabVM(id string) (lab.VM, bool) {
 		return lab.VM{}, false
 	}
 	for _, vm := range s.Lab.VMs {
-		if vm.ID == id {
+		if vm.ID == id || vm.Name == id {
 			return vm, true
 		}
 	}
@@ -135,7 +135,7 @@ func (s *Service) LabSwitch(id string) (lab.Switch, bool) {
 		return lab.Switch{}, false
 	}
 	for _, sw := range s.Lab.Switches {
-		if sw.ID == id {
+		if sw.ID == id || sw.Name == id {
 			return sw, true
 		}
 	}
@@ -152,7 +152,7 @@ func (s *Service) LabExternal(id string) (lab.ExternalLink, bool) {
 		return lab.ExternalLink{}, false
 	}
 	for _, link := range s.Lab.ExternalLinks {
-		if link.ID == id {
+		if link.ID == id || link.Name == id {
 			return link, true
 		}
 	}
@@ -160,39 +160,19 @@ func (s *Service) LabExternal(id string) (lab.ExternalLink, bool) {
 }
 
 func (s *Service) NextVMID() string {
-	for i := s.nodeCount() + 1; ; i++ {
-		id := fmt.Sprintf("vm%d", i)
-		if s.existingNodeKind(id) == "" {
-			return id
-		}
-	}
+	return s.nextNodeName("vm")
 }
 
 func (s *Service) NextSwitchID() string {
-	for i := s.nodeCount() + 1; ; i++ {
-		id := fmt.Sprintf("sw%d", i)
-		if s.existingNodeKind(id) == "" {
-			return id
-		}
-	}
+	return s.nextNodeName("switch")
 }
 
 func (s *Service) NextExternalID() string {
-	for i := s.nodeCount() + 1; ; i++ {
-		id := fmt.Sprintf("uplink%d", i)
-		if s.existingNodeKind(id) == "" {
-			return id
-		}
-	}
+	return s.nextNodeName("uplink")
 }
 
 func (s *Service) NextContainerID() string {
-	for i := s.nodeCount() + 1; ; i++ {
-		id := fmt.Sprintf("ct%d", i)
-		if s.existingNodeKind(id) == "" {
-			return id
-		}
-	}
+	return s.nextNodeName("container")
 }
 
 func (s *Service) FirstExternalID() string {
@@ -221,9 +201,13 @@ func (s *Service) SwitchForExternal(id string) string {
 	return ""
 }
 
-func (s *Service) VMDesiredState(id, state string) string {
+func (s *Service) VMDesiredState(ref, state string) string {
 	if s.Lab == nil {
 		return "vm state needs a loaded .lab file"
+	}
+	id, ok := s.resolveVMID(ref)
+	if !ok {
+		return "vm not found: " + ref
 	}
 	state = lab.DesiredState(state)
 	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {
@@ -246,9 +230,13 @@ func (s *Service) VMDesiredState(id, state string) string {
 	return "vm not found: " + id
 }
 
-func (s *Service) ContainerDesiredState(id, state string) string {
+func (s *Service) ContainerDesiredState(ref, state string) string {
 	if s.Lab == nil {
 		return "container state needs a loaded .lab file"
+	}
+	id, ok := s.resolveContainerID(ref)
+	if !ok {
+		return "container not found: " + ref
 	}
 	state = lab.DesiredState(state)
 	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {

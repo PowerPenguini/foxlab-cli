@@ -179,7 +179,7 @@ func (a *App) diskMenuEntryKind(node Node, entry diskMenuEntry) string {
 func (a *App) mergeDiskForNode(node Node) {
 	layerID := a.attachedLayerDiskID(node)
 	if layerID == "" {
-		a.State.Message = "attached disk layer not found: " + node.ID
+		a.State.Message = "attached disk layer not found: " + a.displayNodeName(node.Type, node.ID)
 		return
 	}
 	a.diskMerge(layerID)

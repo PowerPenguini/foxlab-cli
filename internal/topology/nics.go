@@ -6,9 +6,13 @@ import (
 	"foxlab-cli/internal/lab"
 )
 
-func (s *Service) VMNICAdd(id string, args map[string]string) string {
+func (s *Service) VMNICAdd(ref string, args map[string]string) string {
 	if s.Lab == nil {
 		return "vm nic add needs a loaded .lab file"
+	}
+	id, ok := s.resolveVMID(ref)
+	if !ok {
+		return "vm not found: " + ref
 	}
 	if invalid := unexpectedVMNICAddArgs(args); len(invalid) > 0 {
 		return "unsupported vm nic add argument: " + invalid[0]
@@ -33,9 +37,13 @@ func (s *Service) VMNICAdd(id string, args map[string]string) string {
 	return "vm not found: " + id
 }
 
-func (s *Service) VMNICConnect(id, indexValue string, args map[string]string) string {
+func (s *Service) VMNICConnect(ref, indexValue string, args map[string]string) string {
 	if s.Lab == nil {
 		return "vm nic connect needs a loaded .lab file"
+	}
+	id, ok := s.resolveVMID(ref)
+	if !ok {
+		return "vm not found: " + ref
 	}
 	if invalid := unexpectedVMNICConnectArgs(args); len(invalid) > 0 {
 		return "unsupported vm nic connect argument: " + invalid[0]
@@ -76,9 +84,13 @@ func (s *Service) VMNICConnect(id, indexValue string, args map[string]string) st
 	return "vm not found: " + id
 }
 
-func (s *Service) VMNICDelete(id, indexValue string) string {
+func (s *Service) VMNICDelete(ref, indexValue string) string {
 	if s.Lab == nil {
 		return "vm nic delete needs a loaded .lab file"
+	}
+	id, ok := s.resolveVMID(ref)
+	if !ok {
+		return "vm not found: " + ref
 	}
 	index, ok := nicIndexArg(indexValue)
 	if !ok {
@@ -105,9 +117,13 @@ func (s *Service) VMNICDelete(id, indexValue string) string {
 	return "vm not found: " + id
 }
 
-func (s *Service) ContainerNICAdd(id string, args map[string]string) string {
+func (s *Service) ContainerNICAdd(ref string, args map[string]string) string {
 	if s.Lab == nil {
 		return "container nic add needs a loaded .lab file"
+	}
+	id, ok := s.resolveContainerID(ref)
+	if !ok {
+		return "container not found: " + ref
 	}
 	if invalid := unexpectedContainerNICAddArgs(args); len(invalid) > 0 {
 		return "unsupported container nic add argument: " + invalid[0]
@@ -132,9 +148,13 @@ func (s *Service) ContainerNICAdd(id string, args map[string]string) string {
 	return "container not found: " + id
 }
 
-func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]string) string {
+func (s *Service) ContainerNICConnect(ref, indexValue string, args map[string]string) string {
 	if s.Lab == nil {
 		return "container nic connect needs a loaded .lab file"
+	}
+	id, ok := s.resolveContainerID(ref)
+	if !ok {
+		return "container not found: " + ref
 	}
 	if invalid := unexpectedContainerNICConnectArgs(args); len(invalid) > 0 {
 		return "unsupported container nic connect argument: " + invalid[0]
@@ -175,9 +195,13 @@ func (s *Service) ContainerNICConnect(id, indexValue string, args map[string]str
 	return "container not found: " + id
 }
 
-func (s *Service) ContainerNICDelete(id, indexValue string) string {
+func (s *Service) ContainerNICDelete(ref, indexValue string) string {
 	if s.Lab == nil {
 		return "container nic delete needs a loaded .lab file"
+	}
+	id, ok := s.resolveContainerID(ref)
+	if !ok {
+		return "container not found: " + ref
 	}
 	index, ok := nicIndexArg(indexValue)
 	if !ok {
@@ -212,23 +236,32 @@ func (s *Service) resolveVMNICEndpoint(args map[string]string) (string, string, 
 		if switchRef != "" || externalRef != "" {
 			return "", "", errors.New("vm nic connect accepts to=ID or a compatibility alias, not both")
 		}
-		switch {
-		case s.HasLabSwitch(target):
-			return target, "", nil
-		case s.HasLabExternal(target):
-			return "", target, nil
-		default:
+		if id, ok := s.resolveSwitchID(target); ok {
+			return id, "", nil
+		}
+		if id, ok := s.resolveExternalID(target); ok {
+			return "", id, nil
+		}
+		{
 			return "", "", errors.New("endpoint not found: " + target)
 		}
 	}
 	if (switchRef == "") == (externalRef == "") {
 		return "", "", errors.New("vm nic connect needs exactly one endpoint")
 	}
-	if switchRef != "" && !s.HasLabSwitch(switchRef) {
-		return "", "", errors.New("switch not found: " + switchRef)
+	if switchRef != "" {
+		resolved, ok := s.resolveSwitchID(switchRef)
+		if !ok {
+			return "", "", errors.New("switch not found: " + switchRef)
+		}
+		switchRef = resolved
 	}
-	if externalRef != "" && !s.HasLabExternal(externalRef) {
-		return "", "", errors.New("uplink not found: " + externalRef)
+	if externalRef != "" {
+		resolved, ok := s.resolveExternalID(externalRef)
+		if !ok {
+			return "", "", errors.New("uplink not found: " + externalRef)
+		}
+		externalRef = resolved
 	}
 	return switchRef, externalRef, nil
 }
@@ -241,23 +274,32 @@ func (s *Service) resolveContainerNICEndpoint(args map[string]string) (string, s
 		if (switchRef == "") == (externalRef == "") {
 			return "", "", errors.New("container nic connect needs exactly one endpoint")
 		}
-		if switchRef != "" && !s.HasLabSwitch(switchRef) {
-			return "", "", errors.New("switch not found: " + switchRef)
+		if switchRef != "" {
+			resolved, ok := s.resolveSwitchID(switchRef)
+			if !ok {
+				return "", "", errors.New("switch not found: " + switchRef)
+			}
+			switchRef = resolved
 		}
-		if externalRef != "" && !s.HasLabExternal(externalRef) {
-			return "", "", errors.New("uplink not found: " + externalRef)
+		if externalRef != "" {
+			resolved, ok := s.resolveExternalID(externalRef)
+			if !ok {
+				return "", "", errors.New("uplink not found: " + externalRef)
+			}
+			externalRef = resolved
 		}
 		return switchRef, externalRef, nil
 	}
 	if switchRef != "" || externalRef != "" {
 		return "", "", errors.New("container nic connect accepts to=ID or a compatibility alias, not both")
 	}
-	switch {
-	case s.HasLabSwitch(target):
-		return target, "", nil
-	case s.HasLabExternal(target):
-		return "", target, nil
-	default:
+	if id, ok := s.resolveSwitchID(target); ok {
+		return id, "", nil
+	}
+	if id, ok := s.resolveExternalID(target); ok {
+		return "", id, nil
+	}
+	{
 		return "", "", errors.New("endpoint not found: " + target)
 	}
 }

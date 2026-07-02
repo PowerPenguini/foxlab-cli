@@ -84,6 +84,23 @@ func (c *Composite) Destroy(ctx context.Context, l *lab.Lab, ref Ref) error {
 	return runtime.Stop(ctx, l, ref)
 }
 
+func (c *Composite) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, error) {
+	actions := []string{}
+	var errs []error
+	for _, runtime := range []Runtime{c.VM, c.Container} {
+		cleaner, ok := runtime.(OrphanCleaner)
+		if !ok || cleaner == nil {
+			continue
+		}
+		runtimeActions, err := cleaner.CleanupOrphans(ctx, l)
+		actions = append(actions, runtimeActions...)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return actions, errors.Join(errs...)
+}
+
 func (c *Composite) Close() error {
 	var errs []error
 	for _, runtime := range []Runtime{c.VM, c.Container} {

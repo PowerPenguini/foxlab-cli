@@ -44,6 +44,10 @@ func (s *Service) workloadDisk(targetType, targetID string) string {
 }
 
 func (s *Service) ensureDiskTarget(targetType, targetID string) error {
+	resolvedID, ok := s.resolveWorkloadID(targetType, targetID)
+	if ok {
+		targetID = resolvedID
+	}
 	switch targetType {
 	case "vm":
 		if s.HasLabVM(targetID) {
@@ -61,8 +65,8 @@ func (s *Service) ensureDiskTarget(targetType, targetID string) error {
 }
 
 func (s *Service) inferWorkloadType(id string) (string, error) {
-	hasVM := s.HasLabVM(id)
-	hasContainer := s.HasLabContainer(id)
+	_, hasVM := s.resolveVMID(id)
+	_, hasContainer := s.resolveContainerID(id)
 	switch {
 	case hasVM && hasContainer:
 		return "", fmt.Errorf("workload id is ambiguous; pass type=vm or type=container")
@@ -73,6 +77,14 @@ func (s *Service) inferWorkloadType(id string) (string, error) {
 	default:
 		return "", fmt.Errorf("workload not found: %s", id)
 	}
+}
+
+func (s *Service) resolveDiskTarget(targetType, targetID string) (string, string, error) {
+	resolvedID, ok := s.resolveWorkloadID(targetType, targetID)
+	if !ok {
+		return "", "", s.ensureDiskTarget(targetType, targetID)
+	}
+	return targetType, resolvedID, nil
 }
 
 func (s *Service) attachedDiskIndex(targetType, targetID, diskID string) int {

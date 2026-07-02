@@ -62,6 +62,23 @@ func (f *cancelingRuntime) States(context.Context, *lab.Lab) (map[string]string,
 	}, nil
 }
 
+type orphanCleaningRuntime struct {
+	fakeRuntime
+	actions  []string
+	cleanErr error
+	order    []string
+}
+
+func (f *orphanCleaningRuntime) CleanupOrphans(context.Context, *lab.Lab) ([]string, error) {
+	f.order = append(f.order, "cleanup")
+	return append([]string(nil), f.actions...), f.cleanErr
+}
+
+func (f *orphanCleaningRuntime) Start(ctx context.Context, l *lab.Lab, ref Ref) error {
+	f.order = append(f.order, "start "+Key(ref))
+	return f.fakeRuntime.Start(ctx, l, ref)
+}
+
 func TestReconcilerStartsDesiredRunningWorkloads(t *testing.T) {
 	l := &lab.Lab{
 		ID: "demo",
@@ -95,6 +112,43 @@ func TestReconcilerStartsDesiredRunningWorkloads(t *testing.T) {
 		t.Fatalf("stopped = %#v, want none", runtime.stopped)
 	}
 	wantActions := []string{"started vm:vm2", "started container:web"}
+	if len(result.Actions) != len(wantActions) {
+		t.Fatalf("actions = %#v, want %#v", result.Actions, wantActions)
+	}
+	for i, want := range wantActions {
+		if result.Actions[i] != want {
+			t.Fatalf("actions[%d] = %q, want %q", i, result.Actions[i], want)
+		}
+	}
+}
+
+func TestReconcilerCleansOrphansBeforeStartingDesiredWorkloads(t *testing.T) {
+	l := &lab.Lab{
+		ID:         "demo",
+		Containers: []lab.Container{{ID: "new", DesiredState: lab.DesiredStateRunning, Image: "nginx"}},
+	}
+	runtime := &orphanCleaningRuntime{
+		fakeRuntime: fakeRuntime{states: map[string]string{
+			Key(Ref{Type: TypeContainer, ID: "new"}): "missing",
+		}},
+		actions: []string{"deleted orphan container:old"},
+	}
+
+	result := (&Reconciler{Runtime: runtime}).Step(context.Background(), l)
+
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected reconcile errors: %v", result.Errors)
+	}
+	wantOrder := []string{"cleanup", "start container:new"}
+	if len(runtime.order) != len(wantOrder) {
+		t.Fatalf("order = %#v, want %#v", runtime.order, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if runtime.order[i] != want {
+			t.Fatalf("order[%d] = %q, want %q", i, runtime.order[i], want)
+		}
+	}
+	wantActions := []string{"deleted orphan container:old", "started container:new"}
 	if len(result.Actions) != len(wantActions) {
 		t.Fatalf("actions = %#v, want %#v", result.Actions, wantActions)
 	}

@@ -25,6 +25,8 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 	y += 2
 	g.Text(x, y, fit("state  "+displayNodeState(node.State, state.AnimationFrame), w), nodeStateStyle(node.Type, node.State))
 	y++
+	g.Text(x, y, fit("id     "+node.ID, w), themeMuted)
+	y++
 	if node.DesiredState != "" {
 		g.Text(x, y, fit("want   "+node.DesiredState, w), themeMuted)
 		y++

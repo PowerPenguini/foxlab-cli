@@ -581,7 +581,7 @@ func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.S
 		applyStatusReceived: true,
 	}
 	if len(snapshot.Errors) > 0 {
-		update.message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
+		update.message = "foxlabd status: " + strings.Join(displayDaemonMessages(l, snapshot.Errors), "; ")
 	} else {
 		update.clearStatusMessage = true
 	}
@@ -595,7 +595,7 @@ func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
 	a.clearPendingStartsFromStates(a.WorkloadStates, len(snapshot.Errors) > 0)
 	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
 	if len(snapshot.Errors) > 0 {
-		a.State.Message = "foxlabd status: " + strings.Join(snapshot.Errors, "; ")
+		a.State.Message = "foxlabd status: " + strings.Join(displayDaemonMessages(a.Lab, snapshot.Errors), "; ")
 	} else if statusRefreshMessage(a.State.Message) {
 		a.State.Message = ""
 	}

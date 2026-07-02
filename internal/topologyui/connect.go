@@ -13,7 +13,7 @@ func (a *App) startConnectNICIndex(node Node, index string) {
 		return
 	}
 	if !a.hasNICIndex(node, index) {
-		a.State.Message = "nic not found: " + node.ID + ":" + index
+		a.State.Message = "nic not found: " + a.displayNodeName(node.Type, node.ID) + ":" + index
 		return
 	}
 	if !a.nicDisconnect(node.Type, node.ID, index) {
@@ -29,7 +29,7 @@ func (a *App) startConnectNICIndex(node Node, index string) {
 		return
 	}
 	a.State.ConnectMode = true
-	a.State.Message = "connect " + node.Key() + " nic" + a.State.ConnectNICIndex + ": select endpoint"
+	a.State.Message = "connect " + a.displayNodeKey(node.Type, node.ID) + " nic" + a.State.ConnectNICIndex + ": select endpoint"
 	a.State.Selected = endpointIndex
 }
 
@@ -41,7 +41,7 @@ func (a *App) startConnectEndpoint(node Node) {
 		return
 	}
 	if node.Type == NodeExternal && a.externalConnected(node.ID) {
-		a.State.Message = "uplink already connected: " + node.ID
+		a.State.Message = "uplink already connected: " + a.displayNodeName(node.Type, node.ID)
 		return
 	}
 	a.State.ConnectNodeID = node.ID
@@ -54,7 +54,7 @@ func (a *App) startConnectEndpoint(node Node) {
 		return
 	}
 	a.State.ConnectMode = true
-	a.State.Message = "connect " + node.Key() + ": select " + a.connectEndpointLabel()
+	a.State.Message = "connect " + a.displayNodeKey(node.Type, node.ID) + ": select " + a.connectEndpointLabel()
 	a.State.Selected = endpointIndex
 }
 
@@ -195,7 +195,7 @@ func (a *App) openConnectTargetMenu(endpoint Node) {
 	a.State.ConnectTargetID = endpoint.ID
 	a.State.ConnectTargetType = endpoint.Type
 	a.State.ConnectTargetIndex = 0
-	a.State.Message = "connect to " + endpoint.Key() + ": select target nic"
+	a.State.Message = "connect to " + a.displayNodeKey(endpoint.Type, endpoint.ID) + ": select target nic"
 }
 
 func (a *App) connectSelectedTargetNIC(target Node, item string) {
@@ -215,7 +215,7 @@ func (a *App) connectSelectedTargetNIC(target Node, item string) {
 			return
 		}
 		if !a.hasNICIndex(target, targetIndex) {
-			a.State.Message = "target nic create failed: " + target.ID
+			a.State.Message = "target nic create failed: " + a.displayNodeName(target.Type, target.ID)
 			return
 		}
 	} else if index, ok := nicDetailIndex(item); ok {

@@ -38,19 +38,20 @@ func (a *App) runMenuAction(node Node, action string) {
 	case "rename":
 		switch node.Type {
 		case NodeVM:
+			target := a.displayNodeName(node.Type, node.ID)
 			if vm, ok := a.labVM(node.ID); ok {
-				a.openCommand("vm set " + node.ID + " name=" + commandValue(firstNonEmpty(vm.Name, vm.ID)))
+				a.openCommand("vm set " + commandValue(target) + " name=" + commandValue(firstNonEmpty(vm.Name, vm.ID)))
 			} else {
-				a.openCommand("vm set " + node.ID + " name=" + commandValue(node.Label))
+				a.openCommand("vm set " + commandValue(target) + " name=" + commandValue(node.Label))
 			}
 		case NodeContainer:
-			a.openCommand("container set " + node.ID + " name=" + commandValue(node.Label))
+			a.openCommand("container set " + commandValue(a.displayNodeName(node.Type, node.ID)) + " name=" + commandValue(node.Label))
 		case NodeExternal:
 			a.openExternalNameCommand(node.ID)
 		case NodeSwitch:
 			a.openSwitchNameCommand(node.ID)
 		default:
-			a.openCommand("vm set " + node.ID + " name=" + commandValue(node.Label))
+			a.openCommand("vm set " + commandValue(a.displayNodeName(node.Type, node.ID)) + " name=" + commandValue(node.Label))
 		}
 	case "name":
 		switch node.Type {
@@ -64,10 +65,11 @@ func (a *App) runMenuAction(node Node, action string) {
 			a.openExternalInterfaceCommand(node.ID)
 		}
 	case "iso":
+		target := a.displayNodeName(node.Type, node.ID)
 		if vm, ok := a.labVM(node.ID); ok {
-			a.openCommand("vm set " + node.ID + " iso=" + commandValue(vm.ISO))
+			a.openCommand("vm set " + commandValue(target) + " iso=" + commandValue(vm.ISO))
 		} else {
-			a.openCommand("vm set " + node.ID + " iso=")
+			a.openCommand("vm set " + commandValue(target) + " iso=")
 		}
 	case "add-nic":
 		a.openAddNICCommand(node)

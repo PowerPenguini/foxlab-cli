@@ -25,18 +25,22 @@ func (a *App) stopWorkload(typ, id string) {
 
 func (a *App) setWorkloadDesiredState(typ, id, state string) {
 	service := a.ensureService()
+	resolvedID := id
+	if value, ok := service.ResolveWorkloadID(typ, id); ok {
+		resolvedID = value
+	}
 	switch typ {
 	case NodeContainer:
-		a.State.Message = service.ContainerDesiredState(id, state)
+		a.State.Message = service.ContainerDesiredState(resolvedID, state)
 	case NodeVM:
-		a.State.Message = service.VMDesiredState(id, state)
+		a.State.Message = service.VMDesiredState(resolvedID, state)
 	default:
 		a.State.Message = "desired state is available for vm and container nodes"
 	}
 	message := a.State.Message
 	a.syncFromService()
 	if strings.HasPrefix(message, "desired ") {
-		a.setPendingWorkloadStart(typ, id, state)
+		a.setPendingWorkloadStart(typ, resolvedID, state)
 		a.ensureAppliedAfterDesiredState(message)
 	}
 }

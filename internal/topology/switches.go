@@ -2,27 +2,26 @@ package topology
 
 import "foxlab-cli/internal/lab"
 
-func (s *Service) SwitchCreate(id string, args map[string]string) string {
+func (s *Service) SwitchCreate(name string, args map[string]string) string {
 	if s.Lab == nil {
 		return "switch create needs a loaded .lab file"
 	}
-	if id == "" {
-		return "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [uplink=ID]"
+	name = firstNonEmpty(args["name"], name)
+	if name == "" {
+		return "usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]"
 	}
-	if !lab.ValidID(id) {
-		return "invalid switch id: " + id
-	}
-	if s.HasLabSwitch(id) {
-		return "switch already exists: " + id
-	}
-	if kind := s.existingNodeKind(id); kind != "" {
-		return "node id already exists as " + kind + ": " + id
+	if err := s.validateNodeName(name, ""); err != "" {
+		return err
 	}
 	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
 		return "unsupported switch create argument: " + invalid[0]
 	}
 	mode := firstNonEmpty(args["mode"], "bridge")
-	externals := switchExternalArgs(args)
+	externals, err := s.resolveExternalRefs(switchExternalArgs(args))
+	if err != nil {
+		return "switch create failed: " + err.Error()
+	}
+	id := newNodeID()
 	if err := s.validateSwitchConfig(id, mode, externals); err != nil {
 		return "switch create failed: " + err.Error()
 	}
@@ -32,7 +31,7 @@ func (s *Service) SwitchCreate(id string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.Switches = append(s.Lab.Switches, lab.Switch{
 		ID:            id,
-		Name:          args["name"],
+		Name:          name,
 		Mode:          mode,
 		ExternalLinks: externals,
 	})
@@ -43,15 +42,19 @@ func (s *Service) SwitchCreate(id string, args map[string]string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "switch create failed: " + err.Error()
 	}
-	return "created switch:" + id
+	return "created switch:" + name
 }
 
-func (s *Service) SwitchSet(id string, args map[string]string) string {
+func (s *Service) SwitchSet(ref string, args map[string]string) string {
 	if s.Lab == nil {
 		return "switch set needs a loaded .lab file"
 	}
 	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
 		return "unsupported switch set argument: " + invalid[0]
+	}
+	id, ok := s.resolveSwitchID(ref)
+	if !ok {
+		return "switch not found: " + ref
 	}
 	for i := range s.Lab.Switches {
 		if s.Lab.Switches[i].ID != id {
@@ -62,12 +65,19 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 		}
 		mode := firstNonEmpty(args["mode"], s.Lab.Switches[i].Mode)
 		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
-		externals = appendSwitchExternalLinks(externals, switchExternalArgs(args)...)
+		nextExternalRefs, err := s.resolveExternalRefs(switchExternalArgs(args))
+		if err != nil {
+			return "switch config failed: " + err.Error()
+		}
+		externals = appendSwitchExternalLinks(externals, nextExternalRefs...)
 		if err := s.validateSwitchConfig(id, mode, externals); err != nil {
 			return "switch config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
 		if value := args["name"]; value != "" {
+			if err := s.validateNodeName(value, id); err != "" {
+				return err
+			}
 			if err := s.requireSavePath(); err != nil {
 				return "switch config failed: " + err.Error()
 			}
@@ -94,9 +104,13 @@ func (s *Service) SwitchSet(id string, args map[string]string) string {
 	return "switch not found: " + id
 }
 
-func (s *Service) SwitchDisconnectExternal(id string, externalIDs ...string) string {
+func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) string {
 	if s.Lab == nil {
 		return "switch set needs a loaded .lab file"
+	}
+	id, ok := s.resolveSwitchID(ref)
+	if !ok {
+		return "switch not found: " + ref
 	}
 	for i := range s.Lab.Switches {
 		if s.Lab.Switches[i].ID != id {
@@ -107,6 +121,13 @@ func (s *Service) SwitchDisconnectExternal(id string, externalIDs ...string) str
 			return "switch uplink already empty:" + id
 		}
 		removeID := firstNonEmpty(externalIDs...)
+		if removeID != "" {
+			resolved, ok := s.resolveExternalID(removeID)
+			if !ok {
+				return "uplink not found: " + removeID
+			}
+			removeID = resolved
+		}
 		if removeID != "" && !containsString(externals, removeID) {
 			return "switch uplink not attached:" + id + ":" + removeID
 		}
@@ -174,21 +195,13 @@ func appendSwitchExternalLinks(existing []string, ids ...string) []string {
 	return out
 }
 
-func (s *Service) SwitchDelete(id string) string {
+func (s *Service) SwitchDelete(ref string) string {
 	if s.Lab == nil {
 		return "switch delete needs a loaded .lab file"
 	}
-	if id == "" {
-		return "usage: switch delete <id>"
-	}
-	found := false
-	for _, sw := range s.Lab.Switches {
-		if sw.ID == id {
-			found = true
-		}
-	}
-	if !found {
-		return "switch not found: " + id
+	id, ok := s.resolveSwitchID(ref)
+	if !ok {
+		return "switch not found: " + ref
 	}
 	if err := s.requireSavePath(); err != nil {
 		return "switch delete failed: " + err.Error()

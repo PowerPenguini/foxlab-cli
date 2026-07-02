@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -18,11 +20,13 @@ func (l *Lab) Validate() error {
 		problems = append(problems, "lab name must start with a letter/number and contain only letters, numbers, '_' or '-'")
 	}
 
+	nodeNames := map[string]string{}
 	switchIDs := map[string]struct{}{}
 	for _, sw := range l.Switches {
-		if !validID(sw.ID) {
-			problems = append(problems, fmt.Sprintf("switch %q has invalid id", sw.ID))
+		if !validNodeID(sw.ID) {
+			problems = append(problems, fmt.Sprintf("switch %q has non-UUID id", sw.ID))
 		}
+		problems = append(problems, validateNodeName("switch", sw.ID, sw.Name, nodeNames)...)
 		if _, exists := switchIDs[sw.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate switch id %q", sw.ID))
 		}
@@ -37,9 +41,10 @@ func (l *Lab) Validate() error {
 
 	externalLinkIDs := map[string]struct{}{}
 	for _, link := range l.ExternalLinks {
-		if !validID(link.ID) {
-			problems = append(problems, fmt.Sprintf("external link %q has invalid id", link.ID))
+		if !validNodeID(link.ID) {
+			problems = append(problems, fmt.Sprintf("external link %q has non-UUID id", link.ID))
 		}
+		problems = append(problems, validateNodeName("external link", link.ID, link.Name, nodeNames)...)
 		if _, exists := externalLinkIDs[link.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate external link id %q", link.ID))
 		}
@@ -62,9 +67,10 @@ func (l *Lab) Validate() error {
 
 	vmIDs := map[string]struct{}{}
 	for _, vm := range l.VMs {
-		if !validID(vm.ID) {
-			problems = append(problems, fmt.Sprintf("vm %q has invalid id", vm.ID))
+		if !validNodeID(vm.ID) {
+			problems = append(problems, fmt.Sprintf("vm %q has non-UUID id", vm.ID))
 		}
+		problems = append(problems, validateNodeName("vm", vm.ID, vm.Name, nodeNames)...)
 		if _, exists := vmIDs[vm.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate vm id %q", vm.ID))
 		}
@@ -103,9 +109,10 @@ func (l *Lab) Validate() error {
 
 	containerIDs := map[string]struct{}{}
 	for _, ct := range l.Containers {
-		if !validID(ct.ID) {
-			problems = append(problems, fmt.Sprintf("container %q has invalid id", ct.ID))
+		if !validNodeID(ct.ID) {
+			problems = append(problems, fmt.Sprintf("container %q has non-UUID id", ct.ID))
 		}
+		problems = append(problems, validateNodeName("container", ct.ID, ct.Name, nodeNames)...)
 		if _, exists := containerIDs[ct.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate container id %q", ct.ID))
 		}
@@ -340,6 +347,22 @@ func validID(id string) bool {
 	return idPattern.MatchString(id)
 }
 
+func validNodeID(id string) bool {
+	_, err := uuid.Parse(id)
+	return err == nil
+}
+
+func validateNodeName(kind, id, name string, seen map[string]string) []string {
+	if name == "" {
+		return []string{fmt.Sprintf("%s %q name is required", kind, id)}
+	}
+	if existing, exists := seen[name]; exists {
+		return []string{fmt.Sprintf("duplicate node name %q used by %s and %s %q", name, existing, kind, id)}
+	}
+	seen[name] = kind + " " + id
+	return nil
+}
+
 func normalizedDiskKind(disk Disk) string {
 	if disk.Kind == "" {
 		return "base"
@@ -349,6 +372,10 @@ func normalizedDiskKind(disk Disk) string {
 
 func ValidID(id string) bool {
 	return validID(id)
+}
+
+func ValidNodeID(id string) bool {
+	return validNodeID(id)
 }
 
 func ValidMAC(value string) bool {

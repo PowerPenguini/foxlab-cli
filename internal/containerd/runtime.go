@@ -341,6 +341,46 @@ func (r *Runtime) Destroy(ctx context.Context, l *lab.Lab, ref workload.Ref) err
 	return cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 }
 
+func (r *Runtime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, error) {
+	if l == nil {
+		return nil, nil
+	}
+	client, ctx, closeClient, err := r.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeClient()
+	containers, err := client.Containers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	prefix := managedContainerPrefix(l)
+	desired := desiredContainerNames(l)
+	actions := []string{}
+	var errs []error
+	for _, container := range containers {
+		name := container.ID()
+		if !strings.HasPrefix(name, prefix) || desired[name] {
+			continue
+		}
+		id := strings.TrimPrefix(name, prefix)
+		ct := lab.Container{ID: id}
+		if r.Bridge != nil {
+			r.Bridge.DetachContainer(ctx, l, ct)
+		}
+		if err := deleteContainer(ctx, container); err != nil {
+			errs = append(errs, fmt.Errorf("delete orphan container %s: %w", name, err))
+			continue
+		}
+		if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
+			errs = append(errs, fmt.Errorf("cleanup orphan container disk %s: %w", name, err))
+			continue
+		}
+		actions = append(actions, "deleted orphan container:"+id)
+	}
+	return actions, errors.Join(errs...)
+}
+
 func (r *Runtime) client(ctx context.Context) (*containerd.Client, context.Context, func(), error) {
 	address := r.Address
 	if address == "" {
@@ -503,6 +543,24 @@ func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount
 		return containerDiskMount{}, err
 	}
 	return containerDiskMount{Source: filepath.Join(mountPath, "merged"), Destination: "/"}, nil
+}
+
+func desiredContainerNames(l *lab.Lab) map[string]bool {
+	names := map[string]bool{}
+	if l == nil {
+		return names
+	}
+	for _, ct := range l.Containers {
+		names[l.ManagedContainerName(ct)] = true
+	}
+	return names
+}
+
+func managedContainerPrefix(l *lab.Lab) string {
+	if l == nil {
+		return ""
+	}
+	return l.ManagedContainerName(lab.Container{})
 }
 
 func nilInterface(value any) bool {

@@ -1,6 +1,6 @@
 name: topology-tui
 vms:
-    - id: vm2
+    - id: cc1551e0-d3d8-5ba0-8c38-19b4c75d6ebb
       name: vm2
       memoryMB: 2048
       cpus: 1
@@ -8,8 +8,8 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
-        - switch: sw1
-    - id: vm3
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
+    - id: 40f1478c-6694-5d65-bdaf-4b2d495f33f1
       name: vm3
       desiredState: running
       memoryMB: 2048
@@ -18,10 +18,10 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
-        - switch: sw1
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
         - {}
         - {}
-    - id: vm4
+    - id: ddab6df8-8da4-59fe-8fdc-cb724c7cbd2e
       name: vm4
       memoryMB: 4096
       cpus: 2
@@ -29,9 +29,9 @@ vms:
       iso: /home/powerpenguini/Downloads/alpine-virt-3.23.0-x86_64.iso
       vnc: true
       networks:
-        - switch: sw1
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
         - {}
-    - id: new
+    - id: 4ab7051b-67e5-5868-88a3-b7ae6aa27b89
       name: new
       desiredState: running
       memoryMB: 2048
@@ -39,8 +39,8 @@ vms:
       disk: ""
       vnc: true
       networks:
-        - switch: sw1
-    - id: ubuntu
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
+    - id: eec24e71-4ca0-5847-a6f5-e07cb7004e83
       name: ubuntu
       desiredState: running
       memoryMB: 2048
@@ -48,9 +48,9 @@ vms:
       disk: ""
       vnc: true
       networks:
-        - switch: sw1
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
 containers:
-    - id: bash-test
+    - id: 607032d0-df93-52c1-8c87-81f13488c8c7
       name: bash-test
       desiredState: running
       image: docker.io/kalilinux/kali-rolling:latest
@@ -60,76 +60,76 @@ containers:
         - sleep infinity
       shell: /usr/bin/bash
       networks:
-        - switch: sw1
+        - switch: d989c1a4-7765-579c-ae23-2584826c2cb0
 switches:
-    - id: sw1
+    - id: d989c1a4-7765-579c-ae23-2584826c2cb0
       name: sw1
       mode: macnat-bridge
-      externalLink: link1
+      externalLink: a5904041-f662-5b7a-9ba1-2823e26a4f87
 externalLinks:
-    - id: link1
+    - id: a5904041-f662-5b7a-9ba1-2823e26a4f87
       name: in2
       interface: wlp0s20f3
 layout:
     nodes:
-        bash-test:
+        607032d0-df93-52c1-8c87-81f13488c8c7:
             x: 1200
             "y": 552
-        link1:
+        a5904041-f662-5b7a-9ba1-2823e26a4f87:
             x: 848
             "y": 96
-        new:
+        4ab7051b-67e5-5868-88a3-b7ae6aa27b89:
             x: 288
             "y": 552
-        sw1:
+        d989c1a4-7765-579c-ae23-2584826c2cb0:
             x: 848
             "y": 336
-        ubuntu:
+        eec24e71-4ca0-5847-a6f5-e07cb7004e83:
             x: 16
             "y": 552
-        vm2:
+        cc1551e0-d3d8-5ba0-8c38-19b4c75d6ebb:
             x: 848
             "y": 552
-        vm3:
+        40f1478c-6694-5d65-bdaf-4b2d495f33f1:
             x: 560
             "y": 552
-        vm4:
+        ddab6df8-8da4-59fe-8fdc-cb724c7cbd2e:
             x: 1520
             "y": 552
     links:
         - from:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
           to:
             type: vm
-            id: vm2
+            id: cc1551e0-d3d8-5ba0-8c38-19b4c75d6ebb
         - from:
             type: external
-            id: link1
+            id: a5904041-f662-5b7a-9ba1-2823e26a4f87
           to:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
         - from:
             type: vm
-            id: vm3
+            id: 40f1478c-6694-5d65-bdaf-4b2d495f33f1
           to:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
         - from:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
           to:
             type: vm
-            id: vm4
+            id: ddab6df8-8da4-59fe-8fdc-cb724c7cbd2e
         - from:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
           to:
             type: container
-            id: bash-test
+            id: 607032d0-df93-52c1-8c87-81f13488c8c7
         - from:
             type: switch
-            id: sw1
+            id: d989c1a4-7765-579c-ae23-2584826c2cb0
           to:
             type: vm
-            id: ubuntu
+            id: eec24e71-4ca0-5847-a6f5-e07cb7004e83

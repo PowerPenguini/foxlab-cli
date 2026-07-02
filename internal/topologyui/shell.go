@@ -75,7 +75,7 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 			return nil
 		}
 		state := firstNonEmpty(states[key], "missing")
-		return fmt.Errorf("%s %s is %s; run it first", node.Type, node.ID, state)
+		return fmt.Errorf("%s %s is %s; run it first", node.Type, a.displayNodeName(node.Type, node.ID), state)
 	} else {
 		return fmt.Errorf("runtime status unavailable: %w", err)
 	}
@@ -99,7 +99,7 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 	case NodeContainer:
 		ct, ok := a.labContainer(node.ID)
 		if !ok {
-			a.State.Message = "container not found: " + node.ID
+			a.State.Message = "container not found: " + a.displayNodeName(node.Type, node.ID)
 			return shellCommand{}, false
 		}
 		display := "container shell " + a.Lab.ManagedContainerName(ct)
@@ -125,7 +125,7 @@ func (a *App) runContainerShell(id string) error {
 	}
 	defer restoreRaw()
 
-	_, _ = io.WriteString(a.Out, "\r\nconnected to container shell "+id+"; Ctrl-] exits\r\n")
+	_, _ = io.WriteString(a.Out, "\r\nconnected to container shell "+a.displayNodeName(NodeContainer, id)+"; Ctrl-] exits\r\n")
 	runtime := containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)))
 	defer runtime.Close()
 	if err := runtime.ExecShell(context.Background(), a.Lab, id, a.In, a.Out); err != nil {

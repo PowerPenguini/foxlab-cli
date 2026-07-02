@@ -146,7 +146,7 @@ func (a *App) contextRootActionEnabled(node Node, ok bool, action string) bool {
 		return true
 	}
 	if node.Type == NodeExternal && action == "connect" && a.externalConnected(node.ID) {
-		a.State.Message = "uplink already connected: " + node.ID
+		a.State.Message = "uplink already connected: " + a.displayNodeName(node.Type, node.ID)
 		return false
 	}
 	return true

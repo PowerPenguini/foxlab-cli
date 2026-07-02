@@ -90,7 +90,7 @@ func switchContextMenuItems(node Node, group string) []string {
 	switch group {
 	case "config-menu":
 		return configMenuItems([]string{
-			contextFieldItem("name", node.ID),
+			contextFieldItem("name", node.Label),
 			contextFieldItem("mode", nodeDetailValue(node, "mode", "mode=bridge")),
 		}, switchConfigurationDetails(node.Details))
 	case "uplink-menu":
