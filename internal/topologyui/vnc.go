@@ -13,6 +13,17 @@ func (a *App) startVNC(node Node) {
 	a.queueVNC(node)
 }
 
+func (a *App) RunVNC(id string) error {
+	a.ensureExternalCommandIO()
+	a.queueVNC(Node{Type: NodeVM, ID: id})
+	if a.PendingVNC == nil {
+		return stateMessageError(a.State.Message, "vnc failed")
+	}
+	command := *a.PendingVNC
+	a.PendingVNC = nil
+	return a.runShell(command)
+}
+
 func (a *App) queueVNC(node Node) {
 	command, err := a.vncCommand(node)
 	if err != nil {

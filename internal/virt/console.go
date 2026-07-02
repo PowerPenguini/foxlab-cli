@@ -18,19 +18,15 @@ type Console struct {
 	domain    *libvirt.Domain
 	stream    *libvirt.Stream
 	path      string
-	readCh    chan []byte
-	errCh     chan error
+	recv      func([]byte) (int, error)
 	done      chan struct{}
-	pending   []byte
 	readMu    sync.Mutex
+	recvMu    sync.Mutex
 	writeMu   sync.Mutex
 	closeOnce sync.Once
 }
 
 func (r *LibvirtRuntime) OpenConsole(ctx context.Context, l *lab.Lab, id string) (*Console, error) {
-	if err := ensureLibvirtEventLoop(); err != nil {
-		return nil, err
-	}
 	path, err := r.consolePTY(ctx, l, id)
 	if err != nil {
 		return nil, err
@@ -39,7 +35,7 @@ func (r *LibvirtRuntime) OpenConsole(ctx context.Context, l *lab.Lab, id string)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := r.conn.NewStream(libvirt.STREAM_NONBLOCK)
+	stream, err := r.conn.NewStream(0)
 	if err != nil {
 		_ = dom.Free()
 		return nil, fmt.Errorf("create console stream %q: %w", id, err)
@@ -53,17 +49,9 @@ func (r *LibvirtRuntime) OpenConsole(ctx context.Context, l *lab.Lab, id string)
 		domain: dom,
 		stream: stream,
 		path:   path,
-		readCh: make(chan []byte, 16),
-		errCh:  make(chan error, 1),
+		recv:   stream.Recv,
 		done:   make(chan struct{}),
 	}
-	if err := stream.EventAddCallback(libvirt.STREAM_EVENT_READABLE|libvirt.STREAM_EVENT_ERROR|libvirt.STREAM_EVENT_HANGUP, console.handleStreamEvent); err != nil {
-		_ = stream.Abort()
-		_ = stream.Free()
-		_ = dom.Free()
-		return nil, fmt.Errorf("watch console stream %q: %w", id, err)
-	}
-	console.drainStream(stream)
 	return console, nil
 }
 
@@ -121,22 +109,37 @@ func (c *Console) Read(p []byte) (int, error) {
 	}
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
-	for len(c.pending) == 0 {
-		select {
-		case data := <-c.readCh:
-			c.pending = data
-		case err := <-c.errCh:
-			if err == nil {
-				err = io.EOF
+	for {
+		n, err := c.recvStream(p)
+		if n > 0 {
+			return n, nil
+		}
+		if err != nil {
+			if isTemporaryStreamError(err) {
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 			return 0, err
-		case <-c.done:
-			return 0, io.ErrClosedPipe
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	n := copy(p, c.pending)
-	c.pending = c.pending[n:]
-	return n, nil
+}
+
+func (c *Console) recvStream(p []byte) (int, error) {
+	if c == nil || c.recv == nil {
+		return 0, io.ErrClosedPipe
+	}
+	select {
+	case <-c.done:
+		return 0, io.ErrClosedPipe
+	default:
+	}
+	c.recvMu.Lock()
+	defer c.recvMu.Unlock()
+	if c.recv == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return c.recv(p)
 }
 
 func (c *Console) Write(p []byte) (int, error) {
@@ -182,10 +185,12 @@ func (c *Console) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.stream != nil {
-			_ = c.stream.EventRemoveCallback()
 			if err := c.stream.Abort(); err != nil {
 				firstErr = err
 			}
+			c.recvMu.Lock()
+			c.recv = nil
+			c.recvMu.Unlock()
 			if err := c.stream.Free(); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -199,70 +204,6 @@ func (c *Console) Close() error {
 		}
 	})
 	return firstErr
-}
-
-func (c *Console) handleStreamEvent(st *libvirt.Stream, events libvirt.StreamEventType) {
-	if events&(libvirt.STREAM_EVENT_ERROR|libvirt.STREAM_EVENT_HANGUP) != 0 {
-		c.reportReadError(io.EOF)
-		return
-	}
-	if events&libvirt.STREAM_EVENT_READABLE == 0 {
-		return
-	}
-	c.drainStream(st)
-}
-
-func (c *Console) drainStream(st *libvirt.Stream) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := st.Recv(buf)
-		if n > 0 {
-			data := append([]byte(nil), buf[:n]...)
-			select {
-			case c.readCh <- data:
-			case <-c.done:
-				return
-			}
-		}
-		if err != nil {
-			if isTemporaryStreamError(err) {
-				return
-			}
-			c.reportReadError(err)
-			return
-		}
-		if n == 0 {
-			return
-		}
-	}
-}
-
-func (c *Console) reportReadError(err error) {
-	select {
-	case c.errCh <- err:
-	default:
-	}
-}
-
-var (
-	eventLoopOnce sync.Once
-	eventLoopErr  error
-)
-
-func ensureLibvirtEventLoop() error {
-	eventLoopOnce.Do(func() {
-		eventLoopErr = libvirt.EventRegisterDefaultImpl()
-		if eventLoopErr != nil {
-			return
-		}
-		go func() {
-			for {
-				_ = libvirt.EventRunDefaultImpl()
-				time.Sleep(time.Millisecond)
-			}
-		}()
-	})
-	return eventLoopErr
 }
 
 func isTemporaryStreamError(err error) bool {

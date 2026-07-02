@@ -4701,6 +4701,26 @@ func TestContextMenuVNCActionUsesExistingRuntimePort(t *testing.T) {
 	}
 }
 
+func TestRunVNCDirectUsesExistingRuntimePort(t *testing.T) {
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
+	}
+	app := App{
+		Model:     ModelFromLab(loaded),
+		Lab:       loaded,
+		VNCPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5905},
+		VNCViewer: "/bin/true",
+	}
+
+	if err := app.RunVNC("vm1"); err != nil {
+		t.Fatalf("RunVNC returned error: %v", err)
+	}
+	if app.PendingVNC != nil {
+		t.Fatalf("RunVNC left pending vnc: %#v", app.PendingVNC)
+	}
+}
+
 func TestContextMenuVNCActionRefreshesPortWithoutStartingVM(t *testing.T) {
 	loaded := &lab.Lab{
 		ID:  "demo",

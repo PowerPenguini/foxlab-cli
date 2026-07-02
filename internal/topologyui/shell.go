@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -23,6 +24,17 @@ type shellCommand struct {
 
 func (a *App) startShell(node Node) {
 	a.queueShell(node)
+}
+
+func (a *App) RunShell(typ, id string) error {
+	a.ensureExternalCommandIO()
+	a.queueShell(Node{Type: typ, ID: id})
+	if a.PendingShell == nil {
+		return stateMessageError(a.State.Message, "shell failed")
+	}
+	command := *a.PendingShell
+	a.PendingShell = nil
+	return a.runShell(command)
 }
 
 func (a *App) queueShell(node Node) {
@@ -141,6 +153,24 @@ func (a *App) runShell(command shellCommand) error {
 		return a.runConsole(command.Console, command.Display)
 	}
 	return fmt.Errorf("shell command has no runner")
+}
+
+func (a *App) ensureExternalCommandIO() {
+	if a.In == nil {
+		a.In = os.Stdin
+	}
+	if a.Out == nil {
+		a.Out = os.Stdout
+	}
+	a.ensureService()
+}
+
+func stateMessageError(message, fallback string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = fallback
+	}
+	return errors.New(message)
 }
 
 func (a *App) vmConsole(ctx context.Context, id string) (io.ReadWriteCloser, string, error) {
