@@ -46,7 +46,7 @@ func TestDiskCreateAttachDetachDelete(t *testing.T) {
 	if len(reloaded.Disks) != 1 {
 		t.Fatalf("disk count = %d, want base only", len(reloaded.Disks))
 	}
-	if reloaded.Disks[0].ID != "data" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
+	if reloaded.Disks[0].ID != "data" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != reloaded.VMs[0].ID {
 		t.Fatalf("base disk not attached directly: %#v", reloaded.Disks[0])
 	}
 	if reloaded.VMs[0].Disk == "" || !strings.Contains(reloaded.VMs[0].Disk, "/disks/data.qcow2") {
@@ -182,7 +182,7 @@ func TestDiskCommandsRejectUnsupportedArgsBeforeMutating(t *testing.T) {
 	if len(calls) != 0 {
 		t.Fatalf("disk command calls = %#v, want none", calls)
 	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "data" || service.Lab.Disks[0].AttachedTo != "vm1" {
+	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "data" || service.Lab.Disks[0].AttachedTo != service.Lab.VMs[0].ID {
 		t.Fatalf("unsupported args mutated disks: %#v", service.Lab.Disks)
 	}
 	if service.Lab.VMs[0].Disk != "disks/data.qcow2" {
@@ -391,7 +391,7 @@ func TestDiskCreateWithVMTargetAttachesBaseDirectly(t *testing.T) {
 	if len(reloaded.Disks) != 1 {
 		t.Fatalf("disk count = %d, want base only", len(reloaded.Disks))
 	}
-	if reloaded.Disks[0].ID != "vm-disk" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
+	if reloaded.Disks[0].ID != "vm-disk" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != reloaded.VMs[0].ID {
 		t.Fatalf("vm base disk = %#v", reloaded.Disks[0])
 	}
 	if reloaded.VMs[0].Disk == "" || !strings.Contains(reloaded.VMs[0].Disk, "/disks/vm-disk.qcow2") {
@@ -437,7 +437,7 @@ func TestDiskCreateWithContainerTargetCreatesBaseRootLayer(t *testing.T) {
 	if reloaded.Disks[0].ID != "web-disk" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].Base != "" {
 		t.Fatalf("container root layer disk = %#v", reloaded.Disks[0])
 	}
-	if reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
+	if reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != reloaded.Containers[0].ID {
 		t.Fatalf("container data attachment = %#v", reloaded.Disks[0])
 	}
 	if reloaded.Containers[0].Disk == "" || !strings.Contains(reloaded.Containers[0].Disk, "/disks/web-disk.qcow2") {
@@ -490,7 +490,7 @@ func TestDiskAttachStandaloneBaseToContainerUsesBaseAsRootLayer(t *testing.T) {
 		t.Fatalf("disk count = %d, want base only", len(reloaded.Disks))
 	}
 	baseDisk := reloaded.Disks[0]
-	if baseDisk.Kind != "base" || baseDisk.AttachedType != "container" || baseDisk.AttachedTo != "web" || baseDisk.Base != "" {
+	if baseDisk.Kind != "base" || baseDisk.AttachedType != "container" || baseDisk.AttachedTo != reloaded.Containers[0].ID || baseDisk.Base != "" {
 		t.Fatalf("base disk not attached as container root layer: %#v", baseDisk)
 	}
 	if reloaded.Containers[0].Disk != diskPath {
@@ -543,7 +543,7 @@ func TestDiskAttachBaseWithLayersToContainerUsesBaseDirectly(t *testing.T) {
 	if len(reloaded.Disks) != 2 {
 		t.Fatalf("disks = %#v, want base plus existing layer", reloaded.Disks)
 	}
-	if reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
+	if reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != reloaded.Containers[0].ID {
 		t.Fatalf("base disk not attached: %#v", reloaded.Disks[0])
 	}
 	if reloaded.Disks[1].Kind != "layer" || reloaded.Disks[1].AttachedTo != "" {
@@ -651,7 +651,7 @@ func TestDiskLayerCreateAndAttachCreatesMultipleLayerVariants(t *testing.T) {
 	if first.ID == "" || second.ID == "" {
 		t.Fatalf("layers missing: %#v", reloaded.Disks)
 	}
-	if first.AttachedTo != "" || second.AttachedTo != "vm1" {
+	if first.AttachedTo != "" || second.AttachedTo != reloaded.VMs[0].ID {
 		t.Fatalf("layer attachment state: first=%#v second=%#v", first, second)
 	}
 	if !strings.Contains(reloaded.VMs[0].Disk, "/layers/data-layer-2.qcow2") {
@@ -799,7 +799,7 @@ func TestDiskAttachExistingLayerSwitchesActiveLayer(t *testing.T) {
 				t.Fatalf("old layer still attached: %#v", disk)
 			}
 		case "data-layer-2":
-			if disk.AttachedTo != "vm1" {
+			if disk.AttachedTo != reloaded.VMs[0].ID {
 				t.Fatalf("new layer not attached: %#v", disk)
 			}
 		}

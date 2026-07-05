@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	containerdruntime "foxlab-cli/internal/containerd"
@@ -77,7 +79,7 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 		state := firstNonEmpty(states[key], "missing")
 		return fmt.Errorf("%s %s is %s; run it first", node.Type, a.displayNodeName(node.Type, node.ID), state)
 	} else {
-		return fmt.Errorf("runtime status unavailable: %w", err)
+		return containerdruntime.WithAccessHint(fmt.Errorf("runtime status unavailable: %w", err))
 	}
 }
 
@@ -128,11 +130,13 @@ func (a *App) runContainerShell(id string) error {
 	_, _ = io.WriteString(a.Out, "\r\nconnected to container shell "+a.displayNodeName(NodeContainer, id)+"; Ctrl-] exits\r\n")
 	runtime := containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)))
 	defer runtime.Close()
-	if err := runtime.ExecShell(context.Background(), a.Lab, id, a.In, a.Out); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	if err := runtime.ExecShell(ctx, a.Lab, id, a.In, a.Out); err != nil {
 		if containerShellNeedsRestart(err.Error()) {
 			return fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", err)
 		}
-		return err
+		return containerdruntime.WithAccessHint(err)
 	}
 	return nil
 }

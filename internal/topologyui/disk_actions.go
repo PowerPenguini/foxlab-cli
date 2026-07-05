@@ -243,6 +243,12 @@ func (a *App) attachedDiskID(node Node) string {
 			return disk.ID
 		}
 	}
+	current := a.currentDiskPath(node)
+	for _, disk := range a.Lab.Disks {
+		if current != "" && a.Lab.ResolvePath(disk.Path) == current {
+			return disk.ID
+		}
+	}
 	return ""
 }
 
@@ -253,6 +259,12 @@ func (a *App) attachedLayerDiskID(node Node) string {
 	targetType := diskTargetType(node.Type)
 	for _, disk := range a.Lab.Disks {
 		if diskKindUI(disk) == "layer" && disk.AttachedType == targetType && disk.AttachedTo == node.ID {
+			return disk.ID
+		}
+	}
+	current := a.currentDiskPath(node)
+	for _, disk := range a.Lab.Disks {
+		if diskKindUI(disk) == "layer" && current != "" && a.Lab.ResolvePath(disk.Path) == current {
 			return disk.ID
 		}
 	}
@@ -304,6 +316,7 @@ func (a *App) layerDisksForMenu(node Node) map[string][]lab.Disk {
 		return out
 	}
 	targetType := diskTargetType(node.Type)
+	current := a.currentDiskPath(node)
 	baseIDs := map[string]bool{}
 	for _, disk := range a.Lab.Disks {
 		if diskKindUI(disk) == "base" {
@@ -314,7 +327,8 @@ func (a *App) layerDisksForMenu(node Node) map[string][]lab.Disk {
 		if diskKindUI(disk) != "layer" {
 			continue
 		}
-		if disk.AttachedTo != "" && (disk.AttachedType != targetType || disk.AttachedTo != node.ID) {
+		currentDisk := current != "" && a.Lab.ResolvePath(disk.Path) == current
+		if !currentDisk && disk.AttachedTo != "" && (disk.AttachedType != targetType || disk.AttachedTo != node.ID) {
 			continue
 		}
 		baseID := disk.Base

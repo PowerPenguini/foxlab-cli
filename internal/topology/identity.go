@@ -24,22 +24,22 @@ func (s *Service) existingNodeNameKind(name, selfID string) string {
 		return ""
 	}
 	for _, vm := range s.Lab.VMs {
-		if vm.ID != selfID && vm.Name == name {
+		if vm.ID != selfID && firstNonEmpty(vm.Name, vm.ID) == name {
 			return "vm"
 		}
 	}
 	for _, ct := range s.Lab.Containers {
-		if ct.ID != selfID && ct.Name == name {
+		if ct.ID != selfID && firstNonEmpty(ct.Name, ct.ID) == name {
 			return "container"
 		}
 	}
 	for _, sw := range s.Lab.Switches {
-		if sw.ID != selfID && sw.Name == name {
+		if sw.ID != selfID && firstNonEmpty(sw.Name, sw.ID) == name {
 			return "switch"
 		}
 	}
 	for _, link := range s.Lab.ExternalLinks {
-		if link.ID != selfID && link.Name == name {
+		if link.ID != selfID && firstNonEmpty(link.Name, link.ID) == name {
 			return "uplink"
 		}
 	}

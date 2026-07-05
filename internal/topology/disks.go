@@ -83,7 +83,7 @@ func (s *Service) DiskCreate(id string, args map[string]string) string {
 		return "disk create failed: " + err.Error()
 	}
 	if attach {
-		return "attached disk:" + id + " to " + targetType + ":" + targetID
+		return "attached disk:" + id + " to " + s.workloadDisplayRef(targetType, targetID)
 	}
 	return "created disk:" + id
 }
@@ -186,7 +186,7 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 		_ = os.Remove(layerPath)
 		return "disk layer create failed: " + err.Error()
 	}
-	return "attached disk:" + layerID + " to " + targetType + ":" + targetID
+	return "attached disk:" + layerID + " to " + s.workloadDisplayRef(targetType, targetID)
 }
 
 func (s *Service) DiskDetach(target string, args map[string]string) string {
@@ -218,7 +218,7 @@ func (s *Service) DiskDetach(target string, args map[string]string) string {
 	}
 	diskIndex := s.attachedDiskIndex(targetType, targetID, args["disk"])
 	if diskIndex < 0 {
-		return "attached disk not found: " + targetType + ":" + targetID
+		return "attached disk not found: " + s.workloadDisplayRef(targetType, targetID)
 	}
 	if err := s.requireSavePath(); err != nil {
 		return "disk detach failed: " + err.Error()
@@ -230,7 +230,7 @@ func (s *Service) DiskDetach(target string, args map[string]string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "disk detach failed: " + err.Error()
 	}
-	return "detached disk from " + targetType + ":" + targetID
+	return "detached disk from " + s.workloadDisplayRef(targetType, targetID)
 }
 
 func (s *Service) DiskMerge(id string) string {

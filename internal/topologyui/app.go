@@ -658,12 +658,23 @@ func (a *App) applyWorkloadStates() {
 	for i := range a.Model.Nodes {
 		node := &a.Model.Nodes[i]
 		key := NodeKey(node.Type, node.ID)
-		if state, ok := a.WorkloadStates[key]; ok {
+		state, ok := a.WorkloadStates[key]
+		if !ok && node.Label != "" {
+			state, ok = a.WorkloadStates[NodeKey(node.Type, node.Label)]
+		}
+		if ok {
 			pendingStart := a.PendingStarts[key]
+			if !pendingStart && node.Label != "" {
+				pendingStart = a.PendingStarts[NodeKey(node.Type, node.Label)]
+			}
 			node.State = displayNodeWorkloadState(node.Type, node.DesiredState, state, transitions, pendingStart)
 		}
 		if node.Type == NodeVM {
-			node.Details = withVNCDetailPort(node.Details, a.VNCPorts[key])
+			port := a.VNCPorts[key]
+			if port == 0 && node.Label != "" {
+				port = a.VNCPorts[NodeKey(node.Type, node.Label)]
+			}
+			node.Details = withVNCDetailPort(node.Details, port)
 		}
 	}
 }

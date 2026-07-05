@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd"
@@ -223,7 +222,8 @@ func (r *Runtime) execContainerTransfer(ctx context.Context, l *lab.Lab, ct lab.
 	if ioSet := process.IO(); ioSet != nil {
 		defer ioSet.Cancel()
 	}
-	defer deleteShellProcess(process)
+	namespace := r.containerdNamespace()
+	defer deleteShellProcess(namespace, process)
 	statusC, err := process.Wait(cctx)
 	if err != nil {
 		return err
@@ -231,12 +231,12 @@ func (r *Runtime) execContainerTransfer(ctx context.Context, l *lab.Lab, ct lab.
 	if err := process.Start(cctx); err != nil {
 		return err
 	}
-	runCtx := namespaces.WithNamespace(ctx, r.containerdNamespace())
+	runCtx := namespaces.WithNamespace(ctx, namespace)
 	var status containerd.ExitStatus
 	select {
 	case status = <-statusC:
 	case <-runCtx.Done():
-		killShellProcess(process, syscall.SIGTERM)
+		deleteShellProcess(namespace, process)
 		return runCtx.Err()
 	}
 	code, _, err := status.Result()

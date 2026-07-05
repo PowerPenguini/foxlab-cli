@@ -43,9 +43,14 @@ func TestRunnerStepPublishesStatusSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerID := loaded.Containers[0].ID
 	store := daemonstatus.NewStore()
 	runtime := &fakeRuntime{
-		states:   map[string]string{workload.Key(workload.Ref{Type: workload.TypeContainer, ID: "web"}): "missing"},
+		states:   map[string]string{workload.Key(workload.Ref{Type: workload.TypeContainer, ID: containerID}): "missing"},
 		vncPorts: map[string]int{"vm:router": 5903},
 	}
 	runner := Runner{
@@ -63,7 +68,7 @@ func TestRunnerStepPublishesStatusSnapshot(t *testing.T) {
 	if snapshot.LabName != "demo" || snapshot.LabPath == "" {
 		t.Fatalf("snapshot identity = %#v", snapshot)
 	}
-	key := workload.Key(workload.Ref{Type: workload.TypeContainer, ID: "web"})
+	key := workload.Key(workload.Ref{Type: workload.TypeContainer, ID: containerID})
 	if snapshot.States[key] != "running" {
 		t.Fatalf("snapshot state = %q, want running", snapshot.States[key])
 	}
@@ -127,7 +132,13 @@ func TestRunnerStepReconcilesLoadedLab(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := &fakeRuntime{states: map[string]string{workload.Key(workload.Ref{Type: workload.TypeVM, ID: "vm1"}): "shutoff"}}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmID := loaded.VMs[0].ID
+	vmKey := workload.Key(workload.Ref{Type: workload.TypeVM, ID: vmID})
+	runtime := &fakeRuntime{states: map[string]string{vmKey: "shutoff"}}
 	logger := &stringLogger{}
 	runner := Runner{
 		LabPath: path,
@@ -140,13 +151,13 @@ func TestRunnerStepReconcilesLoadedLab(t *testing.T) {
 	if err := runner.Step(context.Background()); err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
-	if len(runtime.starts) != 1 || runtime.starts[0] != "vm:vm1" {
-		t.Fatalf("starts = %#v, want vm:vm1", runtime.starts)
+	if len(runtime.starts) != 1 || runtime.starts[0] != vmKey {
+		t.Fatalf("starts = %#v, want %s", runtime.starts, vmKey)
 	}
 	if !runtime.closed {
 		t.Fatal("runtime was not closed")
 	}
-	if got := strings.Join(logger.lines, "\n"); !strings.Contains(got, "started vm:vm1") {
+	if got := strings.Join(logger.lines, "\n"); !strings.Contains(got, "started "+vmKey) {
 		t.Fatalf("log = %q, want start action", got)
 	}
 }

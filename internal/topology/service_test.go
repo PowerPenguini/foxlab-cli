@@ -34,7 +34,7 @@ func TestServiceMutationsPersistAndRefreshLab(t *testing.T) {
 	if !ok {
 		t.Fatalf("vm1 was not present after create")
 	}
-	if vm.MemoryMB != 4096 || len(vm.Networks) != 1 || vm.Networks[0].Switch != "sw1" {
+	if vm.MemoryMB != 4096 || len(vm.Networks) != 1 || vm.Networks[0].Switch != service.Lab.Switches[0].ID {
 		t.Fatalf("vm1 was not refreshed from persisted lab: %+v", vm)
 	}
 
@@ -89,7 +89,9 @@ func TestServiceVMNICDeleteReindexesDirectLinks(t *testing.T) {
 		t.Fatalf("network links = %#v, want only link for shifted nic", service.Lab.NetworkLinks)
 	}
 	link := service.Lab.NetworkLinks[0]
-	if link.From.ID != "vm1" || link.From.NIC != 1 || link.To.ID != "vm2" || link.To.NIC != 1 {
+	vm1, _ := service.LabVM("vm1")
+	vm2, _ := service.LabVM("vm2")
+	if link.From.ID != vm1.ID || link.From.NIC != 1 || link.To.ID != vm2.ID || link.To.NIC != 1 {
 		t.Fatalf("reindexed link = %#v", link)
 	}
 }
@@ -123,8 +125,8 @@ func TestServiceNICIndexArgumentsTrimWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.VMs[0].Networks[0].Switch != "lan" {
-		t.Fatalf("vm nic switch = %q, want lan", reloaded.VMs[0].Networks[0].Switch)
+	if reloaded.VMs[0].Networks[0].Switch != reloaded.Switches[0].ID {
+		t.Fatalf("vm nic switch = %q, want %q", reloaded.VMs[0].Networks[0].Switch, reloaded.Switches[0].ID)
 	}
 }
 
@@ -268,47 +270,47 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "vm",
 			run:  func() string { return service.VMCreate("", map[string]string{}) },
-			want: "usage: vm create <id> [cpus=N] [memory=N] [switch=ID|uplink=ID]",
+			want: "usage: vm create <name> [cpus=N] [memory=N] [switch=NAME|uplink=NAME]",
 		},
 		{
-			name: "vm invalid",
-			run:  func() string { return service.VMCreate("bad/id", map[string]string{}) },
-			want: "invalid vm id: bad/id",
+			name: "vm duplicate name",
+			run:  func() string { return service.VMCreate("existing", map[string]string{}) },
+			want: "node name already exists as switch: existing",
 		},
 		{
 			name: "container",
 			run:  func() string { return service.ContainerCreate("", map[string]string{}) },
-			want: "usage: container create <id> [image=REF] [command=CMD] [switch=ID]",
+			want: "usage: container create <name> [image=REF] [command=CMD] [switch=NAME|uplink=NAME]",
 		},
 		{
-			name: "container invalid",
-			run:  func() string { return service.ContainerCreate("bad/id", map[string]string{}) },
-			want: "invalid container id: bad/id",
+			name: "container duplicate name",
+			run:  func() string { return service.ContainerCreate("existing", map[string]string{}) },
+			want: "node name already exists as switch: existing",
 		},
 		{
 			name: "switch",
 			run:  func() string { return service.SwitchCreate("", map[string]string{}) },
-			want: "usage: switch create <id> [mode=bridge|nat|macnat-bridge] [uplink=ID]",
+			want: "usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]",
 		},
 		{
-			name: "switch invalid",
-			run:  func() string { return service.SwitchCreate("bad/id", map[string]string{}) },
-			want: "invalid switch id: bad/id",
+			name: "switch duplicate name",
+			run:  func() string { return service.SwitchCreate("existing", map[string]string{}) },
+			want: "node name already exists as switch: existing",
 		},
 		{
 			name: "external",
 			run:  func() string { return service.ExternalCreate("", map[string]string{}) },
-			want: "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]",
+			want: "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]",
 		},
 		{
-			name: "external invalid",
-			run:  func() string { return service.ExternalCreate("bad/id", map[string]string{"interface": "eth0"}) },
-			want: "invalid uplink id: bad/id",
+			name: "external duplicate name",
+			run:  func() string { return service.ExternalCreate("existing", map[string]string{"interface": "eth0"}) },
+			want: "node name already exists as switch: existing",
 		},
 		{
 			name: "external interface",
 			run:  func() string { return service.ExternalCreate("uplink", map[string]string{}) },
-			want: "usage: uplink create <id> interface=IFACE [mode=nat|direct|macnat]",
+			want: "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]",
 		},
 	}
 
@@ -320,10 +322,10 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 	if len(service.Lab.VMs) != 0 || len(service.Lab.Containers) != 0 || len(service.Lab.Switches) != 1 || len(service.Lab.ExternalLinks) != 0 {
 		t.Fatalf("empty-id create mutated lab: %#v", service.Lab)
 	}
-	if service.Lab.Switches[0].ID != "existing" {
+	if service.Lab.Switches[0].Name != "existing" {
 		t.Fatalf("empty-id create mutated existing switch: %#v", service.Lab.Switches)
 	}
-	if len(service.Lab.Layout.Nodes) != 1 || service.Lab.Layout.Nodes["existing"] != (lab.Position{X: 1, Y: 2}) {
+	if len(service.Lab.Layout.Nodes) != 1 {
 		t.Fatalf("empty-id create mutated layout: %#v", service.Lab.Layout.Nodes)
 	}
 }
@@ -383,10 +385,10 @@ func TestServiceSwitchAndExternalRejectUnsupportedArgs(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Mode != "bridge" {
+	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].Name != "lan" || service.Lab.Switches[0].Mode != "bridge" {
 		t.Fatalf("unsupported switch args mutated lab: %#v", service.Lab.Switches)
 	}
-	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].ID != "uplink" || service.Lab.ExternalLinks[0].Interface != "eth0" {
+	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].Name != "uplink" || service.Lab.ExternalLinks[0].Interface != "eth0" {
 		t.Fatalf("unsupported external args mutated lab: %#v", service.Lab.ExternalLinks)
 	}
 }
@@ -470,7 +472,7 @@ func TestServiceVMRejectsInvalidTypedArgsWithoutMutatingLab(t *testing.T) {
 		t.Fatalf("invalid vm args created vms: %#v", service.Lab.VMs)
 	}
 	vm := service.Lab.VMs[0]
-	if vm.ID != "vm1" || vm.Name != "" || vm.Disk != "disks/vm1.qcow2" || vm.CPUs != 1 || vm.MemoryMB != 512 || !vm.VNC {
+	if vm.Name != "vm1" || vm.Disk != "disks/vm1.qcow2" || vm.CPUs != 1 || vm.MemoryMB != 512 || !vm.VNC {
 		t.Fatalf("invalid vm args mutated vm: %#v", vm)
 	}
 }
@@ -514,7 +516,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "switch create missing external",
 			run:  func(s *Service) string { return s.SwitchCreate("wan", map[string]string{"external": "missing"}) },
-			want: `switch create failed: switch "wan" references missing uplink "missing"`,
+			want: `switch create failed: uplink not found: missing`,
 		},
 		{
 			name: "switch set bad mode",
@@ -536,7 +538,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "vm create missing switch",
 			run:  func(s *Service) string { return s.VMCreate("vm2", map[string]string{"switch": "missing"}) },
-			want: `create failed: vm "vm2" references missing switch "missing"`,
+			want: `create failed: switch not found: missing`,
 		},
 		{
 			name: "vm set switch and external",
@@ -548,7 +550,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "vm set missing external",
 			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}) },
-			want: `config failed: vm "vm1" references missing uplink "missing"`,
+			want: `config failed: uplink not found: missing`,
 		},
 		{
 			name: "container create switch and external",
@@ -562,7 +564,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 			run: func(s *Service) string {
 				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"})
 			},
-			want: `container create failed: container "api" references missing uplink "missing"`,
+			want: `container create failed: uplink not found: missing`,
 		},
 		{
 			name: "container set switch and external",
@@ -574,7 +576,7 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		{
 			name: "container set missing switch",
 			run:  func(s *Service) string { return s.ContainerSet("web", map[string]string{"switch": "missing"}) },
-			want: `container config failed: container "web" references missing switch "missing"`,
+			want: `container config failed: switch not found: missing`,
 		},
 	}
 
@@ -625,7 +627,7 @@ func TestServiceSwitchSetAppendsExternalLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1", "uplink2"}; !reflect.DeepEqual(got, want) {
+	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID, reloaded.ExternalLinks[1].ID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("switch externalLinks = %#v, want %#v", got, want)
 	}
 }
@@ -836,24 +838,24 @@ func TestWorkloadNetworkRefsValidateBeforeSavePath(t *testing.T) {
 		{
 			name: "vm create",
 			run:  func(s *Service) string { return s.VMCreate("vm2", map[string]string{"switch": "missing"}) },
-			want: `create failed: vm "vm2" references missing switch "missing"`,
+			want: `create failed: switch not found: missing`,
 		},
 		{
 			name: "vm set",
 			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}) },
-			want: `config failed: vm "vm1" references missing uplink "missing"`,
+			want: `config failed: uplink not found: missing`,
 		},
 		{
 			name: "container create",
 			run: func(s *Service) string {
 				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"})
 			},
-			want: `container create failed: container "api" references missing uplink "missing"`,
+			want: `container create failed: uplink not found: missing`,
 		},
 		{
 			name: "container set",
 			run:  func(s *Service) string { return s.ContainerSet("web", map[string]string{"switch": "missing"}) },
-			want: `container config failed: container "web" references missing switch "missing"`,
+			want: `container config failed: switch not found: missing`,
 		},
 	}
 
@@ -968,22 +970,22 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 		{
 			name: "vm collides with container",
 			run:  func(s *Service) string { return s.VMCreate("web", nil) },
-			want: "node id already exists as container: web",
+			want: "node name already exists as container: web",
 		},
 		{
 			name: "container collides with vm",
 			run:  func(s *Service) string { return s.ContainerCreate("vm1", map[string]string{"image": "alpine"}) },
-			want: "node id already exists as vm: vm1",
+			want: "node name already exists as vm: vm1",
 		},
 		{
 			name: "switch collides with external",
 			run:  func(s *Service) string { return s.SwitchCreate("uplink", nil) },
-			want: "node id already exists as uplink: uplink",
+			want: "node name already exists as uplink: uplink",
 		},
 		{
 			name: "external collides with switch",
 			run:  func(s *Service) string { return s.ExternalCreate("lan", map[string]string{"interface": "eth0"}) },
-			want: "node id already exists as switch: lan",
+			want: "node name already exists as switch: lan",
 		},
 	}
 
@@ -1012,25 +1014,25 @@ func TestNextNodeIDsSkipCrossTypeCollisions(t *testing.T) {
 			name: "vm skips container id",
 			lab:  &lab.Lab{ID: "demo", Containers: []lab.Container{{ID: "vm2", Image: "nginx"}}},
 			got:  func(s *Service) string { return s.NextVMID() },
-			want: "vm3",
+			want: "vm-1",
 		},
 		{
 			name: "container skips vm id",
 			lab:  &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "ct2", MemoryMB: 512, CPUs: 1}}},
 			got:  func(s *Service) string { return s.NextContainerID() },
-			want: "ct3",
+			want: "container-1",
 		},
 		{
 			name: "switch skips external id",
 			lab:  &lab.Lab{ID: "demo", ExternalLinks: []lab.ExternalLink{{ID: "sw2", Interface: "eth0", Mode: lab.ExternalModeNAT}}},
 			got:  func(s *Service) string { return s.NextSwitchID() },
-			want: "sw3",
+			want: "switch-1",
 		},
 		{
 			name: "external skips switch id",
 			lab:  &lab.Lab{ID: "demo", Switches: []lab.Switch{{ID: "uplink2", Mode: "bridge"}}},
 			got:  func(s *Service) string { return s.NextExternalID() },
-			want: "uplink3",
+			want: "uplink-1",
 		},
 	}
 
@@ -1078,22 +1080,22 @@ func TestServiceEmptySetArgsAreNoOpBeforeSavePath(t *testing.T) {
 		{
 			name: "vm set",
 			run:  func(s *Service) string { return s.VMSet("vm1", nil) },
-			want: "configured vm:vm1",
+			want: "configured vm:VM 1",
 		},
 		{
 			name: "container set",
 			run:  func(s *Service) string { return s.ContainerSet("web", nil) },
-			want: "configured container:web",
+			want: "configured container:Web",
 		},
 		{
 			name: "switch set",
 			run:  func(s *Service) string { return s.SwitchSet("lan", nil) },
-			want: "configured switch:lan",
+			want: "configured switch:LAN",
 		},
 		{
 			name: "external set",
 			run:  func(s *Service) string { return s.ExternalSet("uplink", nil) },
-			want: "configured uplink:uplink",
+			want: "configured uplink:WAN",
 		},
 	}
 
@@ -1146,14 +1148,14 @@ func TestSaveAndRefreshFailureReloadsPersistedLab(t *testing.T) {
 	if !strings.Contains(got, "unsupported mode") {
 		t.Fatalf("SwitchCreate = %q, want validation failure", got)
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Mode != "bridge" {
+	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].Name != "lan" || service.Lab.Switches[0].Mode != "bridge" {
 		t.Fatalf("service did not reload persisted lab after failed save: %#v", service.Lab.Switches)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatalf("reload lab: %v", err)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "lan" || reloaded.Switches[0].Mode != "bridge" {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Name != "lan" || reloaded.Switches[0].Mode != "bridge" {
 		t.Fatalf("persisted lab changed after failed save: %#v", reloaded.Switches)
 	}
 }

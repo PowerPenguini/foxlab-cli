@@ -938,14 +938,14 @@ func TestRefreshWorkloadStatesShowsStoppedMissingVMAsDefined(t *testing.T) {
 			return daemonstatus.Snapshot{
 				LabPath: path,
 				LabName: "demo",
-				States:  map[string]string{NodeKey(NodeVM, "vm1"): "missing"},
+				States:  map[string]string{NodeKey(NodeVM, loaded.VMs[0].ID): "missing"},
 			}, nil
 		},
 	}
 
 	app.refreshWorkloadStates()
 
-	node, ok := nodeByKey(app.Model, NodeKey(NodeVM, "vm1"))
+	node, ok := nodeByKey(app.Model, NodeKey(NodeVM, loaded.VMs[0].ID))
 	if !ok {
 		t.Fatal("vm node not found")
 	}
@@ -1218,7 +1218,7 @@ func TestContextMenuMoveSavesLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := reloaded.Layout.Nodes["vm1"]
+	got := reloaded.Layout.Nodes[reloaded.VMs[0].ID]
 	if got.X != 96 || got.Y != 96 {
 		t.Fatalf("saved layout = %#v, want X=96 Y=96", got)
 	}
@@ -1262,7 +1262,7 @@ func TestNormalModeMStartsMoveAndSavesLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := reloaded.Layout.Nodes["vm1"]
+	got := reloaded.Layout.Nodes[reloaded.VMs[0].ID]
 	if got.X != 96 || got.Y != 96 {
 		t.Fatalf("saved layout = %#v, want X=96 Y=96", got)
 	}
@@ -1293,7 +1293,7 @@ func TestMouseDragNodeSavesLayoutWithoutMoveAction(t *testing.T) {
 		ViewHeight: 30,
 	}
 	rects := layoutNodeRects(app.Model, app.graphBounds())
-	nodeRect := rects[NodeKey(NodeVM, "vm1")]
+	nodeRect := rects[NodeKey(NodeVM, loaded.VMs[0].ID)]
 	startX := nodeRect.X + 1
 	startY := nodeRect.Y + 1
 
@@ -1317,7 +1317,7 @@ func TestMouseDragNodeSavesLayoutWithoutMoveAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := reloaded.Layout.Nodes["vm1"]
+	got := reloaded.Layout.Nodes[reloaded.VMs[0].ID]
 	if got.X != 128 || got.Y != 120 {
 		t.Fatalf("saved layout = %#v, want X=128 Y=120", got)
 	}
@@ -2093,7 +2093,7 @@ func TestDiskMenuEnterAttachesContainerBaseThroughLayer(t *testing.T) {
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
 	}
-	node := Node{ID: "web", Type: NodeContainer}
+	node := Node{ID: loaded.Containers[0].ID, Type: NodeContainer}
 
 	app.State.ContextMenu = true
 	app.setContextGroup("disk-menu", node, true)
@@ -2108,7 +2108,7 @@ func TestDiskMenuEnterAttachesContainerBaseThroughLayer(t *testing.T) {
 	if len(reloaded.Disks) != 1 {
 		t.Fatalf("disk count after data attach = %d, want base only", len(reloaded.Disks))
 	}
-	if reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != "web" {
+	if reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedType != "container" || reloaded.Disks[0].AttachedTo != reloaded.Containers[0].ID {
 		t.Fatalf("base disk not attached as container root layer: %#v", reloaded.Disks[0])
 	}
 	if reloaded.Containers[0].Disk == "" || !strings.Contains(reloaded.Containers[0].Disk, "/disks/data.qcow2") {
@@ -2171,7 +2171,7 @@ func TestDiskMenuAttachAndDetach(t *testing.T) {
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
 	}
-	node := Node{ID: "vm1", Type: NodeVM}
+	node := Node{ID: loaded.VMs[0].ID, Type: NodeVM}
 
 	app.State.ContextMenu = true
 	app.setContextGroup("disk-menu", node, true)
@@ -2191,12 +2191,12 @@ func TestDiskMenuAttachAndDetach(t *testing.T) {
 	if reloaded.VMs[0].Disk == "" || !strings.Contains(reloaded.VMs[0].Disk, "/disks/data.qcow2") {
 		t.Fatalf("vm disk after attach = %q", reloaded.VMs[0].Disk)
 	}
-	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != "vm1" {
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" || reloaded.Disks[0].AttachedType != "vm" || reloaded.Disks[0].AttachedTo != reloaded.VMs[0].ID {
 		t.Fatalf("disk after attach = %#v", reloaded.Disks)
 	}
 
 	app.State.ContextMenu = true
-	app.setContextGroup("disk-menu", Node{ID: "vm1", Type: NodeVM}, true)
+	app.setContextGroup("disk-menu", Node{ID: reloaded.VMs[0].ID, Type: NodeVM}, true)
 	app.State.ContextInSubmenu = true
 	app.State.ContextSubSelected = 1
 	app.handleKey("right")
@@ -2244,7 +2244,7 @@ func TestDiskMenuDeleteActiveLayerWithX(t *testing.T) {
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
 	}
-	node := Node{ID: "vm1", Type: NodeVM}
+	node := Node{ID: loaded.VMs[0].ID, Type: NodeVM}
 
 	app.State.ContextMenu = true
 	app.setContextGroup("disk-menu", node, true)
@@ -2697,7 +2697,7 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stateKey := NodeKey(NodeContainer, "web")
+	stateKey := NodeKey(NodeContainer, loaded.Containers[0].ID)
 	app := App{
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
@@ -2710,7 +2710,7 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 		State: ViewState{Focus: FocusGraph},
 	}
 
-	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "run")
+	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "run")
 
 	node, ok := nodeByKey(app.Model, stateKey)
 	if !ok {
@@ -3615,10 +3615,13 @@ func TestCommandVMCreateSavesLab(t *testing.T) {
 	if len(reloaded.VMs) != 1 {
 		t.Fatalf("vm count = %d, want 1", len(reloaded.VMs))
 	}
-	if reloaded.VMs[0].ID != "vm1" || reloaded.VMs[0].CPUs != 4 || reloaded.VMs[0].MemoryMB != 4096 {
+	if reloaded.VMs[0].ID == "" || reloaded.VMs[0].ID == "vm1" || reloaded.VMs[0].Name != "vm1" || reloaded.VMs[0].CPUs != 4 || reloaded.VMs[0].MemoryMB != 4096 {
 		t.Fatalf("saved vm = %#v", reloaded.VMs[0])
 	}
-	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].ID != "vm1" {
+	if len(reloaded.VMs[0].Networks) != 1 || reloaded.VMs[0].Networks[0].Switch != reloaded.Switches[0].ID {
+		t.Fatalf("vm networks = %#v, want switch %q", reloaded.VMs[0].Networks, reloaded.Switches[0].ID)
+	}
+	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].ID != reloaded.VMs[0].ID || app.Model.Nodes[0].Label != "vm1" {
 		t.Fatalf("model not refreshed: %#v", app.Model.Nodes)
 	}
 }
@@ -3653,13 +3656,13 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 		t.Fatalf("container count = %d, want 1", len(reloaded.Containers))
 	}
 	ct := reloaded.Containers[0]
-	if ct.ID != "web" || ct.Image != "docker.io/library/nginx:latest" || len(ct.Networks) != 1 || ct.Networks[0].Switch != "lan" {
+	if ct.ID == "" || ct.ID == "web" || ct.Name != "web" || ct.Image != "docker.io/library/nginx:latest" || len(ct.Networks) != 1 || ct.Networks[0].Switch != reloaded.Switches[0].ID {
 		t.Fatalf("saved container = %#v", ct)
 	}
-	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].Type != NodeContainer || app.Model.Nodes[0].Badge != "CT" {
+	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].ID != ct.ID || app.Model.Nodes[0].Label != "web" || app.Model.Nodes[0].Type != NodeContainer || app.Model.Nodes[0].Badge != "CT" {
 		t.Fatalf("container model not refreshed: %#v", app.Model.Nodes)
 	}
-	if len(app.Model.Edges) != 1 || app.Model.Edges[0].From != NodeKey(NodeContainer, "web") || app.Model.Edges[0].To != NodeKey(NodeSwitch, "lan") {
+	if len(app.Model.Edges) != 1 || app.Model.Edges[0].From != NodeKey(NodeContainer, ct.ID) || app.Model.Edges[0].To != NodeKey(NodeSwitch, reloaded.Switches[0].ID) {
 		t.Fatalf("container edges = %#v", app.Model.Edges)
 	}
 }
@@ -3929,13 +3932,13 @@ func TestCommandAddCreatesGraphNodesWithMinimalData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.VMs) != 1 || reloaded.VMs[0].ID != "vm1" {
+	if len(reloaded.VMs) != 1 || reloaded.VMs[0].ID == "" || reloaded.VMs[0].ID == "vm1" || reloaded.VMs[0].Name != "vm1" {
 		t.Fatalf("minimal vm was not saved: %#v", reloaded.VMs)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "sw1" {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID == "" || reloaded.Switches[0].ID == "sw1" || reloaded.Switches[0].Name != "sw1" {
 		t.Fatalf("minimal switch was not saved: %#v", reloaded.Switches)
 	}
-	if len(reloaded.Containers) != 1 || reloaded.Containers[0].ID != "web" || reloaded.Containers[0].Image == "" {
+	if len(reloaded.Containers) != 1 || reloaded.Containers[0].ID == "" || reloaded.Containers[0].ID == "web" || reloaded.Containers[0].Name != "web" || reloaded.Containers[0].Image == "" {
 		t.Fatalf("minimal container was not saved with placeholder image: %#v", reloaded.Containers)
 	}
 	if len(app.Model.Nodes) != 3 {
@@ -4078,7 +4081,7 @@ func TestCommandVMNICAddAndConnect(t *testing.T) {
 	if len(networks) != 3 {
 		t.Fatalf("vm networks count = %d, want 3: %#v", len(networks), networks)
 	}
-	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:22" || networks[2].ExternalLink != "uplink1" {
+	if networks[0].Switch != reloaded.Switches[0].ID || networks[1].Switch != reloaded.Switches[1].ID || networks[1].MAC != "02:00:00:00:00:22" || networks[2].ExternalLink != reloaded.ExternalLinks[0].ID {
 		t.Fatalf("vm networks = %#v", networks)
 	}
 	if len(app.Model.Edges) != 3 {
@@ -4116,7 +4119,7 @@ func TestCommandContainerNICAddAndConnect(t *testing.T) {
 	if len(networks) != 3 {
 		t.Fatalf("container networks count = %d, want 3: %#v", len(networks), networks)
 	}
-	if networks[0].Switch != "lan" || networks[1].Switch != "wan" || networks[1].MAC != "02:00:00:00:00:33" || networks[2].ExternalLink != "uplink1" {
+	if networks[0].Switch != reloaded.Switches[0].ID || networks[1].Switch != reloaded.Switches[1].ID || networks[1].MAC != "02:00:00:00:00:33" || networks[2].ExternalLink != reloaded.ExternalLinks[0].ID {
 		t.Fatalf("container networks = %#v", networks)
 	}
 	if len(app.Model.Edges) != 3 {
@@ -4191,10 +4194,10 @@ func TestCommandLinkAddAndDeleteExplicitNICs(t *testing.T) {
 		t.Fatalf("network links = %#v, want one direct link", reloaded.NetworkLinks)
 	}
 	link := reloaded.NetworkLinks[0]
-	if link.From.Type != "vm" || link.From.ID != "vm1" || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 1 {
+	if link.From.Type != "vm" || link.From.ID != reloaded.VMs[0].ID || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != reloaded.VMs[1].ID || link.To.NIC != 1 {
 		t.Fatalf("network link = %#v", link)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeVM, "vm1"), NodeKey(NodeVM, "vm2")) {
+	if !hasEdge(app.Model, NodeKey(NodeVM, reloaded.VMs[0].ID), NodeKey(NodeVM, reloaded.VMs[1].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 
@@ -4235,7 +4238,7 @@ func TestCommandLinkAddUsesFirstAvailableTargetNIC(t *testing.T) {
 		t.Fatalf("network links = %#v, want one direct link", reloaded.NetworkLinks)
 	}
 	link := reloaded.NetworkLinks[0]
-	if link.To.Type != "container" || link.To.ID != "web" || link.To.NIC != 1 {
+	if link.To.Type != "container" || link.To.ID != reloaded.Containers[0].ID || link.To.NIC != 1 {
 		t.Fatalf("network link target = %#v, want web nic1", link)
 	}
 }
@@ -4493,13 +4496,13 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID != "uplink1" {
+	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID == "" || reloaded.ExternalLinks[0].ID == "uplink1" || reloaded.ExternalLinks[0].Name != "uplink1" {
 		t.Fatalf("external links = %#v", reloaded.ExternalLinks)
 	}
 	if reloaded.ExternalLinks[0].Mode != lab.ExternalModeMacNAT {
 		t.Fatalf("external mode = %q, want macnat", reloaded.ExternalLinks[0].Mode)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Mode != "nat" || !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1"}) {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Name != "lan" || reloaded.Switches[0].Mode != "nat" || !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
 
@@ -4532,7 +4535,7 @@ func TestContextMenuGlobalCreateCommands(t *testing.T) {
 	}
 
 	app.runGlobalMenuAction("add vm")
-	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID != "vm1" {
+	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID == "" || app.Lab.VMs[0].Name != "vm-1" {
 		t.Fatalf("vms after global add = %#v", app.Lab.VMs)
 	}
 
@@ -4580,13 +4583,13 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		Model: MockModel(),
 		Lab:   loaded,
 		Runtime: &fakeVMRuntime{states: map[string]string{
-			NodeKey(NodeVM, "vm1"):        "running",
-			NodeKey(NodeContainer, "web"): "running",
+			NodeKey(NodeVM, loaded.VMs[0].ID):               "running",
+			NodeKey(NodeContainer, loaded.Containers[0].ID): "running",
 		}},
 		LabPath: path,
 		State:   ViewState{Focus: FocusGraph},
 		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
-			if id != "vm1" {
+			if id != loaded.VMs[0].ID {
 				t.Fatalf("console id = %q", id)
 			}
 			return &fakeConsole{}, "vm console /dev/pts/7", nil
@@ -4618,10 +4621,10 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		t.Fatalf("uplink context menu = %#v", uplinkMenu)
 	}
 
-	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "add vm")
+	app.runMenuAction(Node{ID: loaded.Switches[0].ID, Type: NodeSwitch}, "add vm")
 	foundSwitchVM := false
 	for _, vm := range app.Lab.VMs {
-		if vm.ID != "vm1" && len(vm.Networks) > 0 && vm.Networks[0].Switch == "lan" {
+		if vm.Name != "web server" && len(vm.Networks) > 0 && vm.Networks[0].Switch == loaded.Switches[0].ID {
 			foundSwitchVM = true
 		}
 	}
@@ -4630,18 +4633,18 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 
 	vmNICsBefore := len(app.Lab.VMs[0].Networks)
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "add-nic")
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "add-nic")
 	if len(app.Lab.VMs[0].Networks) != vmNICsBefore+1 {
 		t.Fatalf("vm nics after add-nic = %#v", app.Lab.VMs[0].Networks)
 	}
 
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
-	if !app.State.ConnectMode || app.State.ConnectNodeID != "vm1" || app.State.ConnectNICIndex != "0" {
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
+	if !app.State.ConnectMode || app.State.ConnectNodeID != loaded.VMs[0].ID || app.State.ConnectNICIndex != "0" {
 		t.Fatalf("vm connect-nic state = %#v", app.State)
 	}
 	app.State.ConnectMode = false
 
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "shell")
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "shell")
 	if app.PendingShell == nil {
 		t.Fatal("vm shell did not set pending shell")
 	}
@@ -4654,25 +4657,25 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	app.PendingShell = nil
 
 	containerNICsBefore := len(app.Lab.Containers[0].Networks)
-	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "add-nic")
+	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "add-nic")
 	if len(app.Lab.Containers[0].Networks) != containerNICsBefore+1 {
 		t.Fatalf("container nics after add-nic = %#v", app.Lab.Containers[0].Networks)
 	}
 
-	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
-	if !app.State.ConnectMode || app.State.ConnectNodeID != "web" || app.State.ConnectNICIndex != "0" {
+	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "connect-nic:0")
+	if !app.State.ConnectMode || app.State.ConnectNodeID != loaded.Containers[0].ID || app.State.ConnectNICIndex != "0" {
 		t.Fatalf("container connect-nic state = %#v", app.State)
 	}
 	app.State.ConnectMode = false
 
-	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "shell")
+	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "shell")
 	if app.PendingShell == nil {
 		t.Fatal("container shell did not set pending shell")
 	}
 	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
 		t.Fatalf("container shell started workload %d times", got)
 	}
-	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-web") {
+	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-"+loaded.Containers[0].ID) {
 		t.Fatalf("container shell command = %#v", app.PendingShell)
 	}
 }
@@ -4861,12 +4864,12 @@ func TestConnectNICModeSelectsEndpoint(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
 	if !app.State.ConnectMode {
 		t.Fatalf("connect mode not started: %#v", app.State)
 	}
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "lan" || node.Type != NodeSwitch {
+	if !ok || node.ID != loaded.Switches[0].ID || node.Label != "lan" || node.Type != NodeSwitch {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
@@ -4878,7 +4881,7 @@ func TestConnectNICModeSelectsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.VMs[0].Networks[0].Switch != "lan" {
+	if reloaded.VMs[0].Networks[0].Switch != reloaded.Switches[0].ID {
 		t.Fatalf("vm networks = %#v", reloaded.VMs[0].Networks)
 	}
 }
@@ -4899,12 +4902,12 @@ func TestConnectContainerNICModeSelectsExternalEndpoint(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "connect-nic:0")
+	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "connect-nic:0")
 	if !app.State.ConnectMode {
 		t.Fatalf("connect mode not started: %#v", app.State)
 	}
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+	if !ok || node.Type != NodeExternal {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
@@ -4916,10 +4919,10 @@ func TestConnectContainerNICModeSelectsExternalEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.Containers[0].Networks[0].ExternalLink != "uplink1" {
+	if reloaded.Containers[0].Networks[0].ExternalLink != reloaded.ExternalLinks[0].ID {
 		t.Fatalf("container networks = %#v", reloaded.Containers[0].Networks)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeContainer, "web"), NodeKey(NodeExternal, "uplink1")) {
+	if !hasEdge(app.Model, NodeKey(NodeContainer, reloaded.Containers[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[0].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -4940,12 +4943,12 @@ func TestConnectSwitchModeSelectsExternalEndpoint(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "lan", Type: NodeSwitch}, "connect")
+	app.runMenuAction(Node{ID: loaded.Switches[0].ID, Type: NodeSwitch}, "connect")
 	if !app.State.ConnectMode {
 		t.Fatalf("connect mode not started: %#v", app.State)
 	}
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+	if !ok || node.Type != NodeExternal {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
@@ -4957,10 +4960,10 @@ func TestConnectSwitchModeSelectsExternalEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1"}) {
+	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[0].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -5001,10 +5004,10 @@ func TestSwitchUplinkSubmenuConnectsExistingExternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1"}) {
+	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[0].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -5048,11 +5051,11 @@ func TestSwitchUplinkSubmenuAppendsSecondExternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1", "uplink2"}; !reflect.DeepEqual(got, want) {
+	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID, reloaded.ExternalLinks[1].ID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("switch externalLinks = %#v, want %#v", got, want)
 	}
-	for _, externalID := range []string{"uplink1", "uplink2"} {
-		if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, externalID)) {
+	for _, externalID := range []string{reloaded.ExternalLinks[0].ID, reloaded.ExternalLinks[1].ID} {
+		if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, externalID)) {
 			t.Fatalf("model edges missing %s edge: %#v", externalID, app.Model.Edges)
 		}
 	}
@@ -5093,17 +5096,17 @@ func TestSwitchUplinkSubmenuMultipleExternalsStartsConnectMode(t *testing.T) {
 	if app.State.ContextMenu {
 		t.Fatal("context menu stayed open after starting uplink selection")
 	}
-	if !app.State.ConnectMode || app.State.ConnectNodeType != NodeSwitch || app.State.ConnectNodeID != "lan" {
+	if !app.State.ConnectMode || app.State.ConnectNodeType != NodeSwitch || app.State.ConnectNodeID != loaded.Switches[0].ID {
 		t.Fatalf("connect mode not started for switch: %#v", app.State)
 	}
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "uplink1" || node.Type != NodeExternal {
+	if !ok || node.Type != NodeExternal {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
 	uplink2Index := -1
 	for i, node := range app.Model.Nodes {
-		if node.Type == NodeExternal && node.ID == "uplink2" {
+		if node.Type == NodeExternal && node.ID == loaded.ExternalLinks[1].ID {
 			uplink2Index = i
 			break
 		}
@@ -5121,10 +5124,10 @@ func TestSwitchUplinkSubmenuMultipleExternalsStartsConnectMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink2"}) {
+	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[1].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink2")) {
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[1].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -5257,17 +5260,17 @@ func TestSwitchUplinkSubmenuXDisconnectsExternal(t *testing.T) {
 	if len(reloaded.ExternalLinks) != 2 {
 		t.Fatalf("external link was deleted instead of detached: %#v", reloaded.ExternalLinks)
 	}
-	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink2"}; !reflect.DeepEqual(got, want) {
+	if got, want := lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[1].ID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
-	if hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+	if hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[0].ID)) {
 		t.Fatalf("model still has switch-uplink edge = %#v", app.Model.Edges)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink2")) {
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[1].ID)) {
 		t.Fatalf("model lost remaining switch-uplink edge = %#v", app.Model.Edges)
 	}
 
-	switchNode, ok := nodeByKey(app.Model, NodeKey(NodeSwitch, "lan"))
+	switchNode, ok := nodeByKey(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID))
 	if !ok {
 		t.Fatal("switch node missing after detach")
 	}
@@ -5280,10 +5283,10 @@ func TestSwitchUplinkSubmenuXDisconnectsExternal(t *testing.T) {
 	if !ok || !layout.hasSub || len(layout.sub.items) != 2 {
 		t.Fatalf("switch uplink menu layout after detach = %#v", layout)
 	}
-	if layout.sub.items[1].Label != "Wireguard" || layout.sub.items[1].Action != "uplink:uplink2" {
+	if layout.sub.items[1].Label != "Wireguard" || layout.sub.items[1].Action != "uplink:Wireguard" {
 		t.Fatalf("switch uplink menu item after detach = %#v", layout.sub.items[1])
 	}
-	if switchNode.ID != "lan" {
+	if switchNode.ID != reloaded.Switches[0].ID || switchNode.Label != "lan" {
 		t.Fatalf("switch node = %#v", switchNode)
 	}
 }
@@ -5377,12 +5380,12 @@ func TestConnectExternalModeSelectsSwitchEndpoint(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "uplink1", Type: NodeExternal}, "connect")
+	app.runMenuAction(Node{ID: loaded.ExternalLinks[0].ID, Type: NodeExternal}, "connect")
 	if !app.State.ConnectMode {
 		t.Fatalf("connect mode not started: %#v", app.State)
 	}
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "lan" || node.Type != NodeSwitch {
+	if !ok || node.ID != loaded.Switches[0].ID || node.Label != "lan" || node.Type != NodeSwitch {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
@@ -5394,10 +5397,10 @@ func TestConnectExternalModeSelectsSwitchEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{"uplink1"}) {
+	if !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeSwitch, "lan"), NodeKey(NodeExternal, "uplink1")) {
+	if !hasEdge(app.Model, NodeKey(NodeSwitch, reloaded.Switches[0].ID), NodeKey(NodeExternal, reloaded.ExternalLinks[0].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -5430,7 +5433,7 @@ func TestNICSubmenuNICDetailStartsConnectMode(t *testing.T) {
 	}
 
 	app.handleKey("enter")
-	if !app.State.ConnectMode || app.State.ConnectNodeID != "vm1" || app.State.ConnectNICIndex != "0" {
+	if !app.State.ConnectMode || app.State.ConnectNodeID != loaded.VMs[0].ID || app.State.ConnectNICIndex != "0" {
 		t.Fatalf("nic detail did not start connect mode for nic0: %#v", app.State)
 	}
 	if app.State.ContextMenu {
@@ -5503,7 +5506,7 @@ func TestConnectNICDetachThenEscapeLeavesNICEmpty(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -5548,13 +5551,14 @@ func TestConnectNICModeCreatesDirectWorkloadLink(t *testing.T) {
 	if !app.State.ConnectMode {
 		t.Fatalf("connect mode not started: %#v", app.State)
 	}
+	app.State.Selected = nodeIndexByLabel(t, app.Model, NodeVM, "vm2")
 	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok || node.ID != "vm2" || node.Type != NodeVM {
+	if !ok || node.ID != loaded.VMs[1].ID || node.Label != "vm2" || node.Type != NodeVM {
 		t.Fatalf("selected endpoint = %#v, ok=%t", node, ok)
 	}
 
 	app.handleKey("enter")
-	if !app.State.ConnectMode || !app.State.ConnectTargetMenu || app.State.ConnectTargetID != "vm2" {
+	if !app.State.ConnectMode || !app.State.ConnectTargetMenu || app.State.ConnectTargetID != loaded.VMs[1].ID {
 		t.Fatalf("target nic menu did not open after selecting workload endpoint: %#v", app.State)
 	}
 	app.State.ConnectTargetIndex = 1
@@ -5570,10 +5574,10 @@ func TestConnectNICModeCreatesDirectWorkloadLink(t *testing.T) {
 		t.Fatalf("network links = %#v", reloaded.NetworkLinks)
 	}
 	link := reloaded.NetworkLinks[0]
-	if link.From.Type != "vm" || link.From.ID != "vm1" || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 1 {
+	if link.From.Type != "vm" || link.From.ID != reloaded.VMs[0].ID || link.From.NIC != 0 || link.To.Type != "vm" || link.To.ID != reloaded.VMs[1].ID || link.To.NIC != 1 {
 		t.Fatalf("network link = %#v", link)
 	}
-	if !hasEdge(app.Model, NodeKey(NodeVM, "vm1"), NodeKey(NodeVM, "vm2")) {
+	if !hasEdge(app.Model, NodeKey(NodeVM, reloaded.VMs[0].ID), NodeKey(NodeVM, reloaded.VMs[1].ID)) {
 		t.Fatalf("model edges = %#v", app.Model.Edges)
 	}
 }
@@ -5596,7 +5600,8 @@ func TestConnectNICModeCanCreateTargetNIC(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
+	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
+	app.State.Selected = nodeIndexByLabel(t, app.Model, NodeVM, "vm2")
 	app.handleKey("enter")
 	if !app.State.ConnectTargetMenu {
 		t.Fatalf("target nic menu not open: %#v", app.State)
@@ -5614,7 +5619,7 @@ func TestConnectNICModeCanCreateTargetNIC(t *testing.T) {
 		t.Fatalf("network links = %#v", reloaded.NetworkLinks)
 	}
 	link := reloaded.NetworkLinks[0]
-	if link.To.Type != "vm" || link.To.ID != "vm2" || link.To.NIC != 0 {
+	if link.To.Type != "vm" || link.To.ID != reloaded.VMs[1].ID || link.To.NIC != 0 {
 		t.Fatalf("network link target = %#v", link)
 	}
 }
@@ -5662,4 +5667,15 @@ func hasEdge(m Model, from, to string) bool {
 		}
 	}
 	return false
+}
+
+func nodeIndexByLabel(t *testing.T, m Model, typ, label string) int {
+	t.Helper()
+	for i, node := range m.Nodes {
+		if node.Type == typ && node.Label == label {
+			return i
+		}
+	}
+	t.Fatalf("node %s:%s missing from model: %#v", typ, label, m.Nodes)
+	return -1
 }

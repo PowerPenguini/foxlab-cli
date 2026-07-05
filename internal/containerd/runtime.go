@@ -124,17 +124,37 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 				if nilInterface(task) {
 					return fmt.Errorf("containerd returned nil task handle: %s", name)
 				}
+				recreateForUnhealthyDisk := false
 				status, statusErr := task.Status(ctx)
 				if statusErr == nil && status.Status == containerd.Running {
-					if r.Bridge != nil {
-						if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
-							return err
+					diskHealthy := true
+					if ct.Disk != "" {
+						var healthErr error
+						diskHealthy, healthErr = mountedContainerDiskHealthy(l, ct)
+						if healthErr != nil {
+							return fmt.Errorf("check mounted container disk for %s: %w", name, healthErr)
 						}
 					}
-					return nil
+					if diskHealthy {
+						if r.Bridge != nil {
+							if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
+								return err
+							}
+						}
+						return nil
+					}
+					if err := deleteContainer(ctx, container); err != nil {
+						return fmt.Errorf("delete container with unhealthy disk mount %s: %w", name, err)
+					}
+					if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
+						return fmt.Errorf("cleanup unhealthy container disk mount %s: %w", name, err)
+					}
+					recreateForUnhealthyDisk = true
 				}
-				if err := deleteTask(ctx, task); err != nil {
-					return fmt.Errorf("delete stale task for %s: %w", name, err)
+				if !recreateForUnhealthyDisk {
+					if err := deleteTask(ctx, task); err != nil {
+						return fmt.Errorf("delete stale task for %s: %w", name, err)
+					}
 				}
 			} else if !errdefs.IsNotFound(err) {
 				return err

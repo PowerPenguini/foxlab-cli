@@ -68,26 +68,26 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	if ioSet := process.IO(); ioSet != nil {
 		defer ioSet.Cancel()
 	}
-	defer deleteShellProcess(process)
+	defer deleteShellProcess(namespace, process)
 
-	statusC, err := process.Wait(setupCtx)
+	runCtx := namespaces.WithNamespace(ctx, namespace)
+	statusC, err := process.Wait(runCtx)
 	if err != nil {
 		return err
 	}
 	if err := process.Start(setupCtx); err != nil {
 		return err
 	}
-	runCtx := namespaces.WithNamespace(ctx, namespace)
 	var status containerd.ExitStatus
 	select {
 	case <-exitC:
-		killShellProcess(process, syscall.SIGTERM)
+		killShellProcess(namespace, process, syscall.SIGTERM)
 		select {
 		case <-statusC:
 		case <-runCtx.Done():
 			return runCtx.Err()
 		case <-time.After(2 * time.Second):
-			killShellProcess(process, syscall.SIGKILL)
+			killShellProcess(namespace, process, syscall.SIGKILL)
 			select {
 			case <-statusC:
 			case <-runCtx.Done():
@@ -97,7 +97,7 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 		return nil
 	case status = <-statusC:
 	case <-runCtx.Done():
-		killShellProcess(process, syscall.SIGTERM)
+		deleteShellProcess(namespace, process)
 		return runCtx.Err()
 	}
 	code, _, err := status.Result()
@@ -110,16 +110,21 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	return nil
 }
 
-func killShellProcess(process containerd.Process, signal syscall.Signal) {
+func killShellProcess(namespace string, process containerd.Process, signal syscall.Signal) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	ctx = namespaces.WithNamespace(ctx, namespace)
 	_ = process.Kill(ctx, signal)
 }
 
-func deleteShellProcess(process containerd.Process) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func deleteShellProcess(namespace string, process containerd.Process) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = process.Delete(ctx)
+	ctx = namespaces.WithNamespace(ctx, namespace)
+	if _, err := process.Delete(ctx); err == nil {
+		return
+	}
+	_, _ = process.Delete(ctx, containerd.WithProcessKill)
 }
 
 type shellExitReader struct {

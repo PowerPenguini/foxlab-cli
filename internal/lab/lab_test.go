@@ -25,6 +25,98 @@ func TestValidateRejectsMissingSwitchReference(t *testing.T) {
 	}
 }
 
+func TestNormalizeMigratesLegacyNodeIDsToUUIDs(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		ExternalLinks: []ExternalLink{{
+			ID:        "uplink1",
+			Interface: "br0",
+		}},
+		Switches: []Switch{{
+			ID:           "lan",
+			Mode:         "bridge",
+			ExternalLink: "uplink1",
+		}},
+		VMs: []VM{{
+			ID:       "vm1",
+			MemoryMB: 512,
+			CPUs:     1,
+			Disk:     "disks/vm1.qcow2",
+			Networks: []VMNetwork{{Switch: "lan"}, {}},
+		}},
+		Containers: []Container{{
+			ID:       "web",
+			Image:    "nginx",
+			Disk:     "disks/web.qcow2",
+			Networks: []ContainerNetwork{{ExternalLink: "uplink1"}, {}},
+		}},
+		NetworkLinks: []NetworkLink{{
+			From: NetworkEndpoint{Type: "vm", ID: "vm1", NIC: 1},
+			To:   NetworkEndpoint{Type: "container", ID: "web", NIC: 1},
+		}},
+		Disks: []Disk{{
+			ID:           "web-data",
+			Path:         "disks/web.qcow2",
+			Format:       "qcow2",
+			Kind:         "data",
+			AttachedType: "container",
+			AttachedTo:   "web",
+		}},
+		Layout: Layout{
+			Nodes: map[string]Position{
+				"vm1":     {X: 100, Y: 100},
+				"lan":     {X: 300, Y: 100},
+				"uplink1": {X: 500, Y: 100},
+				"web":     {X: 100, Y: 300},
+			},
+			Links: []LayoutLink{{
+				From: LayoutEndpoint{Type: "vm", ID: "vm1"},
+				To:   LayoutEndpoint{Type: "container", ID: "web"},
+			}},
+		},
+	}
+
+	l.Normalize()
+	if err := l.Validate(); err != nil {
+		t.Fatalf("migrated legacy lab should validate: %v", err)
+	}
+	vmID := l.VMs[0].ID
+	switchID := l.Switches[0].ID
+	externalID := l.ExternalLinks[0].ID
+	containerID := l.Containers[0].ID
+	for label, id := range map[string]string{"vm": vmID, "switch": switchID, "external": externalID, "container": containerID} {
+		if !ValidNodeID(id) {
+			t.Fatalf("%s id = %q, want UUID", label, id)
+		}
+	}
+	if l.VMs[0].Name != "vm1" || l.Switches[0].Name != "lan" || l.ExternalLinks[0].Name != "uplink1" || l.Containers[0].Name != "web" {
+		t.Fatalf("legacy names not preserved: vm=%q switch=%q external=%q container=%q", l.VMs[0].Name, l.Switches[0].Name, l.ExternalLinks[0].Name, l.Containers[0].Name)
+	}
+	if l.VMs[0].Networks[0].Switch != switchID {
+		t.Fatalf("vm switch ref = %q, want %q", l.VMs[0].Networks[0].Switch, switchID)
+	}
+	if l.Containers[0].Networks[0].ExternalLink != externalID {
+		t.Fatalf("container external ref = %q, want %q", l.Containers[0].Networks[0].ExternalLink, externalID)
+	}
+	if got := SwitchExternalLinks(l.Switches[0]); len(got) != 1 || got[0] != externalID {
+		t.Fatalf("switch external refs = %#v, want %q", got, externalID)
+	}
+	if l.NetworkLinks[0].From.ID != vmID || l.NetworkLinks[0].To.ID != containerID {
+		t.Fatalf("network link = %#v, want migrated endpoint ids", l.NetworkLinks[0])
+	}
+	if l.Layout.Links[0].From.ID != vmID || l.Layout.Links[0].To.ID != containerID {
+		t.Fatalf("layout link = %#v, want migrated endpoint ids", l.Layout.Links[0])
+	}
+	for _, id := range []string{vmID, switchID, externalID, containerID} {
+		if _, ok := l.Layout.Nodes[id]; !ok {
+			t.Fatalf("layout node %q missing after migration: %#v", id, l.Layout.Nodes)
+		}
+	}
+	if l.Disks[0].AttachedTo != containerID {
+		t.Fatalf("disk attachedTo = %q, want %q", l.Disks[0].AttachedTo, containerID)
+	}
+}
+
 func TestValidateAcceptsExternalLinks(t *testing.T) {
 	l := &Lab{
 		ID: "demo",
@@ -661,7 +753,10 @@ func TestNormalizeMigratesSwitchExternalLinkToExternalLinks(t *testing.T) {
 	if l.Switches[0].ExternalLink != "" {
 		t.Fatalf("legacy externalLink kept after normalize: %#v", l.Switches[0])
 	}
-	if got, want := SwitchExternalLinks(l.Switches[0]), []string{"uplink2", "uplink1"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if l.ExternalLinks[0].Name != "uplink1" || l.ExternalLinks[1].Name != "uplink2" {
+		t.Fatalf("legacy external names not preserved: %#v", l.ExternalLinks)
+	}
+	if got, want := SwitchExternalLinks(l.Switches[0]), []string{l.ExternalLinks[1].ID, l.ExternalLinks[0].ID}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("switch externalLinks = %#v, want %#v", got, want)
 	}
 	if err := l.Validate(); err != nil {
@@ -725,7 +820,7 @@ func TestValidateRejectsInvalidExternalLinkReferences(t *testing.T) {
 	}
 	for _, want := range []string{
 		`external link "uplink1" interface is required`,
-		`duplicate external link id "uplink1"`,
+		`duplicate external link id "` + l.ExternalLinks[0].ID + `"`,
 		`switch "sw1" references missing external link "missing"`,
 		`vm "vm1" network must not reference both switch and externalLink`,
 		`layout link references missing external link "missing"`,
@@ -821,7 +916,7 @@ func TestValidateRejectsInvalidContainers(t *testing.T) {
 		`container "web" references missing switch "missing"`,
 		`container "web" network must not reference both switch and externalLink`,
 		`container "web" references missing external link "missing-uplink"`,
-		`duplicate container id "web"`,
+		`duplicate container id "` + l.Containers[0].ID + `"`,
 		`layout link references missing container "missing"`,
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -838,8 +933,8 @@ func TestValidateRejectsCrossTypeNodeIDCollision(t *testing.T) {
 	}
 	l.Normalize()
 	err := l.Validate()
-	if err == nil || !strings.Contains(err.Error(), `node id "web" is used by both vm and container`) {
-		t.Fatalf("expected cross-type node id collision error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `duplicate node name "web"`) {
+		t.Fatalf("expected cross-type node name collision error, got %v", err)
 	}
 }
 
@@ -932,8 +1027,11 @@ disks:
 	if loaded.Containers[0].Disk != "/tmp/web-layer.qcow2" {
 		t.Fatalf("container disk = %q", loaded.Containers[0].Disk)
 	}
-	if got := loaded.Disks[1]; got.Kind != "layer" || got.Base != "data" || got.AttachedType != "container" || got.AttachedTo != "web" {
+	if got := loaded.Disks[1]; got.Kind != "layer" || got.Base != "data" || got.AttachedType != "container" || got.AttachedTo != loaded.Containers[0].ID {
 		t.Fatalf("layer disk = %#v", got)
+	}
+	if loaded.Containers[0].Name != "web" {
+		t.Fatalf("container name = %q, want legacy id name", loaded.Containers[0].Name)
 	}
 }
 
@@ -962,11 +1060,14 @@ layout:
 	if err != nil {
 		t.Fatalf("LoadFile returned error: %v", err)
 	}
-	if got := loaded.Layout.Links[0].From; got != (LayoutEndpoint{Type: "vm", ID: "vm1"}) {
+	if got := loaded.Layout.Links[0].From; got != (LayoutEndpoint{Type: "vm", ID: loaded.VMs[0].ID}) {
 		t.Fatalf("from endpoint = %#v, want normalized vm endpoint", got)
 	}
-	if got := loaded.Layout.Links[0].To; got != (LayoutEndpoint{Type: "switch", ID: "lan"}) {
+	if got := loaded.Layout.Links[0].To; got != (LayoutEndpoint{Type: "switch", ID: loaded.Switches[0].ID}) {
 		t.Fatalf("to endpoint = %#v, want normalized switch endpoint", got)
+	}
+	if loaded.VMs[0].Name != "vm1" || loaded.Switches[0].Name != "lan" {
+		t.Fatalf("legacy names not preserved: vm=%q switch=%q", loaded.VMs[0].Name, loaded.Switches[0].Name)
 	}
 }
 

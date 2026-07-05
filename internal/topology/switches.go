@@ -22,7 +22,7 @@ func (s *Service) SwitchCreate(name string, args map[string]string) string {
 		return "switch create failed: " + err.Error()
 	}
 	id := newNodeID()
-	if err := s.validateSwitchConfig(id, mode, externals); err != nil {
+	if err := s.validateSwitchConfig(name, mode, externals); err != nil {
 		return "switch create failed: " + err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -61,7 +61,7 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 			continue
 		}
 		if len(args) == 0 {
-			return "configured switch:" + id
+			return "configured switch:" + s.nodeDisplayName("switch", id)
 		}
 		mode := firstNonEmpty(args["mode"], s.Lab.Switches[i].Mode)
 		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
@@ -70,7 +70,7 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 			return "switch config failed: " + err.Error()
 		}
 		externals = appendSwitchExternalLinks(externals, nextExternalRefs...)
-		if err := s.validateSwitchConfig(id, mode, externals); err != nil {
+		if err := s.validateSwitchConfig(s.nodeDisplayName("switch", id), mode, externals); err != nil {
 			return "switch config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
@@ -99,7 +99,7 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "switch config failed: " + err.Error()
 		}
-		return "configured switch:" + id
+		return "configured switch:" + s.nodeDisplayName("switch", id)
 	}
 	return "switch not found: " + id
 }
@@ -203,6 +203,7 @@ func (s *Service) SwitchDelete(ref string) string {
 	if !ok {
 		return "switch not found: " + ref
 	}
+	name := s.nodeDisplayName("switch", id)
 	if err := s.requireSavePath(); err != nil {
 		return "switch delete failed: " + err.Error()
 	}
@@ -233,5 +234,5 @@ func (s *Service) SwitchDelete(ref string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "switch delete failed: " + err.Error()
 	}
-	return "deleted switch:" + id
+	return "deleted switch:" + name
 }

@@ -12,13 +12,22 @@ import (
 )
 
 type fakeRunner struct {
-	commands []string
-	failAt   string
+	commands      []string
+	failAt        string
+	existingLinks map[string]bool
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) error {
 	command := name + " " + strings.Join(args, " ")
 	f.commands = append(f.commands, command)
+	if strings.HasPrefix(command, "nsenter ") {
+		tokens := strings.Fields(command)
+		if len(tokens) >= 2 && tokens[len(tokens)-2] == "show" {
+			if !f.existingLinks[tokens[len(tokens)-1]] {
+				return fmt.Errorf("missing link: %s", tokens[len(tokens)-1])
+			}
+		}
+	}
 	if f.failAt != "" && strings.Contains(command, f.failAt) {
 		return fmt.Errorf("forced failure: %s", command)
 	}
@@ -45,6 +54,47 @@ func TestAttachContainerPlansBridgeAndVethCommands(t *testing.T) {
 		"master " + l.ManagedSwitchBridgeName(l.Switches[0]),
 		"netns 1234",
 		"nsenter -t 1234 -n ip link set",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestAttachContainerDoesNotRecreateExistingContainerNIC(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		ExternalLinks: []lab.ExternalLink{
+			{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT},
+		},
+		Switches:   []lab.Switch{{ID: "lan", Mode: "nat", ExternalLinks: []string{"uplink1"}}},
+		Containers: []lab.Container{{ID: "web", Image: "nginx", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+	}
+	runner := &fakeRunner{existingLinks: map[string]bool{"eth0": true}}
+	bridge := &Bridge{Runner: runner}
+
+	if err := bridge.AttachContainer(context.Background(), l, l.Containers[0], 1234); err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	for _, forbidden := range []string{
+		"ip link delete",
+		"ip link add",
+		"ip link set v",
+		"netns 1234",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("unexpected recreate command fragment %q in:\n%s", forbidden, joined)
+		}
+	}
+	gateway, _ := switchNATGatewayCIDR(l, l.Switches[0])
+	address := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	for _, want := range []string{
+		"nsenter -t 1234 -n ip link show eth0",
+		"nsenter -t 1234 -n ip link set eth0 up",
+		"nsenter -t 1234 -n ip addr replace " + address + " dev eth0",
+		"nsenter -t 1234 -n ip route replace default via " + gateway + " dev eth0",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected command fragment %q in:\n%s", want, joined)

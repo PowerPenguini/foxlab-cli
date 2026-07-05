@@ -60,7 +60,7 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 		switchRef = s.Lab.Switches[0].ID
 	}
 	id := newNodeID()
-	if err := s.validateVMNetworkRefs(id, switchRef, externalRef); err != nil {
+	if err := s.validateVMNetworkRefs(name, switchRef, externalRef); err != nil {
 		return "create failed: " + err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -107,7 +107,7 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 			return "unsupported vm set argument: " + invalid[0]
 		}
 		if len(args) == 0 {
-			return "configured vm:" + id
+			return "configured " + s.workloadDisplayRef("vm", id)
 		}
 		vncEnabled := false
 		if value, ok := args["vnc"]; ok {
@@ -153,7 +153,7 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 				return "config failed: uplink not found: " + value
 			}
 		}
-		if err := s.validateVMNetworkRefs(id, switchRef, externalRef); err != nil {
+		if err := s.validateVMNetworkRefs(s.nodeDisplayName("vm", id), switchRef, externalRef); err != nil {
 			return "config failed: " + err.Error()
 		}
 		if err := s.requireSavePath(); err != nil {
@@ -192,7 +192,7 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "config failed: " + err.Error()
 		}
-		return "configured vm:" + id
+		return "configured " + s.workloadDisplayRef("vm", id)
 	}
 	return "vm not found: " + id
 }
@@ -223,7 +223,7 @@ func (s *Service) VMDelete(ref string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "delete failed: " + err.Error()
 	}
-	return "deleted vm:" + id
+	return "deleted " + s.workloadDisplayRef("vm", id)
 }
 
 func (s *Service) ContainerCreate(name string, args map[string]string) string {
@@ -263,7 +263,7 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 		switchRef = s.Lab.Switches[0].ID
 	}
 	id := newNodeID()
-	if err := s.validateContainerNetworkRefs(id, switchRef, externalRef); err != nil {
+	if err := s.validateContainerNetworkRefs(name, switchRef, externalRef); err != nil {
 		return "container create failed: " + err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -311,7 +311,7 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 			continue
 		}
 		if len(args) == 0 {
-			return "configured container:" + id
+			return "configured " + s.workloadDisplayRef("container", id)
 		}
 		if err := validateNICMACArg("container nic", args["mac"]); err != nil {
 			return err.Error()
@@ -332,7 +332,7 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 				return "container config failed: uplink not found: " + value
 			}
 		}
-		if err := s.validateContainerNetworkRefs(id, switchRef, externalRef); err != nil {
+		if err := s.validateContainerNetworkRefs(s.nodeDisplayName("container", id), switchRef, externalRef); err != nil {
 			return "container config failed: " + err.Error()
 		}
 		if err := s.requireSavePath(); err != nil {
@@ -370,7 +370,7 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container config failed: " + err.Error()
 		}
-		return "configured container:" + id
+		return "configured " + s.workloadDisplayRef("container", id)
 	}
 	return "container not found: " + id
 }
@@ -401,5 +401,5 @@ func (s *Service) ContainerDelete(ref string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "container delete failed: " + err.Error()
 	}
-	return "deleted container:" + id
+	return "deleted " + s.workloadDisplayRef("container", id)
 }

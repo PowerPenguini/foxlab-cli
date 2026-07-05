@@ -26,7 +26,7 @@ func (s *Service) activateContainerDataDisk(disk lab.Disk, targetID string) stri
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "disk attach failed: " + err.Error()
 	}
-	return "attached disk:" + disk.ID + " to container:" + targetID
+	return "attached disk:" + disk.ID + " to " + s.workloadDisplayRef("container", targetID)
 }
 
 func (s *Service) activateContainerBaseDisk(disk lab.Disk, targetID string) string {
@@ -54,7 +54,7 @@ func (s *Service) activateBaseDisk(disk lab.Disk, targetType, targetID string) s
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "disk attach failed: " + err.Error()
 	}
-	return "attached disk:" + disk.ID + " to " + targetType + ":" + targetID
+	return "attached disk:" + disk.ID + " to " + s.workloadDisplayRef(targetType, targetID)
 }
 
 func (s *Service) activateDiskLayer(id string, disk lab.Disk, targetType, targetID string) string {
@@ -82,7 +82,7 @@ func (s *Service) activateDiskLayer(id string, disk lab.Disk, targetType, target
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "disk attach failed: " + err.Error()
 	}
-	return "attached disk:" + id + " to " + targetType + ":" + targetID
+	return "attached disk:" + id + " to " + s.workloadDisplayRef(targetType, targetID)
 }
 
 func (s *Service) detachActiveDisk(targetType, targetID string) {

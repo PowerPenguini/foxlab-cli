@@ -105,5 +105,10 @@ func (s *Service) diskAttachedRunning(disk lab.Disk) bool {
 	}
 	key := workload.Key(workload.Ref{Type: disk.AttachedType, ID: disk.AttachedTo})
 	state := strings.ToLower(s.States[key])
+	if state == "" {
+		name := s.nodeDisplayName(disk.AttachedType, disk.AttachedTo)
+		key = workload.Key(workload.Ref{Type: disk.AttachedType, ID: name})
+		state = strings.ToLower(s.States[key])
+	}
 	return state == "running"
 }

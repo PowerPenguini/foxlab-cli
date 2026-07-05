@@ -247,6 +247,15 @@ func nodeByKey(m Model, key string) (Node, bool) {
 			return node, true
 		}
 	}
+	typ, id, ok := strings.Cut(key, ":")
+	if !ok {
+		return Node{}, false
+	}
+	for _, node := range m.Nodes {
+		if node.Type == typ && node.Label == id {
+			return node, true
+		}
+	}
 	return Node{}, false
 }
 

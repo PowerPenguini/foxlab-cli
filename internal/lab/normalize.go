@@ -3,6 +3,8 @@ package lab
 import (
 	"net"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 func (l *Lab) Normalize() {
@@ -86,6 +88,175 @@ func (l *Lab) Normalize() {
 		l.Disks[i].AttachedType = strings.ToLower(strings.TrimSpace(l.Disks[i].AttachedType))
 		l.Disks[i].AttachedTo = strings.TrimSpace(l.Disks[i].AttachedTo)
 		l.Disks[i].MountPath = strings.TrimSpace(l.Disks[i].MountPath)
+	}
+	l.migrateLegacyNodeIDs()
+}
+
+func (l *Lab) migrateLegacyNodeIDs() {
+	if l == nil {
+		return
+	}
+	switchIDs := map[string]string{}
+	externalIDs := map[string]string{}
+	vmIDs := map[string]string{}
+	containerIDs := map[string]string{}
+	for i := range l.Switches {
+		old := l.Switches[i].ID
+		next := legacyNodeUUID(l.ID, "switch", old)
+		if next == old {
+			continue
+		}
+		if l.Switches[i].Name == "" {
+			l.Switches[i].Name = old
+		}
+		l.Switches[i].ID = next
+		switchIDs[old] = next
+	}
+	for i := range l.ExternalLinks {
+		old := l.ExternalLinks[i].ID
+		next := legacyNodeUUID(l.ID, "external", old)
+		if next == old {
+			continue
+		}
+		if l.ExternalLinks[i].Name == "" {
+			l.ExternalLinks[i].Name = old
+		}
+		l.ExternalLinks[i].ID = next
+		externalIDs[old] = next
+	}
+	for i := range l.VMs {
+		old := l.VMs[i].ID
+		next := legacyNodeUUID(l.ID, "vm", old)
+		if next == old {
+			continue
+		}
+		if l.VMs[i].Name == "" {
+			l.VMs[i].Name = old
+		}
+		l.VMs[i].ID = next
+		vmIDs[old] = next
+	}
+	for i := range l.Containers {
+		old := l.Containers[i].ID
+		next := legacyNodeUUID(l.ID, "container", old)
+		if next == old {
+			continue
+		}
+		if l.Containers[i].Name == "" {
+			l.Containers[i].Name = old
+		}
+		l.Containers[i].ID = next
+		containerIDs[old] = next
+	}
+	for i := range l.Switches {
+		for j := range l.Switches[i].ExternalLinks {
+			if next, ok := externalIDs[l.Switches[i].ExternalLinks[j]]; ok {
+				l.Switches[i].ExternalLinks[j] = next
+			}
+		}
+		if next, ok := externalIDs[l.Switches[i].ExternalLink]; ok {
+			l.Switches[i].ExternalLink = next
+		}
+	}
+	for i := range l.VMs {
+		for j := range l.VMs[i].Networks {
+			if next, ok := switchIDs[l.VMs[i].Networks[j].Switch]; ok {
+				l.VMs[i].Networks[j].Switch = next
+			}
+			if next, ok := externalIDs[l.VMs[i].Networks[j].ExternalLink]; ok {
+				l.VMs[i].Networks[j].ExternalLink = next
+			}
+		}
+	}
+	for i := range l.Containers {
+		for j := range l.Containers[i].Networks {
+			if next, ok := switchIDs[l.Containers[i].Networks[j].Switch]; ok {
+				l.Containers[i].Networks[j].Switch = next
+			}
+			if next, ok := externalIDs[l.Containers[i].Networks[j].ExternalLink]; ok {
+				l.Containers[i].Networks[j].ExternalLink = next
+			}
+		}
+	}
+	for i := range l.NetworkLinks {
+		migrateLegacyEndpointID(&l.NetworkLinks[i].From, vmIDs, containerIDs)
+		migrateLegacyEndpointID(&l.NetworkLinks[i].To, vmIDs, containerIDs)
+	}
+	if l.Layout.Nodes != nil {
+		nextNodes := make(map[string]Position, len(l.Layout.Nodes))
+		for id, position := range l.Layout.Nodes {
+			switch {
+			case vmIDs[id] != "":
+				nextNodes[vmIDs[id]] = position
+			case switchIDs[id] != "":
+				nextNodes[switchIDs[id]] = position
+			case externalIDs[id] != "":
+				nextNodes[externalIDs[id]] = position
+			case containerIDs[id] != "":
+				nextNodes[containerIDs[id]] = position
+			default:
+				nextNodes[id] = position
+			}
+		}
+		l.Layout.Nodes = nextNodes
+	}
+	for i := range l.Layout.Links {
+		migrateLegacyLayoutEndpointID(&l.Layout.Links[i].From, vmIDs, switchIDs, externalIDs, containerIDs)
+		migrateLegacyLayoutEndpointID(&l.Layout.Links[i].To, vmIDs, switchIDs, externalIDs, containerIDs)
+	}
+	for i := range l.Disks {
+		switch l.Disks[i].AttachedType {
+		case "vm":
+			if next, ok := vmIDs[l.Disks[i].AttachedTo]; ok {
+				l.Disks[i].AttachedTo = next
+			}
+		case "container":
+			if next, ok := containerIDs[l.Disks[i].AttachedTo]; ok {
+				l.Disks[i].AttachedTo = next
+			}
+		}
+	}
+}
+
+func legacyNodeUUID(labID, kind, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || validNodeID(id) {
+		return id
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(labID+"|"+kind+"|"+id)).String()
+}
+
+func migrateLegacyEndpointID(endpoint *NetworkEndpoint, vmIDs, containerIDs map[string]string) {
+	switch endpoint.Type {
+	case "vm":
+		if next, ok := vmIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
+	case "container":
+		if next, ok := containerIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
+	}
+}
+
+func migrateLegacyLayoutEndpointID(endpoint *LayoutEndpoint, vmIDs, switchIDs, externalIDs, containerIDs map[string]string) {
+	switch endpoint.Type {
+	case "vm":
+		if next, ok := vmIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
+	case "switch":
+		if next, ok := switchIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
+	case "external":
+		if next, ok := externalIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
+	case "container":
+		if next, ok := containerIDs[endpoint.ID]; ok {
+			endpoint.ID = next
+		}
 	}
 }
 

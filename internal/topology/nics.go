@@ -32,7 +32,7 @@ func (s *Service) VMNICAdd(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic add failed: " + err.Error()
 		}
-		return "added nic to vm:" + id
+		return "added nic to " + s.workloadDisplayRef("vm", id)
 	}
 	return "vm not found: " + id
 }
@@ -79,7 +79,7 @@ func (s *Service) VMNICConnect(ref, indexValue string, args map[string]string) s
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic connect failed: " + err.Error()
 		}
-		return "connected nic to vm:" + id
+		return "connected nic to " + s.workloadDisplayRef("vm", id)
 	}
 	return "vm not found: " + id
 }
@@ -112,7 +112,7 @@ func (s *Service) VMNICDelete(ref, indexValue string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "nic delete failed: " + err.Error()
 		}
-		return "deleted nic from vm:" + id + " nic" + indexValue
+		return "deleted nic from " + s.workloadDisplayRef("vm", id) + " nic" + indexValue
 	}
 	return "vm not found: " + id
 }
@@ -143,7 +143,7 @@ func (s *Service) ContainerNICAdd(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic add failed: " + err.Error()
 		}
-		return "added nic to container:" + id
+		return "added nic to " + s.workloadDisplayRef("container", id)
 	}
 	return "container not found: " + id
 }
@@ -190,7 +190,7 @@ func (s *Service) ContainerNICConnect(ref, indexValue string, args map[string]st
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic connect failed: " + err.Error()
 		}
-		return "connected nic to container:" + id
+		return "connected nic to " + s.workloadDisplayRef("container", id)
 	}
 	return "container not found: " + id
 }
@@ -223,7 +223,7 @@ func (s *Service) ContainerNICDelete(ref, indexValue string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container nic delete failed: " + err.Error()
 		}
-		return "deleted nic from container:" + id + " nic" + indexValue
+		return "deleted nic from " + s.workloadDisplayRef("container", id) + " nic" + indexValue
 	}
 	return "container not found: " + id
 }

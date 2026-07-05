@@ -23,6 +23,7 @@ func (l *Lab) Validate() error {
 	nodeNames := map[string]string{}
 	switchIDs := map[string]struct{}{}
 	for _, sw := range l.Switches {
+		swRef := displayNodeRef(sw.ID, sw.Name)
 		if !validNodeID(sw.ID) {
 			problems = append(problems, fmt.Sprintf("switch %q has non-UUID id", sw.ID))
 		}
@@ -32,15 +33,16 @@ func (l *Lab) Validate() error {
 		}
 		switchIDs[sw.ID] = struct{}{}
 		if sw.Mode != "bridge" && sw.Mode != "nat" && sw.Mode != "macnat-bridge" {
-			problems = append(problems, fmt.Sprintf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", sw.ID, sw.Mode))
+			problems = append(problems, fmt.Sprintf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", swRef, sw.Mode))
 		}
 		if sw.Mode == "macnat-bridge" && len(SwitchExternalLinks(sw)) == 0 {
-			problems = append(problems, fmt.Sprintf("switch %q macnat-bridge mode requires externalLinks", sw.ID))
+			problems = append(problems, fmt.Sprintf("switch %q macnat-bridge mode requires externalLinks", swRef))
 		}
 	}
 
 	externalLinkIDs := map[string]struct{}{}
 	for _, link := range l.ExternalLinks {
+		linkRef := displayNodeRef(link.ID, link.Name)
 		if !validNodeID(link.ID) {
 			problems = append(problems, fmt.Sprintf("external link %q has non-UUID id", link.ID))
 		}
@@ -50,23 +52,26 @@ func (l *Lab) Validate() error {
 		}
 		externalLinkIDs[link.ID] = struct{}{}
 		if link.Interface == "" {
-			problems = append(problems, fmt.Sprintf("external link %q interface is required", link.ID))
+			problems = append(problems, fmt.Sprintf("external link %q interface is required", linkRef))
 		}
 		if !validExternalMode(link.Mode) {
-			problems = append(problems, fmt.Sprintf("external link %q uses unsupported mode %q; supported modes are nat, direct and macnat", link.ID, link.Mode))
+			problems = append(problems, fmt.Sprintf("external link %q uses unsupported mode %q; supported modes are nat, direct and macnat", linkRef, link.Mode))
 		}
 	}
 
 	for _, sw := range l.Switches {
+		swRef := displayNodeRef(sw.ID, sw.Name)
 		for _, externalID := range SwitchExternalLinks(sw) {
 			if _, ok := externalLinkIDs[externalID]; !ok {
-				problems = append(problems, fmt.Sprintf("switch %q references missing external link %q", sw.ID, externalID))
+				problems = append(problems, fmt.Sprintf("switch %q references missing external link %q", swRef, externalID))
 			}
 		}
 	}
 
 	vmIDs := map[string]struct{}{}
+	vmNames := map[string]string{}
 	for _, vm := range l.VMs {
+		vmRef := displayNodeRef(vm.ID, vm.Name)
 		if !validNodeID(vm.ID) {
 			problems = append(problems, fmt.Sprintf("vm %q has non-UUID id", vm.ID))
 		}
@@ -75,40 +80,43 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("duplicate vm id %q", vm.ID))
 		}
 		vmIDs[vm.ID] = struct{}{}
+		vmNames[vm.ID] = vmRef
 		if vm.MemoryMB <= 0 {
-			problems = append(problems, fmt.Sprintf("vm %q memoryMB must be greater than zero", vm.ID))
+			problems = append(problems, fmt.Sprintf("vm %q memoryMB must be greater than zero", vmRef))
 		}
 		if vm.CPUs <= 0 {
-			problems = append(problems, fmt.Sprintf("vm %q cpus must be greater than zero", vm.ID))
+			problems = append(problems, fmt.Sprintf("vm %q cpus must be greater than zero", vmRef))
 		}
 		if !validDesiredState(vm.DesiredState) {
-			problems = append(problems, fmt.Sprintf("vm %q desiredState must be running or stopped", vm.ID))
+			problems = append(problems, fmt.Sprintf("vm %q desiredState must be running or stopped", vmRef))
 		}
 		for _, nic := range vm.Networks {
 			if !validMAC(nic.MAC) {
-				problems = append(problems, fmt.Sprintf("vm %q network mac %q is invalid", vm.ID, nic.MAC))
+				problems = append(problems, fmt.Sprintf("vm %q network mac %q is invalid", vmRef, nic.MAC))
 			}
 			switchRef := nic.Switch != ""
 			externalRef := nic.ExternalLink != ""
 			if switchRef && externalRef {
-				problems = append(problems, fmt.Sprintf("vm %q network must not reference both switch and externalLink", vm.ID))
+				problems = append(problems, fmt.Sprintf("vm %q network must not reference both switch and externalLink", vmRef))
 				continue
 			}
 			if switchRef {
 				if _, ok := switchIDs[nic.Switch]; !ok {
-					problems = append(problems, fmt.Sprintf("vm %q references missing switch %q", vm.ID, nic.Switch))
+					problems = append(problems, fmt.Sprintf("vm %q references missing switch %q", vmRef, nic.Switch))
 				}
 			}
 			if externalRef {
 				if _, ok := externalLinkIDs[nic.ExternalLink]; !ok {
-					problems = append(problems, fmt.Sprintf("vm %q references missing external link %q", vm.ID, nic.ExternalLink))
+					problems = append(problems, fmt.Sprintf("vm %q references missing external link %q", vmRef, nic.ExternalLink))
 				}
 			}
 		}
 	}
 
 	containerIDs := map[string]struct{}{}
+	containerNames := map[string]string{}
 	for _, ct := range l.Containers {
+		ctRef := displayNodeRef(ct.ID, ct.Name)
 		if !validNodeID(ct.ID) {
 			problems = append(problems, fmt.Sprintf("container %q has non-UUID id", ct.ID))
 		}
@@ -117,30 +125,31 @@ func (l *Lab) Validate() error {
 			problems = append(problems, fmt.Sprintf("duplicate container id %q", ct.ID))
 		}
 		containerIDs[ct.ID] = struct{}{}
+		containerNames[ct.ID] = ctRef
 		if ct.Image == "" {
-			problems = append(problems, fmt.Sprintf("container %q image is required", ct.ID))
+			problems = append(problems, fmt.Sprintf("container %q image is required", ctRef))
 		}
 		if !validDesiredState(ct.DesiredState) {
-			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ct.ID))
+			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ctRef))
 		}
 		for _, nic := range ct.Networks {
 			if !validMAC(nic.MAC) {
-				problems = append(problems, fmt.Sprintf("container %q network mac %q is invalid", ct.ID, nic.MAC))
+				problems = append(problems, fmt.Sprintf("container %q network mac %q is invalid", ctRef, nic.MAC))
 			}
 			switchRef := nic.Switch != ""
 			externalRef := nic.ExternalLink != ""
 			if switchRef && externalRef {
-				problems = append(problems, fmt.Sprintf("container %q network must not reference both switch and externalLink", ct.ID))
+				problems = append(problems, fmt.Sprintf("container %q network must not reference both switch and externalLink", ctRef))
 				continue
 			}
 			if switchRef {
 				if _, ok := switchIDs[nic.Switch]; !ok {
-					problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ct.ID, nic.Switch))
+					problems = append(problems, fmt.Sprintf("container %q references missing switch %q", ctRef, nic.Switch))
 				}
 			}
 			if externalRef {
 				if _, ok := externalLinkIDs[nic.ExternalLink]; !ok {
-					problems = append(problems, fmt.Sprintf("container %q references missing external link %q", ct.ID, nic.ExternalLink))
+					problems = append(problems, fmt.Sprintf("container %q references missing external link %q", ctRef, nic.ExternalLink))
 				}
 			}
 		}
@@ -234,15 +243,16 @@ func (l *Lab) Validate() error {
 			continue
 		}
 		key := disk.AttachedType + ":" + disk.AttachedTo
+		displayKey := workloadDisplayRef(disk.AttachedType, disk.AttachedTo, vmNames, containerNames)
 		if existing, exists := attachedDisks[key]; exists {
-			problems = append(problems, fmt.Sprintf("disks %q and %q are both attached to %s", existing, disk.ID, key))
+			problems = append(problems, fmt.Sprintf("disks %q and %q are both attached to %s", existing, disk.ID, displayKey))
 			continue
 		}
 		attachedDisks[key] = disk.ID
 		if workloadDisk := l.attachedWorkloadDiskPath(disk.AttachedType, disk.AttachedTo); workloadDisk == "" {
-			problems = append(problems, fmt.Sprintf("disk %q is attached to %s but workload disk is empty", disk.ID, key))
+			problems = append(problems, fmt.Sprintf("disk %q is attached to %s but workload disk is empty", disk.ID, displayKey))
 		} else if l.ResolvePath(workloadDisk) != l.ResolvePath(disk.Path) {
-			problems = append(problems, fmt.Sprintf("disk %q attachment path does not match %s disk", disk.ID, key))
+			problems = append(problems, fmt.Sprintf("disk %q attachment path does not match %s disk", disk.ID, displayKey))
 		}
 	}
 
@@ -361,6 +371,27 @@ func validateNodeName(kind, id, name string, seen map[string]string) []string {
 	}
 	seen[name] = kind + " " + id
 	return nil
+}
+
+func displayNodeRef(id, name string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	return id
+}
+
+func workloadDisplayRef(kind, id string, vmNames, containerNames map[string]string) string {
+	switch kind {
+	case "vm":
+		if name := vmNames[id]; name != "" {
+			return "vm:" + name
+		}
+	case "container":
+		if name := containerNames[id]; name != "" {
+			return "container:" + name
+		}
+	}
+	return kind + ":" + id
 }
 
 func normalizedDiskKind(disk Disk) string {

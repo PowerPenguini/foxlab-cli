@@ -126,8 +126,16 @@ func removeSocketFile(path string) error {
 }
 
 func prepareSocketDir(dir string) error {
+	_, statErr := os.Stat(dir)
+	created := os.IsNotExist(statErr)
+	if statErr != nil && !created {
+		return statErr
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	if !created {
+		return nil
 	}
 	if os.Geteuid() == 0 {
 		chownPathForSudoUser(dir)

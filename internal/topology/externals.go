@@ -21,7 +21,7 @@ func (s *Service) ExternalCreate(name string, args map[string]string) string {
 	}
 	mode := firstNonEmpty(args["mode"], lab.ExternalModeNAT)
 	id := newNodeID()
-	if err := validateExternalConfig(id, mode); err != nil {
+	if err := validateExternalConfig(name, mode); err != nil {
 		return "uplink create failed: " + err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
@@ -60,10 +60,10 @@ func (s *Service) ExternalSet(ref string, args map[string]string) string {
 			continue
 		}
 		if len(args) == 0 {
-			return "configured uplink:" + id
+			return "configured uplink:" + s.nodeDisplayName("uplink", id)
 		}
 		mode := firstNonEmpty(args["mode"], s.Lab.ExternalLinks[i].Mode)
-		if err := validateExternalConfig(id, mode); err != nil {
+		if err := validateExternalConfig(s.nodeDisplayName("uplink", id), mode); err != nil {
 			return "uplink config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
@@ -91,7 +91,7 @@ func (s *Service) ExternalSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "uplink config failed: " + err.Error()
 		}
-		return "configured uplink:" + id
+		return "configured uplink:" + s.nodeDisplayName("uplink", id)
 	}
 	return "uplink not found: " + id
 }
@@ -150,5 +150,5 @@ func (s *Service) ExternalDelete(ref string) string {
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "uplink delete failed: " + err.Error()
 	}
-	return "deleted uplink:" + id
+	return "deleted uplink:" + s.nodeDisplayName("uplink", id)
 }

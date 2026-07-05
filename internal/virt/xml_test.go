@@ -36,10 +36,10 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"<name>foxlab-demo-vm1</name>",
+		"<name>" + l.ManagedDomainName(l.VMs[0]) + "</name>",
 		`<source file="` + diskPath + `"/>`,
 		`<interface type="bridge">`,
-		`<source bridge="flfoxlabdemosw1"/>`,
+		`<source bridge="` + l.ManagedSwitchBridgeName(l.Switches[0]) + `"/>`,
 		`<graphics type="vnc"`,
 		`<model type="virtio" heads="1" primary="yes"/>`,
 		`<serial type="pty">`,
@@ -52,7 +52,7 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
 		}
 	}
-	if strings.Contains(xmlText, `<source network="foxlab-demo-sw1"/>`) {
+	if strings.Contains(xmlText, `<source network="`+l.ManagedNetworkName(l.Switches[0])+`"/>`) {
 		t.Fatalf("domain XML still uses libvirt network for switch NIC:\n%s", xmlText)
 	}
 }
@@ -158,7 +158,7 @@ func TestDomainXMLUsesGeneratedMACForMacNATExternalLink(t *testing.T) {
 	}
 	for _, want := range []string{
 		`<source bridge="` + l.ManagedExternalBridgeName(l.ExternalLinks[0]) + `"/>`,
-		`<mac address="` + l.GeneratedNICMAC("vm", "vm1", 0) + `"/>`,
+		`<mac address="` + l.GeneratedNICMAC("vm", l.VMs[0].ID, 0) + `"/>`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
@@ -228,8 +228,8 @@ func TestNetworkXMLUsesManagedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"<name>foxlab-demo-sw1</name>",
-		`lab="demo" id="sw1" kind="network"`,
+		"<name>" + l.ManagedNetworkName(l.Switches[0]) + "</name>",
+		`lab="demo" id="` + l.Switches[0].ID + `" kind="network"`,
 		`<forward mode="nat"/>`,
 	} {
 		if !strings.Contains(xmlText, want) {

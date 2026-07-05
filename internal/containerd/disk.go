@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"foxlab-cli/internal/lab"
 )
@@ -37,15 +39,17 @@ const containerDiskSourceMarker = ".foxlab-disk-source"
 const containerImageSourceMarker = ".foxlab-image-source"
 
 var containerDiskHooks = struct {
-	requireTools func() error
-	mountSource  func(string) (bool, string, error)
-	rootWritable func(string) bool
-	freeNBD      func() (string, error)
+	requireTools  func() error
+	mountSource   func(string) (bool, string, error)
+	rootWritable  func(string) bool
+	sourceHealthy func(string) bool
+	freeNBD       func() (string, error)
 }{
-	requireTools: requireContainerDiskTools,
-	mountSource:  mountSource,
-	rootWritable: containerRootFSWritable,
-	freeNBD:      freeNBDDevice,
+	requireTools:  requireContainerDiskTools,
+	mountSource:   mountSource,
+	rootWritable:  containerRootFSWritable,
+	sourceHealthy: containerDiskSourceHealthy,
+	freeNBD:       freeNBDDevice,
 }
 
 func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container, imageRef, address, namespace string) (containerDiskMount, error) {
@@ -64,7 +68,7 @@ func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 	if mounted, source, err := containerDiskHooks.mountSource(mountPath); err != nil {
 		return containerDiskMount{}, err
 	} else if mounted {
-		if !containerDiskHooks.rootWritable(mountPath) {
+		if !mountedContainerDiskUsable(mountPath, source) {
 			if err := cleanupMountedContainerDiskMount(ctx, mountPath, source); err != nil {
 				return containerDiskMount{}, fmt.Errorf("reset unusable container disk mount: %w", err)
 			}
@@ -92,8 +96,12 @@ func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 	if err != nil {
 		return containerDiskMount{}, err
 	}
-	if err := runHostCommand(ctx, "qemu-nbd", "--connect="+device, diskPath); err != nil {
+	if err := connectContainerDisk(ctx, device, diskPath); err != nil {
 		return containerDiskMount{}, fmt.Errorf("connect container disk: %w", err)
+	}
+	if err := waitContainerDiskReady(ctx, device); err != nil {
+		_ = runHostCommand(ctx, "qemu-nbd", "--disconnect", device)
+		return containerDiskMount{}, fmt.Errorf("wait for container disk: %w", err)
 	}
 	if err := mountContainerDisk(ctx, device, mountPath); err != nil {
 		_ = runHostCommand(ctx, "qemu-nbd", "--disconnect", device)
@@ -249,6 +257,44 @@ func containerRootFSWritable(path string) bool {
 	return true
 }
 
+func mountedContainerDiskUsable(mountPath, source string) bool {
+	return containerDiskHooks.rootWritable(mountPath) && containerDiskHooks.sourceHealthy(source)
+}
+
+func containerDiskSourceHealthy(source string) bool {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return false
+	}
+	f, err := os.Open(source)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 4096)
+	n, err := f.ReadAt(buf, 0)
+	return err == nil || (err == io.EOF && n > 0)
+}
+
+func mountedContainerDiskHealthy(l *lab.Lab, ct lab.Container) (bool, error) {
+	mountPath, err := containerDiskMountPath(l, ct)
+	if err != nil {
+		return false, err
+	}
+	mounted, source, err := containerDiskHooks.mountSource(mountPath)
+	if err != nil || !mounted {
+		return false, err
+	}
+	mountedDiskPath, ok := mountedContainerDiskSource(mountPath)
+	if !ok {
+		return false, nil
+	}
+	if mountedDiskPath != filepath.Clean(l.ResolvePath(ct.Disk)) {
+		return false, nil
+	}
+	return mountedContainerDiskUsable(mountPath, source), nil
+}
+
 func mountedContainerDiskSource(mountPath string) (string, bool) {
 	data, err := os.ReadFile(containerDiskSourceMarkerPath(mountPath))
 	if err != nil {
@@ -272,6 +318,58 @@ func containerDiskHasFilesystem(ctx context.Context, device string) bool {
 func isUnformattedDiskMountError(err error) bool {
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "wrong fs type") || strings.Contains(text, "bad superblock")
+}
+
+func connectContainerDisk(ctx context.Context, device, diskPath string) error {
+	if _, err := lookPath("systemd-run"); err == nil {
+		args := []string{
+			"--scope",
+			"--collect",
+			"--quiet",
+			"--unit", containerDiskScopeUnit(device),
+			"qemu-nbd",
+			"--fork",
+			"--connect=" + device,
+			diskPath,
+		}
+		if err := runHostCommand(ctx, "systemd-run", args...); err == nil {
+			return nil
+		}
+	}
+	return runHostCommand(ctx, "qemu-nbd", "--fork", "--connect="+device, diskPath)
+}
+
+func waitContainerDiskReady(ctx context.Context, device string) error {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if containerDiskHooks.sourceHealthy(device) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("%s did not become readable", device)
+		case <-ticker.C:
+		}
+	}
+}
+
+func containerDiskScopeUnit(device string) string {
+	base := filepath.Base(strings.TrimSpace(device))
+	clean := strings.Builder{}
+	for _, ch := range base {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
+			clean.WriteRune(ch)
+		}
+	}
+	if clean.Len() == 0 {
+		return "foxlab-nbd-device"
+	}
+	return "foxlab-nbd-" + clean.String()
 }
 
 func cleanupMountedContainerDiskMount(ctx context.Context, mountPath, source string) error {

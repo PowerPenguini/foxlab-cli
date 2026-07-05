@@ -162,6 +162,7 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 		}
 		return false
 	}
+	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
 	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
 	t.Cleanup(func() { containerDiskHooks = oldHooks })
 	restore := stubRunHostCommand(t, func(name string, args ...string) error {
@@ -188,7 +189,7 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 		"umount " + mountPath,
 		"qemu-nbd --disconnect /dev/nbd0",
 		"modprobe nbd max_part=16",
-		"qemu-nbd --connect=/dev/nbd1 " + diskPath,
+		testNBDConnectCommand("/dev/nbd1", diskPath),
 		"mount /dev/nbd1 " + mountPath,
 		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
 		"mount -t overlay overlay -o " + overlayOptions + " " + mergedPath,
@@ -236,6 +237,7 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 		}
 	}
 	containerDiskHooks.rootWritable = func(path string) bool { return true }
+	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
 	containerDiskHooks.freeNBD = func() (string, error) {
 		t.Fatal("freeNBD called for matching mounted disk")
 		return "", nil
@@ -257,6 +259,86 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 		t.Fatalf("mount = %#v, want reused disk preserved and overlay cleaned on start failure", mount)
 	}
 	want := []string{
+		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
+		"mount -t overlay overlay -o " + overlayOptions + " " + mergedPath,
+	}
+	if !reflect.DeepEqual(testCommands(t), want) {
+		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	}
+}
+
+func TestPrepareContainerDiskMountReplacesMountWhenSourceUnhealthy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SUDO_USER", "")
+	diskPath := filepath.Join(t.TempDir(), "web.qcow2")
+	if err := os.WriteFile(diskPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := &lab.Lab{ID: "demo"}
+	ct := lab.Container{ID: "web", Disk: diskPath}
+	root, err := l.StorageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mountPath := filepath.Join(root, "container-data", "web")
+	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
+	mergedPath := filepath.Join(mountPath, "merged")
+	overlayOptions := "lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work")
+	if err := os.MkdirAll(mountPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeContainerDiskSourceMarker(mountPath, diskPath); err != nil {
+		t.Fatal(err)
+	}
+
+	oldHooks := containerDiskHooks
+	containerDiskHooks.requireTools = func() error { return nil }
+	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+		switch path {
+		case mountPath:
+			return true, "/dev/nbd0", nil
+		case lowerPath, mergedPath:
+			return false, "", nil
+		default:
+			t.Fatalf("unexpected mountSource path = %q", path)
+			return false, "", nil
+		}
+	}
+	containerDiskHooks.rootWritable = func(path string) bool { return true }
+	containerDiskHooks.sourceHealthy = func(source string) bool {
+		switch source {
+		case "/dev/nbd0":
+			return false
+		case "/dev/nbd1":
+			return true
+		default:
+			t.Fatalf("unexpected sourceHealthy source = %q", source)
+			return false
+		}
+	}
+	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+		return nil
+	})
+	defer restore()
+
+	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mount.Source != mergedPath || mount.Destination != "/" {
+		t.Fatalf("mount = %#v, want source %q destination /", mount, mergedPath)
+	}
+	if !mount.CleanupDiskOnFailure || !mount.CleanupOverlayOnFailure {
+		t.Fatalf("mount = %#v, want cleanup on failure for replaced unhealthy disk mount and overlay", mount)
+	}
+	want := []string{
+		"umount " + mountPath,
+		"qemu-nbd --disconnect /dev/nbd0",
+		"modprobe nbd max_part=16",
+		testNBDConnectCommand("/dev/nbd1", diskPath),
+		"mount /dev/nbd1 " + mountPath,
 		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
 		"mount -t overlay overlay -o " + overlayOptions + " " + mergedPath,
 	}
@@ -300,6 +382,7 @@ func TestPrepareContainerDiskMountReplacesWritableMountWithoutMarker(t *testing.
 		}
 	}
 	containerDiskHooks.rootWritable = func(path string) bool { return true }
+	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
 	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
 	t.Cleanup(func() { containerDiskHooks = oldHooks })
 	restore := stubRunHostCommand(t, func(name string, args ...string) error {
@@ -328,7 +411,7 @@ func TestPrepareContainerDiskMountReplacesWritableMountWithoutMarker(t *testing.
 		"umount " + mountPath,
 		"qemu-nbd --disconnect /dev/nbd0",
 		"modprobe nbd max_part=16",
-		"qemu-nbd --connect=/dev/nbd1 " + diskPath,
+		testNBDConnectCommand("/dev/nbd1", diskPath),
 		"mount /dev/nbd1 " + mountPath,
 		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
 		"mount -t overlay overlay -o " + overlayOptions + " " + mergedPath,
@@ -380,6 +463,7 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 		}
 	}
 	containerDiskHooks.rootWritable = func(path string) bool { return true }
+	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
 	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
 	t.Cleanup(func() { containerDiskHooks = oldHooks })
 	restore := stubRunHostCommand(t, func(name string, args ...string) error {
@@ -408,7 +492,7 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 		"umount " + mountPath,
 		"qemu-nbd --disconnect /dev/nbd0",
 		"modprobe nbd max_part=16",
-		"qemu-nbd --connect=/dev/nbd1 " + newDiskPath,
+		testNBDConnectCommand("/dev/nbd1", newDiskPath),
 		"mount /dev/nbd1 " + mountPath,
 		"ctr -n foxlab images mount --snapshotter overlayfs " + testImageRef + " " + lowerPath,
 		"mount -t overlay overlay -o " + overlayOptions + " " + mergedPath,
@@ -540,4 +624,8 @@ func testCommandCount(t *testing.T, name string) int {
 		}
 	}
 	return count
+}
+
+func testNBDConnectCommand(device, diskPath string) string {
+	return "systemd-run --scope --collect --quiet --unit " + containerDiskScopeUnit(device) + " qemu-nbd --fork --connect=" + device + " " + diskPath
 }

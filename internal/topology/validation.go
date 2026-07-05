@@ -25,16 +25,16 @@ func validExternalMode(mode string) bool {
 	}
 }
 
-func (s *Service) validateSwitchConfig(id, mode string, externals []string) error {
+func (s *Service) validateSwitchConfig(name, mode string, externals []string) error {
 	if !validSwitchMode(mode) {
-		return fmt.Errorf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", id, mode)
+		return fmt.Errorf("switch %q uses unsupported mode %q; supported modes are bridge, nat and macnat-bridge", name, mode)
 	}
 	if mode == "macnat-bridge" && len(externals) == 0 {
-		return fmt.Errorf("switch %q macnat-bridge mode requires externalLinks", id)
+		return fmt.Errorf("switch %q macnat-bridge mode requires externalLinks", name)
 	}
 	for _, external := range externals {
 		if external != "" && !s.HasLabExternal(external) {
-			return fmt.Errorf("switch %q references missing uplink %q", id, external)
+			return fmt.Errorf("switch %q references missing uplink %q", name, external)
 		}
 	}
 	return nil

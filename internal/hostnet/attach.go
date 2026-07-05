@@ -58,6 +58,13 @@ func (b *Bridge) AttachContainer(ctx context.Context, l *lab.Lab, ct lab.Contain
 		if target.Bridge == "" && target.Interface == "" {
 			continue
 		}
+		guest := fmt.Sprintf("eth%d", index)
+		if b.containerNICExists(ctx, pid, guest) {
+			if err := b.configureExistingContainerNIC(ctx, pid, guest, target); err != nil {
+				return fail(err)
+			}
+			continue
+		}
 		hostIf, guestIf := vethNames(l, ct, index)
 		b.cleanupContainerNIC(ctx, pid, index, hostIf, guestIf)
 		containerIf := guestIf
@@ -96,28 +103,38 @@ func (b *Bridge) AttachContainer(ctx context.Context, l *lab.Lab, ct lab.Contain
 				return fail(err)
 			}
 		}
-		if err := b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "link", "set", containerIf, "name", fmt.Sprintf("eth%d", index)); err != nil {
+		if err := b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "link", "set", containerIf, "name", guest); err != nil {
 			return fail(err)
 		}
-		if err := b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "link", "set", fmt.Sprintf("eth%d", index), "up"); err != nil {
+		if err := b.configureExistingContainerNIC(ctx, pid, guest, target); err != nil {
 			return fail(err)
-		}
-		if target.Address != "" {
-			guest := fmt.Sprintf("eth%d", index)
-			if err := b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "addr", "replace", target.Address, "dev", guest); err != nil {
-				return fail(err)
-			}
-			if target.Gateway != "" {
-				if err := b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "route", "replace", "default", "via", target.Gateway, "dev", guest); err != nil {
-					return fail(err)
-				}
-			}
 		}
 	}
 	if err := b.configureMacNAT(ctx, l); err != nil {
 		return fail(err)
 	}
 	return nil
+}
+
+func (b *Bridge) containerNICExists(ctx context.Context, pid int, name string) bool {
+	return b.Runner.Run(ctx, "nsenter", "-t", fmt.Sprintf("%d", pid), "-n", "ip", "link", "show", name) == nil
+}
+
+func (b *Bridge) configureExistingContainerNIC(ctx context.Context, pid int, name string, target containerNICAttachTarget) error {
+	targetPID := fmt.Sprintf("%d", pid)
+	if err := b.Runner.Run(ctx, "nsenter", "-t", targetPID, "-n", "ip", "link", "set", name, "up"); err != nil {
+		return err
+	}
+	if target.Address == "" {
+		return nil
+	}
+	if err := b.Runner.Run(ctx, "nsenter", "-t", targetPID, "-n", "ip", "addr", "replace", target.Address, "dev", name); err != nil {
+		return err
+	}
+	if target.Gateway == "" {
+		return nil
+	}
+	return b.Runner.Run(ctx, "nsenter", "-t", targetPID, "-n", "ip", "route", "replace", "default", "via", target.Gateway, "dev", name)
 }
 
 func (b *Bridge) cleanupContainerNIC(ctx context.Context, pid, index int, hostIf, guestIf string) {

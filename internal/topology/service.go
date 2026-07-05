@@ -225,7 +225,7 @@ func (s *Service) VMDesiredState(ref, state string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "desired state failed: " + err.Error()
 		}
-		return "desired vm:" + id + " " + state
+		return "desired " + s.workloadDisplayRef("vm", id) + " " + state
 	}
 	return "vm not found: " + id
 }
@@ -254,7 +254,7 @@ func (s *Service) ContainerDesiredState(ref, state string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "desired state failed: " + err.Error()
 		}
-		return "desired container:" + id + " " + state
+		return "desired " + s.workloadDisplayRef("container", id) + " " + state
 	}
 	return "container not found: " + id
 }
@@ -273,4 +273,30 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Service) nodeDisplayName(kind, id string) string {
+	switch kind {
+	case "vm":
+		if vm, ok := s.LabVM(id); ok {
+			return firstNonEmpty(vm.Name, vm.ID)
+		}
+	case "container":
+		if ct, ok := s.LabContainer(id); ok {
+			return firstNonEmpty(ct.Name, ct.ID)
+		}
+	case "switch":
+		if sw, ok := s.LabSwitch(id); ok {
+			return firstNonEmpty(sw.Name, sw.ID)
+		}
+	case "uplink", "external":
+		if link, ok := s.LabExternal(id); ok {
+			return firstNonEmpty(link.Name, link.ID)
+		}
+	}
+	return id
+}
+
+func (s *Service) workloadDisplayRef(kind, id string) string {
+	return kind + ":" + s.nodeDisplayName(kind, id)
 }

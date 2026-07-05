@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
@@ -244,7 +245,7 @@ func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string
 	defer runtime.Close()
 	states, err := runtime.States(ctx, loaded)
 	if err != nil {
-		return fmt.Errorf("runtime status unavailable: %w", err)
+		return containerdruntime.WithAccessHint(fmt.Errorf("runtime status unavailable: %w", err))
 	}
 	key := workload.Key(ref)
 	state := strings.ToLower(strings.TrimSpace(firstNonEmpty(states[key], "missing")))
@@ -252,9 +253,9 @@ func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string
 		return fmt.Errorf("%s %s is %s; run it first", ref.Type, remote.Workload, state)
 	}
 	if source.Remote {
-		return runtime.GetFile(context.Background(), loaded, ref, source.Path, dst)
+		return containerdruntime.WithAccessHint(runtime.GetFile(context.Background(), loaded, ref, source.Path, dst))
 	}
-	return runtime.PutFile(context.Background(), loaded, ref, src, target.Path)
+	return containerdruntime.WithAccessHint(runtime.PutFile(context.Background(), loaded, ref, src, target.Path))
 }
 
 func parseCopyEndpoint(value string) copyEndpoint {
