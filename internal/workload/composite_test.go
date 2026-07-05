@@ -104,3 +104,48 @@ func TestCompositeCloseJoinsBackendErrors(t *testing.T) {
 		t.Fatalf("Close error = %v, want container close error", err)
 	}
 }
+
+type fileTransferRuntime struct {
+	fakeRuntime
+	put []string
+	get []string
+}
+
+func (r *fileTransferRuntime) PutFile(_ context.Context, _ *lab.Lab, ref Ref, hostPath, guestPath string) error {
+	r.put = append(r.put, Key(ref)+" "+hostPath+" "+guestPath)
+	return nil
+}
+
+func (r *fileTransferRuntime) GetFile(_ context.Context, _ *lab.Lab, ref Ref, guestPath, hostPath string) error {
+	r.get = append(r.get, Key(ref)+" "+guestPath+" "+hostPath)
+	return nil
+}
+
+func TestCompositeFileTransferDispatchesByWorkloadType(t *testing.T) {
+	vm := &fileTransferRuntime{}
+	ct := &fileTransferRuntime{}
+	composite := &Composite{VM: vm, Container: ct}
+
+	if err := composite.PutFile(context.Background(), &lab.Lab{}, Ref{Type: TypeVM, ID: "vm1"}, "/host", "/guest"); err != nil {
+		t.Fatalf("PutFile vm returned error: %v", err)
+	}
+	if err := composite.GetFile(context.Background(), &lab.Lab{}, Ref{Type: TypeContainer, ID: "web"}, "/guest", "/host"); err != nil {
+		t.Fatalf("GetFile container returned error: %v", err)
+	}
+	if len(vm.put) != 1 || vm.put[0] != "vm:vm1 /host /guest" {
+		t.Fatalf("vm put = %#v", vm.put)
+	}
+	if len(ct.get) != 1 || ct.get[0] != "container:web /guest /host" {
+		t.Fatalf("container get = %#v", ct.get)
+	}
+	if len(vm.get) != 0 || len(ct.put) != 0 {
+		t.Fatalf("wrong runtime used: vm get=%#v ct put=%#v", vm.get, ct.put)
+	}
+}
+
+func TestCompositeFileTransferReportsUnsupportedRuntime(t *testing.T) {
+	err := (&Composite{VM: &fakeRuntime{}}).PutFile(context.Background(), &lab.Lab{}, Ref{Type: TypeVM, ID: "vm1"}, "/host", "/guest")
+	if err == nil || !strings.Contains(err.Error(), `file transfer not configured for workload type "vm"`) {
+		t.Fatalf("PutFile error = %v, want file transfer not configured", err)
+	}
+}

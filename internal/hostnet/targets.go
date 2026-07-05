@@ -57,10 +57,20 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 		if !ok {
 			return containerNICAttachTarget{}, fmt.Errorf("container %q references missing switch %q", ct.ID, nic.Switch)
 		}
+		target := containerNICAttachTarget{Bridge: l.ManagedSwitchBridgeName(sw)}
+		if sw.Mode == "nat" && !switchUsesMacNAT(l, sw) {
+			if err := b.ensureNATSwitchBridge(ctx, l, sw); err != nil {
+				return containerNICAttachTarget{}, err
+			}
+			gateway, _ := switchNATGatewayCIDR(l, sw)
+			target.Mode = lab.ExternalModeNAT
+			target.Address = switchNATContainerAddress(l, sw, ct, index)
+			target.Gateway = gateway
+			return target, nil
+		}
 		if err := b.EnsureSwitchBridge(ctx, l, sw); err != nil {
 			return containerNICAttachTarget{}, err
 		}
-		target := containerNICAttachTarget{Bridge: l.ManagedSwitchBridgeName(sw)}
 		if switchUsesMacNAT(l, sw) {
 			target.Mode = lab.ExternalModeMacNAT
 		}

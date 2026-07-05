@@ -209,6 +209,27 @@ func TestDiskCreateRequiresSavePathBeforeSideEffects(t *testing.T) {
 	}
 }
 
+func TestEnsureDiskDirectoryWritableReportsPermission(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to read-only directories")
+	}
+	dir := filepath.Join(t.TempDir(), "disks")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureDiskDirectoryWritable(dir); err != nil {
+		t.Fatalf("ensureDiskDirectoryWritable writable dir = %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755)
+	err := ensureDiskDirectoryWritable(dir)
+	if err == nil || !strings.Contains(err.Error(), "disk storage directory is not writable:") {
+		t.Fatalf("ensureDiskDirectoryWritable error = %v, want writable diagnostic", err)
+	}
+}
+
 func TestDiskCreateRemovesImageAndRestoresLabOnSaveFailure(t *testing.T) {
 	restore := stubDiskCommands(t)
 	defer restore()

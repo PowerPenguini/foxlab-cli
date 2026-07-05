@@ -2,6 +2,7 @@ package hostnet
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,28 @@ func (b *Bridge) EnsureSwitchBridge(ctx context.Context, l *lab.Lab, sw lab.Swit
 		b.Runner = ExecRunner{}
 	}
 	return b.ensureBridge(ctx, l.ManagedSwitchBridgeName(sw))
+}
+
+func (b *Bridge) ensureNATSwitchBridge(ctx context.Context, l *lab.Lab, sw lab.Switch) error {
+	bridge := l.ManagedSwitchBridgeName(sw)
+	gateway, cidr := switchNATGatewayCIDR(l, sw)
+	linkIDs := lab.SwitchExternalLinks(sw)
+	if len(linkIDs) == 0 {
+		return b.ensureNATBridge(ctx, bridge, gateway, cidr, "")
+	}
+	for _, linkID := range linkIDs {
+		link, ok := findExternalLink(l, linkID)
+		if !ok {
+			return fmt.Errorf("switch %q references missing external link %q", sw.ID, linkID)
+		}
+		if link.Mode == lab.ExternalModeMacNAT {
+			continue
+		}
+		if err := b.ensureNATBridge(ctx, bridge, gateway, cidr, link.Interface); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Bridge) ensureBridge(ctx context.Context, name string) error {

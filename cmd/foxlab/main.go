@@ -1,19 +1,26 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
+	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/topologyui"
 	"foxlab-cli/internal/virt"
+	"foxlab-cli/internal/workload"
 )
 
 type directAction struct {
 	kind string
 	name string
+	src  string
+	dst  string
 }
 
 func main() {
@@ -24,27 +31,25 @@ func main() {
 	height := fs.Int("height", 30, "frame height for --no-raw")
 	uri := fs.String("uri", virt.DefaultURI, "libvirt URI")
 	containerdAddress := fs.String("containerd", "", "containerd socket path")
-	shellTarget := fs.String("sh", "", "enter a VM or container shell by id or name")
-	vncTarget := fs.String("vnc", "", "open VNC for a VM id or name")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: foxlab [--lab demo.lab] [--no-raw] [--sh NAME | --vnc NAME] [demo.lab]")
+		fmt.Fprintln(os.Stderr, "usage: foxlab [--lab demo.lab] [--no-raw] [demo.lab] [sh NAME | vnc NAME | cp SRC DST]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 
-	action, err := resolveDirectAction(*shellTarget, *vncTarget)
+	action, labArgs, err := resolveDirectAction(fs.Args())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	if *noRaw && action.kind != "" {
-		fmt.Fprintln(os.Stderr, "--no-raw cannot be combined with direct shell or vnc flags")
+		fmt.Fprintln(os.Stderr, "--no-raw cannot be combined with sh, vnc, or cp actions")
 		os.Exit(2)
 	}
 
-	resolvedLabPath, err := resolveLabPath(*labPath, fs.Args())
+	resolvedLabPath, err := resolveLabPath(*labPath, labArgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -98,6 +103,8 @@ func main() {
 			if err == nil {
 				err = app.RunVNC(id)
 			}
+		case "cp":
+			err = runFileCopy(loadedLab, *uri, *containerdAddress, action.src, action.dst)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -111,23 +118,35 @@ func main() {
 	}
 }
 
-func resolveDirectAction(shellTarget, vncTarget string) (directAction, error) {
-	set := 0
-	for _, value := range []string{shellTarget, vncTarget} {
-		if value != "" {
-			set++
+func resolveDirectAction(args []string) (directAction, []string, error) {
+	actionIndex := -1
+	for i, arg := range args {
+		if arg == "sh" || arg == "vnc" || arg == "cp" {
+			actionIndex = i
+			break
 		}
 	}
-	if set > 1 {
-		return directAction{}, fmt.Errorf("choose only one of --sh or --vnc")
+	if actionIndex < 0 {
+		return directAction{}, args, nil
 	}
-	if shellTarget != "" {
-		return directAction{kind: "shell", name: shellTarget}, nil
+	switch args[actionIndex] {
+	case "sh":
+		if len(args)-actionIndex != 2 {
+			return directAction{}, nil, fmt.Errorf("usage: foxlab sh NAME")
+		}
+		return directAction{kind: "shell", name: args[actionIndex+1]}, args[:actionIndex], nil
+	case "vnc":
+		if len(args)-actionIndex != 2 {
+			return directAction{}, nil, fmt.Errorf("usage: foxlab vnc NAME")
+		}
+		return directAction{kind: "vnc", name: args[actionIndex+1]}, args[:actionIndex], nil
+	case "cp":
+		if len(args)-actionIndex != 3 {
+			return directAction{}, nil, fmt.Errorf("usage: foxlab cp SRC DST")
+		}
+		return directAction{kind: "cp", src: args[actionIndex+1], dst: args[actionIndex+2]}, args[:actionIndex], nil
 	}
-	if vncTarget != "" {
-		return directAction{kind: "vnc", name: vncTarget}, nil
-	}
-	return directAction{}, nil
+	return directAction{}, args, nil
 }
 
 func resolveShellWorkload(loaded *lab.Lab, name string) (string, string, error) {
@@ -193,6 +212,77 @@ func resolveVMName(loaded *lab.Lab, name string) (string, error) {
 		return "", fmt.Errorf("vm name is ambiguous: %s", name)
 	}
 	return matches[0], nil
+}
+
+type copyEndpoint struct {
+	Workload string
+	Path     string
+	Remote   bool
+}
+
+func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string) error {
+	source := parseCopyEndpoint(src)
+	target := parseCopyEndpoint(dst)
+	if source.Remote == target.Remote {
+		return fmt.Errorf("usage: foxlab cp SRC DST; exactly one side must be NAME:/absolute/path")
+	}
+	remote := source
+	if target.Remote {
+		remote = target
+	}
+	typ, id, err := resolveShellWorkload(loaded, remote.Workload)
+	if err != nil {
+		return err
+	}
+	ref := workload.Ref{Type: workloadType(typ), ID: id}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runtime, err := foxruntime.New(libvirtURI, containerdAddress, loaded)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	states, err := runtime.States(ctx, loaded)
+	if err != nil {
+		return fmt.Errorf("runtime status unavailable: %w", err)
+	}
+	key := workload.Key(ref)
+	state := strings.ToLower(strings.TrimSpace(firstNonEmpty(states[key], "missing")))
+	if state != "running" {
+		return fmt.Errorf("%s %s is %s; run it first", ref.Type, remote.Workload, state)
+	}
+	if source.Remote {
+		return runtime.GetFile(context.Background(), loaded, ref, source.Path, dst)
+	}
+	return runtime.PutFile(context.Background(), loaded, ref, src, target.Path)
+}
+
+func parseCopyEndpoint(value string) copyEndpoint {
+	name, guestPath, ok := strings.Cut(value, ":")
+	if !ok || name == "" || !strings.HasPrefix(guestPath, "/") {
+		return copyEndpoint{Path: value}
+	}
+	return copyEndpoint{Workload: name, Path: guestPath, Remote: true}
+}
+
+func workloadType(nodeType string) string {
+	switch nodeType {
+	case topologyui.NodeVM:
+		return workload.TypeVM
+	case topologyui.NodeContainer:
+		return workload.TypeContainer
+	default:
+		return nodeType
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolveLabPath(flagPath string, args []string) (string, error) {

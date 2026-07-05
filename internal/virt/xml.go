@@ -392,6 +392,9 @@ var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs
     <console type="pty">
       <target type="serial" port="0"/>
     </console>
+    <channel type="unix">
+      <target type="virtio" name="org.qemu.guest_agent.0"/>
+    </channel>
   </devices>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>

@@ -57,6 +57,30 @@ func (c *Composite) VNCPorts(ctx context.Context, l *lab.Lab) (map[string]int, e
 	return runtime.VNCPorts(ctx, l)
 }
 
+func (c *Composite) PutFile(ctx context.Context, l *lab.Lab, ref Ref, hostPath, guestPath string) error {
+	runtime, err := c.runtimeFor(ref)
+	if err != nil {
+		return err
+	}
+	transferer, ok := runtime.(FileTransferer)
+	if !ok {
+		return fmt.Errorf("file transfer not configured for workload type %q", ref.Type)
+	}
+	return transferer.PutFile(ctx, l, ref, hostPath, guestPath)
+}
+
+func (c *Composite) GetFile(ctx context.Context, l *lab.Lab, ref Ref, guestPath, hostPath string) error {
+	runtime, err := c.runtimeFor(ref)
+	if err != nil {
+		return err
+	}
+	transferer, ok := runtime.(FileTransferer)
+	if !ok {
+		return fmt.Errorf("file transfer not configured for workload type %q", ref.Type)
+	}
+	return transferer.GetFile(ctx, l, ref, guestPath, hostPath)
+}
+
 func (c *Composite) Start(ctx context.Context, l *lab.Lab, ref Ref) error {
 	runtime, err := c.runtimeFor(ref)
 	if err != nil {

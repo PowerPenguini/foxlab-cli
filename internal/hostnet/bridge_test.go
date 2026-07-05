@@ -226,6 +226,44 @@ func TestAttachContainerPlansNATExternalCommands(t *testing.T) {
 	}
 }
 
+func TestAttachContainerSwitchNATPlansAddressAndUplinkRules(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		ExternalLinks: []lab.ExternalLink{
+			{ID: "uplink1", Interface: "eth0", Mode: lab.ExternalModeNAT},
+			{ID: "uplink2", Interface: "tun0", Mode: lab.ExternalModeNAT},
+		},
+		Switches:   []lab.Switch{{ID: "lan", Mode: "nat", ExternalLinks: []string{"uplink1", "uplink2"}}},
+		Containers: []lab.Container{{ID: "web", Image: "nginx", Networks: []lab.ContainerNetwork{{Switch: "lan"}}}},
+	}
+	runner := &fakeRunner{}
+	bridge := &Bridge{Runner: runner}
+
+	if err := bridge.AttachContainer(context.Background(), l, l.Containers[0], 1234); err != nil {
+		t.Fatal(err)
+	}
+
+	managed := l.ManagedSwitchBridgeName(l.Switches[0])
+	gateway, cidr := switchNATGatewayCIDR(l, l.Switches[0])
+	address := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	joined := strings.Join(runner.commands, "\n")
+	for _, want := range []string{
+		"ip link show " + managed,
+		"ip addr replace " + gateway + "/24 dev " + managed,
+		"iptables -C FORWARD -i " + managed + " -o eth0 -j ACCEPT",
+		"iptables -C FORWARD -i " + managed + " -o tun0 -j ACCEPT",
+		"iptables -t nat -C POSTROUTING -s " + cidr + " -o eth0 -j MASQUERADE",
+		"iptables -t nat -C POSTROUTING -s " + cidr + " -o tun0 -j MASQUERADE",
+		"master " + managed,
+		"nsenter -t 1234 -n ip addr replace " + address + " dev eth0",
+		"nsenter -t 1234 -n ip route replace default via " + gateway + " dev eth0",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected command fragment %q in:\n%s", want, joined)
+		}
+	}
+}
+
 func TestAttachContainerPlansMacNATExternalCommands(t *testing.T) {
 	device, err := os.CreateTemp(t.TempDir(), "macnat")
 	if err != nil {

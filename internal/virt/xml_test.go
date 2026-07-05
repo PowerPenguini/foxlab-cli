@@ -46,6 +46,7 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		`<target type="isa-serial" port="0"/>`,
 		`<console type="pty">`,
 		`<target type="serial" port="0"/>`,
+		`<target type="virtio" name="org.qemu.guest_agent.0"/>`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)

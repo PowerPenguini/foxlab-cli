@@ -56,6 +56,9 @@ func (s *Service) DiskCreate(id string, args map[string]string) string {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "disk create failed: " + err.Error()
 	}
+	if err := ensureDiskDirectoryWritable(filepath.Dir(path)); err != nil {
+		return "disk create failed: " + err.Error()
+	}
 	if err := runDiskCommand("qemu-img", "create", "-f", format, path, strconv.Itoa(sizeGB)+"G"); err != nil {
 		return "disk create failed: " + err.Error()
 	}
@@ -154,6 +157,9 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 		return "disk layer create failed: " + err.Error()
 	}
 	if err := os.MkdirAll(filepath.Dir(layerPath), 0o755); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
 		return "disk layer create failed: " + err.Error()
 	}
 	basePath := s.Lab.ResolvePath(base.Path)

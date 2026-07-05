@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,23 @@ var runDiskCommand = func(name string, args ...string) error {
 			return err
 		}
 		return fmt.Errorf("%w: %s", err, text)
+	}
+	return nil
+}
+
+func ensureDiskDirectoryWritable(dir string) error {
+	probe, err := os.CreateTemp(dir, ".foxlab-write-check-*")
+	if err != nil {
+		return fmt.Errorf("disk storage directory is not writable: %s: %w", dir, err)
+	}
+	name := probe.Name()
+	closeErr := probe.Close()
+	removeErr := os.Remove(name)
+	if closeErr != nil {
+		return fmt.Errorf("disk storage directory write check failed: %s: %w", dir, closeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("disk storage directory cleanup failed: %s: %w", dir, removeErr)
 	}
 	return nil
 }

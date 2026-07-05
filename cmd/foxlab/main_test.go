@@ -63,28 +63,86 @@ func TestLoadModelRequiresPath(t *testing.T) {
 }
 
 func TestResolveDirectActionShellTargets(t *testing.T) {
-	got, err := resolveDirectAction("web", "")
+	got, args, err := resolveDirectAction([]string{"demo.lab", "sh", "web"})
 	if err != nil {
 		t.Fatalf("resolveDirectAction returned error: %v", err)
 	}
 	if got.kind != "shell" || got.name != "web" {
 		t.Fatalf("direct action = %#v, want shell web", got)
 	}
+	if len(args) != 1 || args[0] != "demo.lab" {
+		t.Fatalf("lab args = %#v, want demo.lab", args)
+	}
 }
 
 func TestResolveDirectActionVNC(t *testing.T) {
-	got, err := resolveDirectAction("", "vm1")
+	got, args, err := resolveDirectAction([]string{"vnc", "vm1"})
 	if err != nil {
 		t.Fatalf("resolveDirectAction returned error: %v", err)
 	}
 	if got.kind != "vnc" || got.name != "vm1" {
 		t.Fatalf("direct action = %#v, want vnc vm1", got)
 	}
+	if len(args) != 0 {
+		t.Fatalf("lab args = %#v, want none", args)
+	}
 }
 
-func TestResolveDirectActionRejectsConflicts(t *testing.T) {
-	if _, err := resolveDirectAction("web", "vm1"); err == nil || !strings.Contains(err.Error(), "choose only one") {
-		t.Fatalf("conflict error = %v, want choose only one", err)
+func TestResolveDirectActionCopy(t *testing.T) {
+	got, args, err := resolveDirectAction([]string{"cp", "./file", "web:/tmp/file"})
+	if err != nil {
+		t.Fatalf("resolveDirectAction returned error: %v", err)
+	}
+	if got.kind != "cp" || got.src != "./file" || got.dst != "web:/tmp/file" {
+		t.Fatalf("direct action = %#v, want cp", got)
+	}
+	if len(args) != 0 {
+		t.Fatalf("lab args = %#v, want none", args)
+	}
+}
+
+func TestResolveDirectActionCopyAfterPositionalLab(t *testing.T) {
+	got, args, err := resolveDirectAction([]string{"demo.lab", "cp", "web:/tmp/file", "./file"})
+	if err != nil {
+		t.Fatalf("resolveDirectAction returned error: %v", err)
+	}
+	if got.kind != "cp" || got.src != "web:/tmp/file" || got.dst != "./file" {
+		t.Fatalf("direct action = %#v, want cp", got)
+	}
+	if len(args) != 1 || args[0] != "demo.lab" {
+		t.Fatalf("lab args = %#v, want demo.lab", args)
+	}
+}
+
+func TestResolveDirectActionRejectsShellUsage(t *testing.T) {
+	if _, _, err := resolveDirectAction([]string{"sh"}); err == nil || !strings.Contains(err.Error(), "usage: foxlab sh NAME") {
+		t.Fatalf("shell usage error = %v, want usage", err)
+	}
+	if _, _, err := resolveDirectAction([]string{"sh", "web", "extra"}); err == nil || !strings.Contains(err.Error(), "usage: foxlab sh NAME") {
+		t.Fatalf("shell extra args error = %v, want usage", err)
+	}
+}
+
+func TestResolveDirectActionRejectsVNCUsage(t *testing.T) {
+	if _, _, err := resolveDirectAction([]string{"vnc"}); err == nil || !strings.Contains(err.Error(), "usage: foxlab vnc NAME") {
+		t.Fatalf("vnc usage error = %v, want usage", err)
+	}
+}
+
+func TestResolveDirectActionRejectsCopyUsage(t *testing.T) {
+	if _, _, err := resolveDirectAction([]string{"cp", "one"}); err == nil || !strings.Contains(err.Error(), "usage: foxlab cp SRC DST") {
+		t.Fatalf("copy usage error = %v, want usage", err)
+	}
+}
+
+func TestParseCopyEndpoint(t *testing.T) {
+	remote := parseCopyEndpoint("web:/tmp/file")
+	if !remote.Remote || remote.Workload != "web" || remote.Path != "/tmp/file" {
+		t.Fatalf("remote endpoint = %#v", remote)
+	}
+	local := parseCopyEndpoint("./a:b")
+	if local.Remote || local.Path != "./a:b" {
+		t.Fatalf("local endpoint = %#v", local)
 	}
 }
 

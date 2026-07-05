@@ -35,6 +35,11 @@ type VNCRuntime interface {
 	VNCPorts(context.Context, *lab.Lab) (map[string]int, error)
 }
 
+type FileTransferer interface {
+	PutFile(context.Context, *lab.Lab, Ref, string, string) error
+	GetFile(context.Context, *lab.Lab, Ref, string, string) error
+}
+
 func Key(ref Ref) string {
 	return ref.Type + ":" + ref.ID
 }
