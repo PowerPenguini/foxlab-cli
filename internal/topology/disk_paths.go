@@ -21,6 +21,19 @@ var runDiskCommand = func(name string, args ...string) error {
 	return nil
 }
 
+var runDiskCommandOutput = func(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		if text == "" {
+			return out, err
+		}
+		return out, fmt.Errorf("%w: %s", err, text)
+	}
+	return out, nil
+}
+
 func ensureDiskDirectoryWritable(dir string) error {
 	probe, err := os.CreateTemp(dir, ".foxlab-write-check-*")
 	if err != nil {

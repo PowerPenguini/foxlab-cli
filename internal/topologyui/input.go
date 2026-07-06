@@ -6,6 +6,9 @@ func (a *App) handleKey(key string) bool {
 	if isMouseKey(key) {
 		return a.handleMouseKey(key)
 	}
+	if a.State.DiskExplorerOpen {
+		return a.handleDiskExplorerKey(key)
+	}
 	if key == "tab" {
 		return a.handleTabKey()
 	}

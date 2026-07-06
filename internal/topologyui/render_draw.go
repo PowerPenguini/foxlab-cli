@@ -261,6 +261,8 @@ func topRibbonContext(m Model, state ViewState) string {
 	switch {
 	case state.CommandMode:
 		mode = "command"
+	case state.DiskExplorerOpen:
+		mode = "disks"
 	case state.MoveMode:
 		mode = "move"
 	case state.ConnectMode:

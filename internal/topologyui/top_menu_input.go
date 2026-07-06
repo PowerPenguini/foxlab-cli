@@ -57,6 +57,12 @@ func (a *App) handleTopMenuKey(key string) bool {
 			}
 			return false
 		}
+		if action == "disk-explorer" {
+			if key == "space" || key == "enter" || key == "down" {
+				a.openDiskExplorer()
+			}
+			return false
+		}
 		if action == "create-menu" {
 			a.State.TopMenuOpen = true
 			a.State.TopMenuSelected = 0

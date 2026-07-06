@@ -3,7 +3,7 @@ package topologyui
 import "strings"
 
 func topRibbonRootItems() []string {
-	return []string{"apply lab", "add >", "exit"}
+	return []string{"apply lab", "add >", "disks", "exit"}
 }
 
 func topRibbonAddItems() []string {
@@ -30,6 +30,8 @@ func topMenuLabel(item string) string {
 		return "Add SW"
 	case "add disk":
 		return "Add Disk"
+	case "disks":
+		return "Disks"
 	case "create external", "add uplink", "create uplink":
 		return "Uplink"
 	case "exit":

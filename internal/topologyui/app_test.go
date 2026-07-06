@@ -37,9 +37,14 @@ func (eofReader) Read([]byte) (int, error) {
 
 func fakeQemuImg(t *testing.T) func() {
 	t.Helper()
+	return fakeQemuImgScript(t, "#!/bin/sh\nexit 0\n")
+}
+
+func fakeQemuImgScript(t *testing.T, script string) func() {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "qemu-img")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	oldPath := os.Getenv("PATH")
@@ -3052,6 +3057,404 @@ func TestMouseClickTopExitQuits(t *testing.T) {
 	}
 }
 
+func TestTopDisksOpensDiskExplorer(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "demo"},
+		Lab:        &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", Name: "router", MemoryMB: 512, CPUs: 1}}, Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm1"}}},
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	disksButton := topRootButtonForAction(t, app.ViewWidth, "disk-explorer")
+
+	app.handleKey("mouse:" + strconv.Itoa(disksButton.X+1) + ":0:0")
+
+	if !app.State.DiskExplorerOpen {
+		t.Fatalf("disk explorer did not open: %#v", app.State)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "Disks: demo") || !strings.Contains(out, "data  base  10G") || !strings.Contains(out, "at:vm:router") || !strings.Contains(out, "N create") {
+		t.Fatalf("disk explorer render missing content:\n%s", out)
+	}
+}
+
+func TestDiskExplorerKeyboardResizeAndInfo(t *testing.T) {
+	fakeQemuImg(t)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", Name: "router", MemoryMB: 512, CPUs: 1, Disk: "disks/data.qcow2"}},
+		Disks: []lab.Disk{{
+			ID:           "data",
+			Path:         "disks/data.qcow2",
+			SizeGB:       10,
+			Format:       "qcow2",
+			Kind:         "base",
+			AttachedType: "vm",
+			AttachedTo:   "vm1",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:r")
+	for _, key := range []string{"backspace", "backspace", "char:1", "char:2", "enter"} {
+		app.handleKey(key)
+	}
+
+	if app.State.Message != "resized disk:data" {
+		t.Fatalf("resize message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Disks[0].SizeGB != 12 {
+		t.Fatalf("sizeGB = %d, want 12", reloaded.Disks[0].SizeGB)
+	}
+
+	app.handleKey("char:I")
+	if app.State.Message != "disk info:data" {
+		t.Fatalf("info message = %q", app.State.Message)
+	}
+	if got := strings.Join(app.State.Console, "\n"); !strings.Contains(got, "disk data") || !strings.Contains(got, "attached: vm:router") || !strings.Contains(got, "path:") {
+		t.Fatalf("info console = %#v", app.State.Console)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "disk data") || !strings.Contains(out, "attached: vm:router") {
+		t.Fatalf("disk explorer render missing info panel:\n%s", out)
+	}
+}
+
+func TestDiskExplorerInfoShowsMetadataWhenQemuFails(t *testing.T) {
+	fakeQemuImgScript(t, "#!/bin/sh\necho qemu unavailable >&2\nexit 1\n")
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:    "demo",
+		Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:I")
+
+	if !strings.HasPrefix(app.State.Message, "disk info failed:") {
+		t.Fatalf("info message = %q", app.State.Message)
+	}
+	got := strings.Join(app.State.Console, "\n")
+	if !strings.Contains(got, "disk data") || !strings.Contains(got, "path:") || !strings.Contains(got, "disk info failed:") || !strings.Contains(got, "qemu unavailable") {
+		t.Fatalf("info console = %#v", app.State.Console)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "disk data") || !strings.Contains(out, "qemu unavailable") {
+		t.Fatalf("disk explorer render missing failed info panel:\n%s", out)
+	}
+}
+
+func TestDiskExplorerCreatesLayer(t *testing.T) {
+	fakeQemuImg(t)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:    "demo",
+		Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:l")
+
+	if app.State.Message != "created disk layer:data-layer" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	if app.State.DiskExplorerSelected != 1 {
+		t.Fatalf("selected row = %d, want new layer row", app.State.DiskExplorerSelected)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 2 || reloaded.Disks[1].ID != "data-layer" || reloaded.Disks[1].Base != "data" || reloaded.Disks[1].AttachedTo != "" {
+		t.Fatalf("disks after layer create = %#v", reloaded.Disks)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "L layer") || !strings.Contains(out, "data-layer") {
+		t.Fatalf("explorer render missing layer action/row:\n%s", out)
+	}
+}
+
+func TestDiskExplorerRenamesBaseDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID: "demo",
+		Disks: []lab.Disk{
+			{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"},
+			{ID: "data-layer", Path: "layers/data-layer.qcow2", Format: "qcow2", Kind: "layer", Base: "data"},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:e")
+	for range "data" {
+		app.handleKey("backspace")
+	}
+	for _, key := range []string{"char:s", "char:y", "char:s", "char:t", "char:e", "char:m", "enter"} {
+		app.handleKey(key)
+	}
+
+	if app.State.Message != "renamed disk:data to system" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Disks[0].ID != "system" || reloaded.Disks[0].Path != "disks/data.qcow2" {
+		t.Fatalf("renamed disk = %#v", reloaded.Disks[0])
+	}
+	if reloaded.Disks[1].Base != "system" {
+		t.Fatalf("layer base = %q, want system", reloaded.Disks[1].Base)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "system  base") || !strings.Contains(out, "base:system") {
+		t.Fatalf("explorer render missing renamed disk/base reference:\n%s", out)
+	}
+}
+
+func TestDiskExplorerCreateCancelsActiveRename(t *testing.T) {
+	fakeQemuImg(t)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:    "demo",
+		Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:E")
+	if app.State.DiskExplorerEdit != diskExplorerActionRename {
+		t.Fatalf("rename edit did not start: %#v", app.State)
+	}
+	app.runDiskExplorerAction(diskExplorerActionCreate)
+
+	if app.State.DiskExplorerEdit != "" || app.State.DiskExplorerEditValue != "" {
+		t.Fatalf("rename edit survived create: %#v", app.State)
+	}
+	if app.State.Message != "created disk:disk" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if strings.Contains(out, "rename=") {
+		t.Fatalf("explorer render still shows rename after create:\n%s", out)
+	}
+}
+
+func TestDiskExplorerDeleteCancelsActiveRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.lab")
+	for _, name := range []string{"data.qcow2", "scratch.qcow2"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded := &lab.Lab{
+		ID: "demo",
+		Disks: []lab.Disk{
+			{ID: "data", Path: "data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"},
+			{ID: "scratch", Path: "scratch.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"},
+		},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char:E")
+	if app.State.DiskExplorerEdit != diskExplorerActionRename {
+		t.Fatalf("rename edit did not start: %#v", app.State)
+	}
+	app.runDiskExplorerAction(diskExplorerActionDelete)
+
+	if app.State.DiskExplorerEdit != "" || app.State.DiskExplorerEditValue != "" {
+		t.Fatalf("rename edit survived delete: %#v", app.State)
+	}
+	if app.State.Message != "deleted disk:data" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "scratch" {
+		t.Fatalf("disks after delete = %#v", reloaded.Disks)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if strings.Contains(out, "rename=") {
+		t.Fatalf("explorer render still shows rename after delete:\n%s", out)
+	}
+}
+
+func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
+	fakeQemuImg(t)
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:    "demo",
+		Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		LabPath:    path,
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	layout, ok := diskExplorerLayout(app.ViewWidth, app.ViewHeight)
+	if !ok {
+		t.Fatal("disk explorer layout unavailable")
+	}
+	layerX := layout.X + 1 + runeLen(" N create ") + 1
+	layerY := layout.Y + layout.H - 2
+
+	app.handleKey("mouse:" + strconv.Itoa(layerX) + ":" + strconv.Itoa(layerY) + ":0")
+
+	if app.State.Message != "created disk layer:data-layer" {
+		t.Fatalf("message = %q", app.State.Message)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 2 || reloaded.Disks[1].ID != "data-layer" {
+		t.Fatalf("disks after mouse layer create = %#v", reloaded.Disks)
+	}
+}
+
+func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "demo"},
+		Lab:        &lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}}},
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	layout, ok := diskExplorerLayout(app.ViewWidth, app.ViewHeight)
+	if !ok {
+		t.Fatal("disk explorer layout unavailable")
+	}
+	layerX := layout.X + 1 + runeLen(" N create ") + 1
+	layerY := layout.Y + layout.H - 2
+
+	r, ok := app.diskExplorerFeedbackRect(mouseEvent{x: layerX, y: layerY, button: 0})
+	if !ok {
+		t.Fatal("layer action feedback rect unavailable")
+	}
+	if r.W != runeLen(" L layer ") {
+		t.Fatalf("feedback width = %d, want button width %d", r.W, runeLen(" L layer "))
+	}
+	if r.W >= layout.W-2 {
+		t.Fatalf("feedback covers whole action bar: rect=%#v layout=%#v", r, layout)
+	}
+}
+
+func TestDiskExplorerDoesNotBlockTopRibbonMouse(t *testing.T) {
+	app := App{
+		Model:      Model{ID: "demo"},
+		Lab:        &lab.Lab{ID: "demo"},
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	exitButton := topRootButtonForAction(t, app.ViewWidth, "exit")
+
+	if !app.handleKey("mouse:" + strconv.Itoa(exitButton.X+1) + ":0:0") {
+		t.Fatal("top Exit click was blocked by disk explorer")
+	}
+}
+
 func TestMouseClickDisabledApplyLabDoesNothing(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "empty"},
@@ -3530,6 +3933,31 @@ func TestReadAppKeyQueuesPastedText(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("readAppKey after queue = %q, want empty", got)
+	}
+}
+
+func TestReadAppKeyKeepsActionCharsInDiskExplorer(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("lI")); err != nil {
+		_ = w.Close()
+		_ = r.Close()
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	defer r.Close()
+
+	app := App{In: r, State: ViewState{DiskExplorerOpen: true}}
+	for _, want := range []string{"char:l", "char:I"} {
+		got, err := readAppKey(&app)
+		if err != nil {
+			t.Fatalf("readAppKey err=%v", err)
+		}
+		if got != want {
+			t.Fatalf("readAppKey = %q, want %s", got, want)
+		}
 	}
 }
 
@@ -4362,6 +4790,11 @@ func TestCommandMissingRequiredIDReportsUsage(t *testing.T) {
 		{"external delete", "usage: uplink delete <id>"},
 		{"ext rm", "usage: uplink delete <id>"},
 		{"disk merge", "usage: disk merge <id>"},
+		{"disk resize", "usage: disk resize <id> size=N"},
+		{"disk resize data", "usage: disk resize <id> size=N"},
+		{"disk info", "usage: disk info <id>"},
+		{"disk rename", "usage: disk rename <id> <new-id>"},
+		{"disk rename data", "usage: disk rename <id> <new-id>"},
 		{"disk delete", "usage: disk delete <id>"},
 		{"disk rm", "usage: disk delete <id>"},
 	}
@@ -4427,8 +4860,10 @@ func TestCommandExtraArgsForFixedArityCommandsDoNotMutate(t *testing.T) {
 		{"external delete uplink extra", "usage: uplink delete <id>"},
 		{"link delete vm:vm1:0 extra", "usage: link delete <vm|container>:<id>:<nic>"},
 		{"disk merge data-layer extra", "usage: disk merge <id>"},
+		{"disk info data extra", "usage: disk info <id>"},
+		{"disk rename data new extra", "usage: disk rename <id> <new-id>"},
 		{"disk delete data extra", "usage: disk delete <id>"},
-		{"disk layer delete data-layer extra", "usage: disk layer delete <id>"},
+		{"disk layer delete data-layer extra", "usage: disk layer create <base-id> <layer-id> | disk layer delete <id>"},
 	}
 	for _, tt := range tests {
 		app.executeCommand(tt.command)

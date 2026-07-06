@@ -1,10 +1,12 @@
 package topologyui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 )
 
 func (a *App) openCreateDiskCommand() {
@@ -486,6 +488,33 @@ func (a *App) diskMerge(id string) {
 	a.syncAfterServiceMutation()
 }
 
+func (a *App) diskResize(id string, args map[string]string) {
+	if a.shouldRefreshRuntimeAfterMutation() {
+		a.refreshWorkloadStates()
+	}
+	a.State.Message = a.ensureService().DiskResize(id, args)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) diskInfo(id string) {
+	info, msg := a.ensureService().DiskInfo(id)
+	a.State.Message = msg
+	if strings.HasPrefix(msg, "disk not found:") || strings.HasPrefix(msg, "disk info needs") {
+		a.State.Console = []string{msg}
+		return
+	}
+	lines := a.diskInfoLines(info)
+	if strings.HasPrefix(msg, "disk info failed:") {
+		lines = append(lines, msg)
+	}
+	a.State.Console = lines
+}
+
+func (a *App) diskRename(id, newID string) {
+	a.State.Message = a.ensureService().DiskRename(id, newID)
+	a.syncAfterServiceMutation()
+}
+
 func (a *App) diskDelete(id string) {
 	a.State.Message = a.ensureService().DiskDelete(id)
 	a.syncAfterServiceMutation()
@@ -494,4 +523,52 @@ func (a *App) diskDelete(id string) {
 func (a *App) diskLayerDelete(id string) {
 	a.State.Message = a.ensureService().DiskLayerDelete(id)
 	a.syncAfterServiceMutation()
+}
+
+func (a *App) diskLayerCreate(baseID, layerID string) {
+	a.State.Message = a.ensureService().DiskLayerCreate(baseID, layerID)
+	a.syncAfterServiceMutation()
+}
+
+func (a *App) diskInfoLines(info topology.DiskInfo) []string {
+	disk := info.Disk
+	lines := []string{
+		"disk " + disk.ID,
+		"kind: " + diskKindUI(disk),
+		"format: " + diskFormatLabel(disk),
+		"path: " + info.Path,
+	}
+	if disk.SizeGB > 0 {
+		lines = append(lines, fmt.Sprintf("size: %dG", disk.SizeGB))
+	}
+	if disk.Base != "" {
+		lines = append(lines, "base: "+disk.Base)
+	}
+	if disk.AttachedType != "" && disk.AttachedTo != "" {
+		lines = append(lines, "attached: "+a.diskExplorerAttachmentLabel(disk))
+	}
+	if disk.MountPath != "" {
+		lines = append(lines, "mount: "+disk.MountPath)
+	}
+	var parsed map[string]any
+	if info.QemuInfo != "" && json.Unmarshal([]byte(info.QemuInfo), &parsed) == nil {
+		for _, key := range []string{"virtual-size", "actual-size", "cluster-size", "format"} {
+			if value, ok := parsed[key]; ok {
+				lines = append(lines, "qemu "+key+": "+fmt.Sprint(value))
+			}
+		}
+	} else if info.QemuInfo != "" {
+		lines = append(lines, "qemu: "+info.QemuInfo)
+	}
+	return lines
+}
+
+func diskFormatLabel(disk lab.Disk) string {
+	if disk.Format != "" {
+		return disk.Format
+	}
+	if strings.HasSuffix(strings.ToLower(disk.Path), ".raw") || strings.HasSuffix(strings.ToLower(disk.Path), ".img") {
+		return "raw"
+	}
+	return "qcow2"
 }

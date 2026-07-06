@@ -367,12 +367,13 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 }
 
 func (a *App) render(w io.Writer, width, height int, ansi bool) error {
+	renderState := a.diskExplorerRenderState()
 	key := renderRouteCacheKey(a.Model, width, height, a.State.PanX, a.State.PanY)
 	stableKey := renderRouteCacheStableKey(a.Model, width, height)
 	reuseMovingRoutes := a.State.MoveMode && a.RouteCacheKey != "" && len(a.RouteCacheRoutes) > 0
 	reusePanningRoutes := a.mousePanActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
 	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
-		_, routes := planRenderRoutes(a.Model, a.State, width, height)
+		_, routes := planRenderRoutes(a.Model, renderState, width, height)
 		a.RouteCacheKey = key
 		a.RouteCacheStableKey = stableKey
 		a.RouteCachePanX = a.State.PanX
@@ -383,7 +384,7 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	if key != a.RouteCacheKey && reusePanningRoutes {
 		routes = translateVisibleEdges(routes, a.State.PanX-a.RouteCachePanX, a.State.PanY-a.RouteCachePanY)
 	}
-	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, a.State, width, height, routes).String(ansi))
+	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, renderState, width, height, routes).String(ansi))
 	return err
 }
 

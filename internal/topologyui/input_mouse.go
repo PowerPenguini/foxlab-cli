@@ -66,6 +66,13 @@ func (a *App) handleMouseKey(key string) bool {
 	}
 	a.clearMouseDrag()
 	a.clearMousePan()
+	if a.State.DiskExplorerOpen {
+		if event.y == 0 {
+			a.closeDiskExplorer()
+			return a.handleTopMenuMouse(event)
+		}
+		return a.handleDiskExplorerMouse(event)
+	}
 	if a.State.ConnectTargetMenu {
 		return a.handleConnectTargetMouse(event)
 	}
@@ -264,6 +271,9 @@ func (a *App) prepareMouseClickFeedback(key string) bool {
 }
 
 func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
+	if a.State.DiskExplorerOpen {
+		return a.diskExplorerFeedbackRect(event)
+	}
 	if a.State.ConnectTargetMenu {
 		return a.connectTargetFeedbackRect(event)
 	}
@@ -469,6 +479,10 @@ func (a *App) handleTopMenuMouse(event mouseEvent) bool {
 		if action == "apply-lab" {
 			a.State.TopMenuOpen = false
 			a.applyOpenLab()
+			return false
+		}
+		if action == "disk-explorer" {
+			a.openDiskExplorer()
 			return false
 		}
 		if action == "create-menu" {

@@ -10,6 +10,7 @@ func helpLines(topic string) []string {
 			"navigation: arrows or hjkl move selection; mouse click selects nodes and buttons",
 			"editing: choose Configuration fields and type inline",
 			"links: use NIC menu and connect mode to create direct links",
+			"disks: open Disks from the top ribbon for global disk management",
 		}
 	case "add":
 		return []string{
@@ -33,9 +34,10 @@ func helpLines(topic string) []string {
 		}
 	case "disk", "disks":
 		return []string{
-			"disk: use Disk menu from a VM or container",
+			"disk: open Disks from the top ribbon or use Disk menu from a workload",
 			"disk buttons: L creates a layer, M merges, D detaches, X deletes",
-			"disk create: Add Disk opens inline naming; Enter/click attaches existing disks",
+			"disk explorer: N creates base, L creates layer, E renames, R resizes, M merges, X deletes, I shows info",
+			"disk commands: create, attach, detach, merge, rename, resize, info, layer create/delete, delete",
 		}
 	case "link", "links":
 		return []string{

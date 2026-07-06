@@ -23,7 +23,7 @@ func readAppKey(a *App) (string, error) {
 	if ok, err := waitReadable(int(a.In.Fd()), spinnerInterval); err != nil || !ok {
 		return "", err
 	}
-	keys, err := readKeys(int(a.In.Fd()), a.State.ContextEdit)
+	keys, err := readKeys(int(a.In.Fd()), a.State.ContextEdit || a.State.DiskExplorerOpen)
 	if err != nil || len(keys) == 0 {
 		return "", err
 	}

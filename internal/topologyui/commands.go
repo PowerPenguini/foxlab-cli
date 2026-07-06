@@ -51,7 +51,7 @@ func (a *App) executeCommand(command string) bool {
 
 func (a *App) executeDiskCommand(fields []string) {
 	if len(fields) < 2 {
-		a.State.Message = "usage: disk <create|attach|detach|merge|delete|layer> ..."
+		a.State.Message = "usage: disk <create|attach|detach|merge|resize|info|delete|layer> ..."
 		return
 	}
 	switch fields[1] {
@@ -93,17 +93,42 @@ func (a *App) executeDiskCommand(fields []string) {
 			return
 		}
 		a.diskMerge(fields[2])
+	case "resize":
+		if len(fields) < 4 {
+			a.State.Message = "usage: disk resize <id> size=N"
+			return
+		}
+		args, err := parseArgs(fields[3:])
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskResize(fields[2], args)
+	case "info":
+		if !a.requireExactCommandArgs(fields, 3, "usage: disk info <id>") {
+			return
+		}
+		a.diskInfo(fields[2])
+	case "rename", "mv":
+		if !a.requireExactCommandArgs(fields, 4, "usage: disk rename <id> <new-id>") {
+			return
+		}
+		a.diskRename(fields[2], fields[3])
 	case "delete", "rm":
 		if !a.requireExactCommandArgs(fields, 3, "usage: disk delete <id>") {
 			return
 		}
 		a.diskDelete(fields[2])
 	case "layer":
+		if len(fields) == 5 && (fields[2] == "create" || fields[2] == "new") {
+			a.diskLayerCreate(fields[3], fields[4])
+			return
+		}
 		if len(fields) == 4 && (fields[2] == "delete" || fields[2] == "rm") {
 			a.diskLayerDelete(fields[3])
 			return
 		}
-		a.State.Message = "usage: disk layer delete <id>"
+		a.State.Message = "usage: disk layer create <base-id> <layer-id> | disk layer delete <id>"
 	default:
 		a.State.Message = "unknown disk command: " + fields[1]
 	}

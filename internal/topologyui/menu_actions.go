@@ -14,6 +14,8 @@ func contextMenuAction(label string) string {
 		return "uplink-menu"
 	case "add >", "create >":
 		return "create-menu"
+	case "Disks", "disks":
+		return "disk-explorer"
 	case "Add SW":
 		return "add sw"
 	case "Attach Uplink":

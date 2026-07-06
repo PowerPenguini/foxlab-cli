@@ -122,6 +122,7 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 	drawTopRibbon(g, m, canvas, state)
 	drawContextMenu(g, m, state, nodeRects, graph)
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)
+	drawDiskExplorer(g, m, state, width, height)
 	drawConsole(g, state, width, height)
 	drawMouseClickFeedback(g, state)
 	return g

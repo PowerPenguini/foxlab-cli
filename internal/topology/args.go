@@ -170,6 +170,13 @@ func unexpectedDiskDetachArgs(args map[string]string) []string {
 	return unexpectedArgs(args, valid)
 }
 
+func unexpectedDiskResizeArgs(args map[string]string) []string {
+	valid := map[string]struct{}{
+		"size": {},
+	}
+	return unexpectedArgs(args, valid)
+}
+
 func unexpectedArgs(args map[string]string, valid map[string]struct{}) []string {
 	var invalid []string
 	for key := range args {

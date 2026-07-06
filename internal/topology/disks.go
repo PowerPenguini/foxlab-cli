@@ -189,6 +189,60 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 	return "attached disk:" + layerID + " to " + s.workloadDisplayRef(targetType, targetID)
 }
 
+func (s *Service) DiskLayerCreate(baseID, layerID string) string {
+	if s.Lab == nil {
+		return "disk layer create needs a loaded .lab file"
+	}
+	base, ok := s.diskByID(baseID)
+	if !ok {
+		return "disk not found: " + baseID
+	}
+	if diskKind(base) != "base" {
+		return "disk is not a base: " + baseID
+	}
+	layerID = strings.TrimSpace(layerID)
+	if !lab.ValidID(layerID) {
+		return "invalid disk id: " + layerID
+	}
+	if _, exists := s.diskByID(layerID); exists {
+		return "disk already exists: " + layerID
+	}
+	if err := s.requireSavePath(); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	layerPath, err := s.layerStoragePath(layerID)
+	if err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	if err := os.MkdirAll(filepath.Dir(layerPath), 0o755); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	basePath := s.Lab.ResolvePath(base.Path)
+	baseFormat := diskFormat(base)
+	if err := runDiskCommand("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
+	layer := lab.Disk{
+		ID:        layerID,
+		Path:      layerPath,
+		Format:    "qcow2",
+		Kind:      "layer",
+		Base:      baseID,
+		MountPath: base.MountPath,
+	}
+	s.Lab.Disks = append(s.Lab.Disks, layer)
+	if err := s.SaveAndRefresh(); err != nil {
+		s.Lab = snapshot
+		_ = os.Remove(layerPath)
+		return "disk layer create failed: " + err.Error()
+	}
+	return "created disk layer:" + layerID
+}
+
 func (s *Service) DiskDetach(target string, args map[string]string) string {
 	if s.Lab == nil {
 		return "disk detach needs a loaded .lab file"
@@ -278,6 +332,113 @@ func (s *Service) DiskMerge(id string) string {
 		return "disk merge failed: " + err.Error()
 	}
 	return "merged disk layer:" + id
+}
+
+func (s *Service) DiskResize(id string, args map[string]string) string {
+	if s.Lab == nil {
+		return "disk resize needs a loaded .lab file"
+	}
+	index, disk, ok := s.diskIndexByID(id)
+	if !ok {
+		return "disk not found: " + id
+	}
+	if invalid := unexpectedDiskResizeArgs(args); len(invalid) > 0 {
+		return "unsupported disk resize argument: " + invalid[0]
+	}
+	sizeGB, present, ok := positiveIntField(args, "size")
+	if !present || !ok {
+		return "usage: disk resize <id> size=N"
+	}
+	if s.diskAttachedRunning(disk) {
+		return "disk resize needs stopped workload: " + id
+	}
+	if err := s.requireSavePath(); err != nil {
+		return "disk resize failed: " + err.Error()
+	}
+	oldSizeGB := disk.SizeGB
+	resizeArgs := []string{"resize"}
+	if oldSizeGB > 0 && sizeGB < oldSizeGB {
+		resizeArgs = append(resizeArgs, "--shrink")
+	}
+	diskPath := s.Lab.ResolvePath(disk.Path)
+	resizeArgs = append(resizeArgs, diskPath, strconv.Itoa(sizeGB)+"G")
+	if err := runDiskCommand("qemu-img", resizeArgs...); err != nil {
+		return "disk resize failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
+	s.Lab.Disks[index].SizeGB = sizeGB
+	if err := s.SaveAndRefresh(); err != nil {
+		s.Lab = snapshot
+		restoreArgs := []string{"resize"}
+		if oldSizeGB > 0 && oldSizeGB < sizeGB {
+			restoreArgs = append(restoreArgs, "--shrink")
+		}
+		if oldSizeGB > 0 {
+			restoreArgs = append(restoreArgs, diskPath, strconv.Itoa(oldSizeGB)+"G")
+			_ = runDiskCommand("qemu-img", restoreArgs...)
+		}
+		return "disk resize failed: " + err.Error()
+	}
+	return "resized disk:" + id
+}
+
+type DiskInfo struct {
+	Disk     lab.Disk
+	Path     string
+	QemuInfo string
+}
+
+func (s *Service) DiskInfo(id string) (DiskInfo, string) {
+	if s.Lab == nil {
+		return DiskInfo{}, "disk info needs a loaded .lab file"
+	}
+	disk, ok := s.diskByID(id)
+	if !ok {
+		return DiskInfo{}, "disk not found: " + id
+	}
+	info := DiskInfo{
+		Disk: disk,
+		Path: s.Lab.ResolvePath(disk.Path),
+	}
+	out, err := runDiskCommandOutput("qemu-img", "info", "--output=json", info.Path)
+	if err != nil {
+		return info, "disk info failed: " + err.Error()
+	}
+	info.QemuInfo = strings.TrimSpace(string(out))
+	return info, "disk info:" + id
+}
+
+func (s *Service) DiskRename(id, newID string) string {
+	if s.Lab == nil {
+		return "disk rename needs a loaded .lab file"
+	}
+	index, disk, ok := s.diskIndexByID(id)
+	if !ok {
+		return "disk not found: " + id
+	}
+	newID = strings.TrimSpace(newID)
+	if !lab.ValidID(newID) {
+		return "invalid disk id: " + newID
+	}
+	if _, exists := s.diskByID(newID); exists {
+		return "disk already exists: " + newID
+	}
+	if err := s.requireSavePath(); err != nil {
+		return "disk rename failed: " + err.Error()
+	}
+	snapshot := lab.Clone(s.Lab)
+	s.Lab.Disks[index].ID = newID
+	if diskKind(disk) == "base" {
+		for i := range s.Lab.Disks {
+			if s.Lab.Disks[i].Base == id {
+				s.Lab.Disks[i].Base = newID
+			}
+		}
+	}
+	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
+		return "disk rename failed: " + err.Error()
+	}
+	return "renamed disk:" + id + " to " + newID
 }
 
 func applyDiskMerge(l *lab.Lab, index int, disk lab.Disk) {
