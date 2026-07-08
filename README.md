@@ -8,8 +8,9 @@ containerd backends.
 
 ![FoxLab default lab topology TUI showcase](docs/showcase/foxlab-default-topology.png)
 
-The showcase image is a terminal screenshot of the current default lab at `~/.foxlab/default.lab`.
-Render the same lab as one non-interactive frame with:
+The showcase image is a real terminal screenshot of an interactive `foxlab`
+session opened on the default lab at `~/.foxlab/default.lab`.
+Render the same lab as one non-interactive smoke frame with:
 
 ```sh
 GOCACHE=/tmp/foxlab-cli-go-build GOPROXY=off go run ./cmd/foxlab --no-raw --width 140 --height 36
