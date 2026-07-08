@@ -8,7 +8,7 @@ func (a *App) startMove(node Node) {
 	a.State.MoveNodeType = node.Type
 	a.State.MoveStartX = node.X
 	a.State.MoveStartY = node.Y
-	a.State.Message = "move " + a.displayNodeKey(node.Type, node.ID)
+	a.State.Message = ""
 }
 
 func (a *App) handleMoveKey(key string) bool {
@@ -41,7 +41,7 @@ func (a *App) moveActiveNode(dx, dy int) {
 	a.Model.Nodes[index].X = clamp(a.Model.Nodes[index].X+dx, 0, maxX)
 	a.Model.Nodes[index].Y = clamp(a.Model.Nodes[index].Y+dy, 0, maxY)
 	a.State.Selected = index
-	a.State.Message = "move " + a.displayNodeKey(a.Model.Nodes[index].Type, a.Model.Nodes[index].ID)
+	a.State.Message = ""
 }
 
 func (a *App) moveBounds() (int, int) {
@@ -85,7 +85,7 @@ func (a *App) saveActiveMove() {
 		}
 	}
 	a.clearMoveMode()
-	a.State.Message = "moved " + a.displayNodeKey(node.Type, node.ID)
+	a.State.Message = ""
 }
 
 func (a *App) cancelActiveMove() {

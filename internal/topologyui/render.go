@@ -60,7 +60,6 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 		height = minHeight
 	}
 	g := newGrid(width, height)
-	canvas := rect{X: 0, Y: 0, W: width, H: height}
 	graph := graphBounds(width, height)
 	nodeRects := layoutNodeRectsWithPan(m, graph, state.PanX, state.PanY)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
@@ -108,24 +107,33 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 		}
 		nodeRect := nodeRects[node.Key()]
 		if rectIntersects(nodeRect, graph) {
-			styleBoxBorder(g, nodeRect, selectedBorderStyle(false, state.Focus == FocusGraph))
+			styleBoxBorder(g, nodeRect, nodePanelStyle(node.Type, false)+selectedBorderStyle(false, state.Focus == FocusGraph))
 		}
 	}
 	if len(m.Nodes) > 0 {
 		node := m.Nodes[selectedIndex]
 		nodeRect := nodeRects[node.Key()]
 		if rectIntersects(nodeRect, graph) {
-			styleBoxBorder(g, nodeRect, selectedBorderStyle(true, state.Focus == FocusGraph))
+			styleBoxBorder(g, nodeRect, nodePanelStyle(node.Type, state.Focus == FocusGraph)+selectedBorderStyle(true, state.Focus == FocusGraph))
 		}
 	}
 	drawInspector(g, m, state, inspectorBounds(width, height))
-	drawTopRibbon(g, m, canvas, state)
 	drawContextMenu(g, m, state, nodeRects, graph)
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)
 	drawDiskExplorer(g, m, state, width, height)
 	drawConsole(g, state, width, height)
 	drawMouseClickFeedback(g, state)
+	drawPalette(g, m, state, width, height)
+	applyTerminalBackground(g)
 	return g
+}
+
+func applyTerminalBackground(g *grid) {
+	for i := range g.Cells {
+		if g.Cells[i].Style == "" {
+			g.Cells[i].Style = themeTerminal
+		}
+	}
 }
 
 func graphBounds(width, height int) rect {
@@ -141,7 +149,7 @@ func inspectorBounds(width, height int) rect {
 		return rect{}
 	}
 	panelW := min(32, max(28, width/4))
-	return rect{X: width - panelW, Y: 1, W: panelW, H: height - 2}
+	return rect{X: width - panelW, Y: 0, W: panelW, H: height}
 }
 
 func routeStyle(m Model, state ViewState, edge Edge) string {

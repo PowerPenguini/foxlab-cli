@@ -66,10 +66,13 @@ func (a *App) handleMouseKey(key string) bool {
 	}
 	a.clearMouseDrag()
 	a.clearMousePan()
+	if a.State.PaletteOpen {
+		return a.handlePaletteMouse(event)
+	}
 	if a.State.DiskExplorerOpen {
 		if event.y == 0 {
 			a.closeDiskExplorer()
-			return a.handleTopMenuMouse(event)
+			return false
 		}
 		return a.handleDiskExplorerMouse(event)
 	}
@@ -77,10 +80,7 @@ func (a *App) handleMouseKey(key string) bool {
 		return a.handleConnectTargetMouse(event)
 	}
 	if event.y == 0 {
-		return a.handleTopMenuMouse(event)
-	}
-	if a.State.TopMenuOpen && a.mouseInTopMenuDropdown(event) {
-		return a.handleTopMenuMouse(event)
+		return false
 	}
 	if a.State.TopMenuOpen {
 		a.State.TopMenuOpen = false
@@ -271,16 +271,14 @@ func (a *App) prepareMouseClickFeedback(key string) bool {
 }
 
 func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
+	if a.State.PaletteOpen {
+		return a.paletteFeedbackRect(event)
+	}
 	if a.State.DiskExplorerOpen {
 		return a.diskExplorerFeedbackRect(event)
 	}
 	if a.State.ConnectTargetMenu {
 		return a.connectTargetFeedbackRect(event)
-	}
-	if event.y == 0 || a.State.TopMenuOpen {
-		if r, ok := a.topMenuFeedbackRect(event); ok {
-			return r, true
-		}
 	}
 	if a.State.ContextMenu {
 		if r, ok := a.contextMenuFeedbackRect(event); ok {

@@ -1218,6 +1218,9 @@ func TestContextMenuMoveSavesLayout(t *testing.T) {
 	if app.State.MoveMode {
 		t.Fatal("move mode did not finish after enter")
 	}
+	if app.State.Message != "" {
+		t.Fatalf("move message = %q, want no move notification", app.State.Message)
+	}
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -1261,6 +1264,9 @@ func TestNormalModeMStartsMoveAndSavesLayout(t *testing.T) {
 	app.handleKey("enter")
 	if app.State.MoveMode {
 		t.Fatal("move mode did not finish after enter")
+	}
+	if app.State.Message != "" {
+		t.Fatalf("move message = %q, want no move notification", app.State.Message)
 	}
 
 	reloaded, err := lab.LoadFile(path)
@@ -1664,7 +1670,7 @@ func TestDrainStatusUpdatesKeepsCommandMessageOnHealthyStatus(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		State: ViewState{Focus: FocusGraph, Message: "moved container:web"},
+		State: ViewState{Focus: FocusGraph, Message: "renamed disk:data to system"},
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
@@ -1677,7 +1683,7 @@ func TestDrainStatusUpdatesKeepsCommandMessageOnHealthyStatus(t *testing.T) {
 	if changed := app.drainStatusUpdates(updates, &active); !changed {
 		t.Fatal("status update did not change app")
 	}
-	if app.State.Message != "moved container:web" {
+	if app.State.Message != "renamed disk:data to system" {
 		t.Fatalf("message = %q, want command feedback preserved", app.State.Message)
 	}
 }
@@ -1776,9 +1782,14 @@ func TestRuntimeCallsAreSerializedDuringStatusRefresh(t *testing.T) {
 
 func TestRunInteractiveFlashesAndClearsMouseClickFeedback(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	rects := layoutNodeRects(app.Model, graphBounds(80, 20))
+	router := rects[NodeKey(NodeVM, "router")]
 	start := func(*App) (func(), error) { return func() {}, nil }
-	keys := []string{"mouse:1:0:0", "quit"}
+	keys := []string{"mouse:" + strconv.Itoa(router.X+1) + ":" + strconv.Itoa(router.Y+1) + ":0", "escape", "quit"}
 	read := func(*App) (string, error) {
+		if len(keys) == 0 {
+			return "quit", nil
+		}
 		key := keys[0]
 		keys = keys[1:]
 		return key, nil
@@ -1796,8 +1807,32 @@ func TestRunInteractiveFlashesAndClearsMouseClickFeedback(t *testing.T) {
 	if count := strings.Count(got, ansiMoveHome); count < 3 {
 		t.Fatalf("render count = %d, want at least initial, flash, and cleared frames; output=%q", count, got)
 	}
-	if !strings.Contains(got, ansiBgCyan+ansiWhite+ansiBold) {
+	if !strings.Contains(got, ansiInverse) {
 		t.Fatalf("interactive output missing click flash style:\n%q", got)
+	}
+}
+
+func TestNotificationMessageExpiresAfterTTL(t *testing.T) {
+	app := App{State: ViewState{Message: "created disk:disk"}}
+	now := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+
+	if changed := app.updateMessageLifetime(now); changed {
+		t.Fatal("initial message lifetime tracking marked state dirty")
+	}
+	if app.State.Message == "" {
+		t.Fatal("initial message was cleared")
+	}
+	if changed := app.updateMessageLifetime(now.Add(notificationMessageTTL - time.Second)); changed {
+		t.Fatal("message expired before TTL")
+	}
+	if app.State.Message == "" {
+		t.Fatal("message cleared before TTL")
+	}
+	if changed := app.updateMessageLifetime(now.Add(notificationMessageTTL)); !changed {
+		t.Fatal("message did not expire at TTL")
+	}
+	if app.State.Message != "" {
+		t.Fatalf("message after TTL = %q, want empty", app.State.Message)
 	}
 }
 
@@ -2577,6 +2612,9 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 	if daemon.applyCalls != 1 {
 		t.Fatalf("run applied lab %d times, want 1", daemon.applyCalls)
 	}
+	if app.State.Message != "" {
+		t.Fatalf("run message = %q, want no desired-state notification", app.State.Message)
+	}
 	if daemon.lastApply.LabPath != path {
 		t.Fatalf("applied lab path = %q, want %q", daemon.lastApply.LabPath, path)
 	}
@@ -2590,6 +2628,9 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 	}
 	if daemon.applyCalls != 2 {
 		t.Fatalf("run+stop applied lab %d times, want 2", daemon.applyCalls)
+	}
+	if app.State.Message != "" {
+		t.Fatalf("stop message = %q, want no desired-state notification", app.State.Message)
 	}
 	node, ok := nodeByKey(app.Model, stateKey)
 	if !ok {
@@ -2675,6 +2716,9 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 	if daemon.applyCalls != 1 {
 		t.Fatalf("container run applied lab %d times, want 1", daemon.applyCalls)
 	}
+	if app.State.Message != "" {
+		t.Fatalf("container run message = %q, want no desired-state notification", app.State.Message)
+	}
 
 	app.runMenuAction(Node{ID: "web", Type: NodeContainer}, "stop")
 	if runtime.stops != 0 {
@@ -2685,6 +2729,9 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 	}
 	if daemon.applyCalls != 2 {
 		t.Fatalf("container run+stop applied lab %d times, want 2", daemon.applyCalls)
+	}
+	if app.State.Message != "" {
+		t.Fatalf("container stop message = %q, want no desired-state notification", app.State.Message)
 	}
 }
 
@@ -2726,6 +2773,9 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 	}
 	if !app.PendingStarts[stateKey] {
 		t.Fatalf("pending starts = %#v, want %s", app.PendingStarts, stateKey)
+	}
+	if app.State.Message != "" {
+		t.Fatalf("run message = %q, want no desired-state notification", app.State.Message)
 	}
 }
 
@@ -3009,7 +3059,7 @@ func topAddDropdownRowForAction(t *testing.T, app *App, action string) rect {
 	return rect{}
 }
 
-func TestMouseClickTopAddDropdownCreatesVM(t *testing.T) {
+func TestMouseClickPaletteCreatesVM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{ID: "demo"}
 	if err := lab.SaveFile(path, loaded); err != nil {
@@ -3028,36 +3078,39 @@ func TestMouseClickTopAddDropdownCreatesVM(t *testing.T) {
 		ViewHeight: 20,
 	}
 
-	addButton := topRootButtonForAction(t, app.ViewWidth, "create-menu")
-	app.handleKey("mouse:" + strconv.Itoa(addButton.X+1) + ":0:0")
-	if !app.State.TopMenuOpen {
-		t.Fatalf("top add menu did not open: %#v", app.State)
+	app.handleKey("char::")
+	app.State.PaletteQuery = "add"
+	layout, ok := paletteLayout(app.ViewWidth, app.ViewHeight)
+	if !ok {
+		t.Fatal("palette layout unavailable")
 	}
-	vmRow := topAddDropdownRowForAction(t, &app, "add vm")
-	app.handleKey("mouse:" + strconv.Itoa(vmRow.X+1) + ":" + strconv.Itoa(vmRow.Y) + ":0")
+	app.handleKey("mouse:" + strconv.Itoa(layout.X+2) + ":" + strconv.Itoa(paletteRowsY(layout)) + ":0")
 	if len(app.Lab.VMs) != 1 {
-		t.Fatalf("vms after top add = %#v", app.Lab.VMs)
+		t.Fatalf("vms after palette add = %#v", app.Lab.VMs)
 	}
-	if app.State.TopMenuOpen {
-		t.Fatal("top add menu stayed open after create")
+	if app.State.PaletteOpen {
+		t.Fatal("palette stayed open after create")
 	}
 }
 
-func TestMouseClickTopExitQuits(t *testing.T) {
+func TestPaletteExitQuits(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "empty"},
 		State:      ViewState{Focus: FocusGraph},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
-	exitButton := topRootButtonForAction(t, app.ViewWidth, "exit")
 
-	if !app.handleKey("mouse:" + strconv.Itoa(exitButton.X+1) + ":0:0") {
-		t.Fatal("top Exit click did not quit")
+	app.handleKey("char::")
+	for _, key := range []string{"char:q"} {
+		app.handleKey(key)
+	}
+	if !app.handleKey("enter") {
+		t.Fatal("palette q did not quit")
 	}
 }
 
-func TestTopDisksOpensDiskExplorer(t *testing.T) {
+func TestPaletteDisksOpensDiskExplorer(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "demo"},
 		Lab:        &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", Name: "router", MemoryMB: 512, CPUs: 1}}, Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm1"}}},
@@ -3065,15 +3118,69 @@ func TestTopDisksOpensDiskExplorer(t *testing.T) {
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
-	disksButton := topRootButtonForAction(t, app.ViewWidth, "disk-explorer")
-
-	app.handleKey("mouse:" + strconv.Itoa(disksButton.X+1) + ":0:0")
+	app.handleKey("char::")
+	for _, key := range []string{"char:d", "char:i", "char:s", "char:k", "char:s"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
 
 	if !app.State.DiskExplorerOpen {
 		t.Fatalf("disk explorer did not open: %#v", app.State)
 	}
 	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
-	if !strings.Contains(out, "Disks: demo") || !strings.Contains(out, "data  base  10G") || !strings.Contains(out, "at:vm:router") || !strings.Contains(out, "N create") {
+	for _, want := range []string{"Disks: demo", "DISK", "TYPE", "ATTACHED/BASE", "data", "base", "10G", "vm:router", "N create"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("disk explorer render missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDiskExplorerRenderUsesStructuredColumns(t *testing.T) {
+	app := App{
+		Model: Model{ID: "demo"},
+		Lab: &lab.Lab{
+			ID:         "demo",
+			Containers: []lab.Container{{ID: "ct1", Name: "Kali", Image: "kali"}},
+			Disks: []lab.Disk{{
+				ID:           "kali",
+				Path:         "/home/powerpenguini/.foxlab/labs/default/disks/kali.qcow2",
+				SizeGB:       30,
+				Format:       "qcow2",
+				Kind:         "base",
+				AttachedType: "container",
+				AttachedTo:   "ct1",
+			}},
+		},
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	for _, want := range []string{"DISK", "TYPE", "SIZE", "FMT", "ATTACHED/BASE", "PATH", "kali", "base", "30G", "qcow2", "container:Kali"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("disk explorer table missing %q:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{"ID / kind / size / format", "kali  base  30G"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("disk explorer still uses flat row %q:\n%s", notWant, out)
+		}
+	}
+}
+
+func TestDiskExplorerRenderMarksSelectedRow(t *testing.T) {
+	app := App{
+		Model: Model{ID: "demo"},
+		Lab: &lab.Lab{
+			ID:    "demo",
+			Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
+		},
+		State:      ViewState{DiskExplorerOpen: true},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	if !strings.Contains(out, "> data") {
 		t.Fatalf("disk explorer render missing content:\n%s", out)
 	}
 }
@@ -3268,7 +3375,7 @@ func TestDiskExplorerRenamesBaseDisk(t *testing.T) {
 		t.Fatalf("layer base = %q, want system", reloaded.Disks[1].Base)
 	}
 	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
-	if !strings.Contains(out, "system  base") || !strings.Contains(out, "base:system") {
+	if !strings.Contains(out, "system") || !strings.Contains(out, "base:system") {
 		t.Fatalf("explorer render missing renamed disk/base reference:\n%s", out)
 	}
 }
@@ -3440,7 +3547,7 @@ func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 	}
 }
 
-func TestDiskExplorerDoesNotBlockTopRibbonMouse(t *testing.T) {
+func TestDiskExplorerTopRowClickClosesExplorerWithoutAction(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "demo"},
 		Lab:        &lab.Lab{ID: "demo"},
@@ -3448,10 +3555,12 @@ func TestDiskExplorerDoesNotBlockTopRibbonMouse(t *testing.T) {
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
-	exitButton := topRootButtonForAction(t, app.ViewWidth, "exit")
 
-	if !app.handleKey("mouse:" + strconv.Itoa(exitButton.X+1) + ":0:0") {
-		t.Fatal("top Exit click was blocked by disk explorer")
+	if app.handleKey("mouse:10:0:0") {
+		t.Fatal("top row click quit while disk explorer was open")
+	}
+	if app.State.DiskExplorerOpen {
+		t.Fatal("top row click did not close disk explorer")
 	}
 }
 
@@ -3462,15 +3571,17 @@ func TestMouseClickDisabledApplyLabDoesNothing(t *testing.T) {
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
-	applyButton := topRootButtonForAction(t, app.ViewWidth, "apply-lab")
+	app.handleKey("char::")
+	for _, key := range []string{"char:a", "char:p", "char:p", "char:l", "char:y"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
 
-	app.handleKey("mouse:" + strconv.Itoa(applyButton.X+1) + ":0:0")
-
-	if app.State.Message != "" {
+	if app.State.Message != "lab already applied" {
 		t.Fatalf("disabled apply lab changed message to %q", app.State.Message)
 	}
-	if app.State.TopMenuOpen {
-		t.Fatal("disabled apply lab opened a menu")
+	if !app.State.PaletteOpen {
+		t.Fatal("disabled apply lab closed palette")
 	}
 }
 
@@ -3501,24 +3612,17 @@ func TestApplyOpenLabDoesNotReloadSameActiveLab(t *testing.T) {
 	}
 }
 
-func TestTabTogglesTopAndGraphFocus(t *testing.T) {
+func TestTabKeepsGraphFocusWithoutTopRibbon(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph, Selected: 0}}
 	startSelected := app.State.Selected
 
 	app.handleKey("tab")
-	if app.State.Focus != FocusTop {
-		t.Fatalf("focus after first tab = %d, want top", app.State.Focus)
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after tab = %d, want graph", app.State.Focus)
 	}
 	app.handleKey("right")
-	if app.State.Selected != startSelected {
-		t.Fatalf("top focus right moved graph selection from %d to %d", startSelected, app.State.Selected)
-	}
-	if app.State.TopMenuRootSelected != 1 {
-		t.Fatalf("top root selection = %d, want Add", app.State.TopMenuRootSelected)
-	}
-	app.handleKey("tab")
-	if app.State.Focus != FocusGraph {
-		t.Fatalf("focus after second tab = %d, want graph", app.State.Focus)
+	if app.State.Selected == startSelected {
+		t.Fatalf("graph focus right did not move graph selection from %d", startSelected)
 	}
 }
 
@@ -3544,8 +3648,8 @@ func TestTabClosesContextMenuAndTogglesFocus(t *testing.T) {
 
 	app.handleKey("tab")
 
-	if app.State.Focus != FocusTop {
-		t.Fatalf("focus after tab = %d, want top", app.State.Focus)
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after tab = %d, want graph", app.State.Focus)
 	}
 	if app.State.ContextMenu || app.State.ContextInSubmenu || app.State.ContextGroup != "" || app.State.ContextEdit {
 		t.Fatalf("context menu state after tab = %#v, want closed", app.State)
@@ -3596,7 +3700,7 @@ func TestMouseClickWorkspaceMovesFocusToGraph(t *testing.T) {
 	}
 }
 
-func TestMouseClickTopRowMovesFocusToRibbon(t *testing.T) {
+func TestMouseClickTopRowDoesNotMoveFocusToRibbon(t *testing.T) {
 	app := App{
 		Model:      MockModel(),
 		State:      ViewState{Focus: FocusGraph},
@@ -3606,12 +3710,12 @@ func TestMouseClickTopRowMovesFocusToRibbon(t *testing.T) {
 
 	app.handleKey("mouse:70:0:0")
 
-	if app.State.Focus != FocusTop {
-		t.Fatalf("focus after top row click = %d, want top", app.State.Focus)
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after top row click = %d, want graph", app.State.Focus)
 	}
 }
 
-func TestTopFocusKeyboardAddAndExit(t *testing.T) {
+func TestPaletteKeyboardAddAndExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{ID: "demo"}
 	if err := lab.SaveFile(path, loaded); err != nil {
@@ -3628,48 +3732,153 @@ func TestTopFocusKeyboardAddAndExit(t *testing.T) {
 		State:   ViewState{Focus: FocusGraph},
 	}
 
-	app.handleKey("tab")
-	app.handleKey("right")
-	app.handleKey("enter")
-	if !app.State.TopMenuOpen {
-		t.Fatalf("enter on top Add did not open dropdown: %#v", app.State)
+	app.handleKey("char::")
+	for _, key := range []string{"char:a", "char:d", "char:d", "char: ", "char:v", "char:m"} {
+		app.handleKey(key)
 	}
 	app.handleKey("enter")
 	if len(app.Lab.VMs) != 1 {
-		t.Fatalf("vms after keyboard top add = %#v", app.Lab.VMs)
+		t.Fatalf("vms after keyboard palette add = %#v", app.Lab.VMs)
 	}
 
-	items := topRibbonRootItems()
-	for i, item := range items {
-		if contextMenuAction(item) == "exit" {
-			app.State.TopMenuRootSelected = i
-			break
-		}
+	app.handleKey("char::")
+	for _, key := range []string{"char:q"} {
+		app.handleKey(key)
 	}
 	if !app.handleKey("enter") {
-		t.Fatal("keyboard top Exit did not quit")
+		t.Fatal("keyboard palette q did not quit")
 	}
 }
 
-func TestTopFocusDownDoesNotActivateExit(t *testing.T) {
-	app := App{Model: MockModel(), State: ViewState{Focus: FocusTop}}
-	items := topRibbonRootItems()
-	for i, item := range items {
-		if contextMenuAction(item) == "exit" {
-			app.State.TopMenuRootSelected = i
-			break
-		}
+func TestPaletteEnterAcceptsFirstAddSuggestion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{ID: "demo"}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
 	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State:   ViewState{Focus: FocusGraph},
+	}
+
+	app.handleKey("char::")
+	for _, key := range []string{"char:a", "char:d", "char:d"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
+
+	if app.State.PaletteOpen {
+		t.Fatal("accepted add suggestion kept palette open")
+	}
+	if len(app.Lab.VMs) != 1 {
+		t.Fatalf("accepted first add suggestion mutated lab to %#v, want one VM", app.Lab)
+	}
+}
+
+func TestPaletteTabCompletesSelectedSuggestion(t *testing.T) {
+	app := App{
+		Model: Model{ID: "demo"},
+		Lab:   &lab.Lab{ID: "demo"},
+		State: ViewState{Focus: FocusGraph},
+	}
+
+	app.handleKey("char::")
+	for _, key := range []string{"char:a", "char:d"} {
+		app.handleKey(key)
+	}
+	app.handleKey("tab")
+
+	if !app.State.PaletteOpen {
+		t.Fatal("tab completion closed palette")
+	}
+	if app.State.PaletteQuery != "add" {
+		t.Fatalf("tab completed query to %q, want add", app.State.PaletteQuery)
+	}
+}
+
+func TestPaletteEnterAcceptsFirstExecutableSuggestion(t *testing.T) {
+	app := App{
+		Model: Model{ID: "demo"},
+		Lab:   &lab.Lab{ID: "demo"},
+		State: ViewState{Focus: FocusGraph},
+	}
+
+	app.handleKey("char::")
+	for _, key := range []string{"char:d", "char:i"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
+
+	if app.State.PaletteOpen {
+		t.Fatal("accepted disk suggestion kept palette open")
+	}
+	if !app.State.DiskExplorerOpen {
+		t.Fatal("accepted first executable suggestion did not open disk explorer")
+	}
+}
+
+func TestColonOpensCommandPalette(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+
+	app.handleKey("char::")
+
+	if !app.State.PaletteOpen {
+		t.Fatal("colon did not open command palette")
+	}
+}
+
+func TestCtrlPDoesNotOpenCommandPalette(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+
+	app.handleKey("ctrl+p")
+
+	if app.State.PaletteOpen {
+		t.Fatal("ctrl+p opened command palette")
+	}
+}
+
+func TestPaletteExcludesSelectedNodeActions(t *testing.T) {
+	app := App{
+		Model:      MockModel(),
+		State:      ViewState{Focus: FocusGraph, Selected: 0},
+		ViewWidth:  100,
+		ViewHeight: 30,
+	}
+
+	app.handleKey("char::")
+	for _, key := range []string{"char:c", "char:o", "char:n", "char:f"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
+
+	if !app.State.PaletteOpen {
+		t.Fatal("unknown node-specific command closed palette")
+	}
+	if app.State.PaletteQuery != "conf" {
+		t.Fatalf("palette query = %q, want conf", app.State.PaletteQuery)
+	}
+	if app.State.ContextMenu || app.State.ContextInSubmenu || app.State.ContextGroup != "" {
+		t.Fatalf("node-specific context action opened from palette: %#v", app.State)
+	}
+	if actions := filteredPaletteActions(app.Model, app.State); len(actions) != 0 {
+		t.Fatalf("palette actions for node-specific query = %#v, want none", actions)
+	}
+}
+
+func TestTopFocusDownDoesNotActivateActions(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusTop}}
 
 	if app.handleKey("down") {
-		t.Fatal("down on top Exit quit unexpectedly")
+		t.Fatal("down on top focus quit unexpectedly")
 	}
-	if app.State.Focus != FocusTop {
-		t.Fatalf("focus after down on top Exit = %d, want top", app.State.Focus)
+	if app.State.Focus != FocusGraph {
+		t.Fatalf("focus after down on top focus = %d, want graph", app.State.Focus)
 	}
 }
 
-func TestMouseClickTopAddLinkCreatesExternalLink(t *testing.T) {
+func TestPaletteAddUplinkCreatesExternalLink(t *testing.T) {
 	fakeHostInterfaces(t, "br0", "eth0")
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
@@ -3693,10 +3902,11 @@ func TestMouseClickTopAddLinkCreatesExternalLink(t *testing.T) {
 		ViewHeight: 20,
 	}
 
-	addButton := topRootButtonForAction(t, app.ViewWidth, "create-menu")
-	app.handleKey("mouse:" + strconv.Itoa(addButton.X+1) + ":0:0")
-	linkRow := topAddDropdownRowForAction(t, &app, "link")
-	app.handleKey("mouse:" + strconv.Itoa(linkRow.X+1) + ":" + strconv.Itoa(linkRow.Y) + ":0")
+	app.handleKey("char::")
+	for _, key := range []string{"char:a", "char:d", "char:d", "char: ", "char:u", "char:p", "char:l", "char:i", "char:n", "char:k"} {
+		app.handleKey(key)
+	}
+	app.handleKey("enter")
 	if app.State.ConnectMode {
 		t.Fatalf("link started connect mode: %#v", app.State)
 	}
@@ -3877,6 +4087,12 @@ func TestReadKeyKeepsArrowsAsNavigationInTextMode(t *testing.T) {
 			t.Fatalf("readKey in=%q = %q, want %q", tc.in, got, tc.want)
 		}
 	}
+}
+
+func TestDecodeKeysCtrlP(t *testing.T) {
+	got := decodeKeys("\x10", false)
+	want := []string{"ctrl+p"}
+	assertKeys(t, got, want)
 }
 
 func TestDecodeKeysExpandsBracketedPasteInTextMode(t *testing.T) {
@@ -4195,6 +4411,9 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 	}
 	if daemon.applyCalls != 4 {
 		t.Fatalf("start/stop commands applied lab %d times, want 4", daemon.applyCalls)
+	}
+	if app.State.Message != "" {
+		t.Fatalf("start/stop message = %q, want no desired-state notification", app.State.Message)
 	}
 }
 

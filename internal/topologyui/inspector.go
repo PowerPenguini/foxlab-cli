@@ -9,8 +9,8 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 	if panel.W <= 0 || panel.H <= 0 {
 		return
 	}
-	clearRect(g, panel)
-	drawPanelBox(g, panel, themeRoute)
+	fillRect(g, panel, themePanelInspector)
+	drawInspectorBrand(g, panel)
 	node, ok := selectedNode(m, state.Selected)
 	if !ok {
 		return
@@ -22,22 +22,39 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 		return
 	}
 	drawInspectorHeader(g, node, x, y, w)
-	y += 2
-	g.Text(x, y, fit("state  "+displayNodeState(node.State, state.AnimationFrame), w), nodeStateStyle(node.Type, node.State))
-	y++
-	g.Text(x, y, fit("id     "+node.ID, w), themeMuted)
-	y++
+	y += 3
+	y = drawInspectorSection(g, x, y, w, "State", []inspectorKV{
+		{Key: "state", Value: displayNodeState(node.State, state.AnimationFrame), Style: themePanelInspector + nodeStateStyle(node.Type, node.State)},
+	})
+	y = drawInspectorSection(g, x, y, w, "Identity", []inspectorKV{
+		{Key: "id", Value: node.ID, Style: themePanelInspectorMuted},
+	})
 	if node.DesiredState != "" {
-		g.Text(x, y, fit("want   "+node.DesiredState, w), themeMuted)
-		y++
+		y = drawInspectorSection(g, x, y, w, "Desired", []inspectorKV{
+			{Key: "want", Value: node.DesiredState, Style: themePanelInspectorMuted},
+		})
 	}
-	for _, line := range inspectorLines(node) {
-		if y >= panel.Y+panel.H-1 {
-			return
+	details := inspectorLines(node)
+	if len(details) > 0 {
+		kvs := make([]inspectorKV, 0, len(details))
+		for _, line := range details {
+			key, value := inspectorLineParts(line)
+			kvs = append(kvs, inspectorKV{Key: key, Value: value, Style: inspectorLineStyle(line)})
 		}
-		g.Text(x, y, fit(line, w), inspectorLineStyle(line))
-		y++
+		drawInspectorSection(g, x, y, w, "Configuration", kvs)
 	}
+}
+
+func drawInspectorBrand(g *grid, panel rect) {
+	const brand = "// FoxLab"
+	if panel.W < runeLen(brand)+2 || panel.H <= 0 {
+		return
+	}
+	x := panel.X + 2
+	y := panel.Y + panel.H - 1
+	g.Text(x, y, "// ", themePanelInspectorMuted)
+	g.Text(x+3, y, "Fox", themePanelInspector+ansiOrange+ansiBold)
+	g.Text(x+6, y, "Lab", themePanelInspector+ansiWhite+ansiBold)
 }
 
 func drawInspectorHeader(g *grid, node Node, x, y, width int) {
@@ -47,15 +64,42 @@ func drawInspectorHeader(g *grid, node Node, x, y, width int) {
 	badge := "[" + firstNonEmpty(node.Badge, NodeKind(node.Type)) + "]"
 	name := firstNonEmpty(node.Label, node.ID)
 	if runeLen(badge) >= width {
-		g.Text(x, y, fit(badge, width), nodeBadgeStyle(node.Type))
+		g.Text(x, y, fit(badge, width), themePanelInspectorHeader+nodeBadgeStyle(node.Type))
 		return
 	}
-	g.Text(x, y, badge, nodeBadgeStyle(node.Type))
+	g.Text(x, y, badge, themePanelInspectorHeader+nodeBadgeStyle(node.Type))
 	nameWidth := width - runeLen(badge) - 1
 	if nameWidth <= 0 {
 		return
 	}
-	g.Text(x+runeLen(badge)+1, y, fit(name, nameWidth), nodeLabelStyle(node.Type))
+	g.Text(x+runeLen(badge)+1, y, fit(name, nameWidth), themePanelInspectorHeader+nodeLabelStyle(node.Type))
+}
+
+type inspectorKV struct {
+	Key   string
+	Value string
+	Style string
+}
+
+func drawInspectorSection(g *grid, x, y, width int, title string, rows []inspectorKV) int {
+	if width <= 0 || len(rows) == 0 {
+		return y
+	}
+	g.Text(x, y, fit(title, width), themePanelInspectorHeader)
+	y++
+	for _, row := range rows {
+		if row.Key == "" && row.Value == "" {
+			continue
+		}
+		key := fit(row.Key, min(10, max(4, width/3)))
+		keyW := runeLen(key)
+		g.Text(x, y, key, themePanelInspectorMuted)
+		if width-keyW-1 > 0 {
+			g.Text(x+keyW+1, y, fit(row.Value, width-keyW-1), row.Style)
+		}
+		y++
+	}
+	return y + 1
 }
 
 func inspectorLines(node Node) []string {
@@ -76,6 +120,15 @@ func inspectorLines(node Node) []string {
 	default:
 		return compactDetailLines(node, nil, 7)
 	}
+}
+
+func inspectorLineParts(line string) (string, string) {
+	line = strings.TrimSpace(line)
+	key, value, ok := strings.Cut(line, " ")
+	if !ok {
+		return line, ""
+	}
+	return strings.TrimSpace(key), strings.TrimSpace(value)
 }
 
 func compactDetailLines(node Node, keys []string, limit int) []string {
@@ -123,9 +176,9 @@ func detailLine(key, value string) string {
 
 func inspectorLineStyle(line string) string {
 	if strings.HasPrefix(strings.TrimSpace(line), "links") {
-		return themeMuted
+		return themePanelInspectorMuted
 	}
-	return ""
+	return themePanelInspector
 }
 
 func drawPanelBox(g *grid, r rect, style string) {

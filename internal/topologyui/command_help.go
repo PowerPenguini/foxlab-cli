@@ -6,11 +6,11 @@ func helpLines(topic string) []string {
 	switch strings.ToLower(strings.TrimSpace(topic)) {
 	case "", "general", "all":
 		return []string{
-			"menu: Space or mouse click opens actions; Enter/click selects; Escape closes",
+			"palette/menu: : opens actions; Space opens node menu; Escape closes",
 			"navigation: arrows or hjkl move selection; mouse click selects nodes and buttons",
 			"editing: choose Configuration fields and type inline",
 			"links: use NIC menu and connect mode to create direct links",
-			"disks: open Disks from the top ribbon for global disk management",
+			"disks: open Disks from the palette for global disk management",
 		}
 	case "add":
 		return []string{
@@ -34,7 +34,7 @@ func helpLines(topic string) []string {
 		}
 	case "disk", "disks":
 		return []string{
-			"disk: open Disks from the top ribbon or use Disk menu from a workload",
+			"disk: open Disks from the palette or use Disk menu from a workload",
 			"disk buttons: L creates a layer, M merges, D detaches, X deletes",
 			"disk explorer: N creates base, L creates layer, E renames, R resizes, M merges, X deletes, I shows info",
 			"disk commands: create, attach, detach, merge, rename, resize, info, layer create/delete, delete",

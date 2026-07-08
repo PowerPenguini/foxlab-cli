@@ -6,6 +6,13 @@ func (a *App) handleKey(key string) bool {
 	if isMouseKey(key) {
 		return a.handleMouseKey(key)
 	}
+	if !a.State.PaletteOpen && key == "char::" {
+		a.togglePalette()
+		return false
+	}
+	if a.State.PaletteOpen {
+		return a.handlePaletteKey(key)
+	}
 	if a.State.DiskExplorerOpen {
 		return a.handleDiskExplorerKey(key)
 	}

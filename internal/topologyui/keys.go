@@ -23,7 +23,7 @@ func readAppKey(a *App) (string, error) {
 	if ok, err := waitReadable(int(a.In.Fd()), spinnerInterval); err != nil || !ok {
 		return "", err
 	}
-	keys, err := readKeys(int(a.In.Fd()), a.State.ContextEdit || a.State.DiskExplorerOpen)
+	keys, err := readKeys(int(a.In.Fd()), a.State.ContextEdit || a.State.DiskExplorerOpen || a.State.PaletteOpen)
 	if err != nil || len(keys) == 0 {
 		return "", err
 	}
@@ -225,6 +225,8 @@ func runeKey(r rune, commandMode bool) string {
 		return "enter"
 	case '\x7f', '\b':
 		return "backspace"
+	case '\x10':
+		return "ctrl+p"
 	}
 	if r >= 0x20 && r != 0x7f {
 		return "char:" + string(r)

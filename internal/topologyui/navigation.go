@@ -27,12 +27,6 @@ func MoveContextSelection(current, length int, key string) int {
 }
 
 func NextFocus(current int) int {
-	if current == FocusTop {
-		return FocusGraph
-	}
-	if current == FocusGraph {
-		return FocusTop
-	}
 	return FocusGraph
 }
 

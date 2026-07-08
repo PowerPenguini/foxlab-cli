@@ -29,7 +29,6 @@ func drawRoutedEdgePortsStyled(g *grid, route edgeRoute, style string) {
 }
 
 func drawRoutePort(g *grid, port routePort, style string) {
-	g.SetLine(port.border.X, port.border.Y, maskBetween(port.border, port.entry), style)
 	g.SetLine(port.entry.X, port.entry.Y, maskBetween(port.entry, port.border), style)
 }
 

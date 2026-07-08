@@ -28,6 +28,11 @@ func fillRow(g *grid, x, y, width int, style string) {
 	tui.FillRow(g, x, y, width, style)
 }
 func clearRect(g *grid, r rect) { tui.ClearRect(g, r) }
+func fillRect(g *grid, r rect, style string) {
+	for y := r.Y; y < r.Y+r.H; y++ {
+		fillRow(g, r.X, y, r.W, style)
+	}
+}
 
 func lineH(g *grid, x1, x2, y int) { tui.LineH(g, x1, x2, y) }
 func lineHStyled(g *grid, x1, x2, y int, style string) {

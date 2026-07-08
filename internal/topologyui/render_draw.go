@@ -1,6 +1,10 @@
 package topologyui
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
 
 func layoutNodeRects(m Model, pane rect) map[string]rect {
 	return layoutNodeRectsWithPan(m, pane, 0, 0)
@@ -38,31 +42,42 @@ func rectIntersects(r rect, bounds rect) bool {
 }
 
 func drawNode(g *grid, node Node, r rect, selected, graphFocused bool, frame int) {
-	stateStyleValue := nodeStateStyle(node.Type, node.State)
-	clearRect(g, r)
-	drawNodeBox(g, r, selectedBorderStyle(selected, graphFocused))
+	panelStyle := nodePanelStyle(node.Type, selected && graphFocused)
+	stateStyleValue := panelStyle + nodeStateStyle(node.Type, node.State)
+	fillRect(g, r, panelStyle)
+	if selected && graphFocused {
+		fillRow(g, r.X, r.Y, r.W, nodePanelStyle(node.Type, true)+ansiBold+ansiBrightCyan)
+	}
+	drawNodeAccent(g, node.Type, r, selected && graphFocused)
 	kind := "[" + firstNonEmpty(node.Badge, NodeKind(node.Type)) + "]"
 	fullLabel := kind + " " + node.Label
-	contentX := r.X + 1
-	contentWidth := r.W - 2
+	contentX := r.X + 2
+	contentWidth := r.W - 3
 	labelWidth := contentWidth - runeLen(kind) - 1
 	if labelWidth > 0 {
-		g.Text(contentX, r.Y+1, kind, nodeBadgeStyle(node.Type))
-		g.Text(contentX+runeLen(kind)+1, r.Y+1, fit(node.Label, labelWidth), nodeLabelStyle(node.Type))
+		g.Text(contentX, r.Y+1, kind, panelStyle+nodeBadgeStyle(node.Type))
+		g.Text(contentX+runeLen(kind)+1, r.Y+1, fit(node.Label, labelWidth), panelStyle+nodeLabelStyle(node.Type))
 	} else {
-		g.Text(contentX, r.Y+1, fit(fullLabel, contentWidth), nodeLabelStyle(node.Type))
+		g.Text(contentX, r.Y+1, fit(fullLabel, contentWidth), panelStyle+nodeLabelStyle(node.Type))
 	}
-	lines := nodeCardLines(node, frame, r.W-2)
+	lines := nodeCardLines(node, frame, contentWidth)
 	for i, line := range lines {
 		y := r.Y + 2 + i
-		if y >= r.Y+r.H-1 {
+		if y >= r.Y+r.H {
 			break
 		}
-		drawNodeCardLine(g, node, r.X+1, y, r.W-2, line, stateStyleValue)
+		drawNodeCardLine(g, node, contentX, y, contentWidth, line, stateStyleValue, panelStyle)
 	}
 }
 
-func drawNodeCardLine(g *grid, node Node, x, y, width int, line, valueStyle string) {
+func drawNodeAccent(g *grid, nodeType string, r rect, selected bool) {
+	style := nodeAccentStyle(nodeType, selected)
+	for y := r.Y; y < r.Y+r.H; y++ {
+		g.Set(r.X, y, '▌', style)
+	}
+}
+
+func drawNodeCardLine(g *grid, node Node, x, y, width int, line, valueStyle, panelStyle string) {
 	line = fit(line, width)
 	if node.Type != NodeExternal && node.Type != NodeSwitch {
 		g.Text(x, y, line, valueStyle)
@@ -76,24 +91,24 @@ func drawNodeCardLine(g *grid, node Node, x, y, width int, line, valueStyle stri
 	prefix := label + ":"
 	labelWidth := nodeDetailLabelWidth(node.Type)
 	if labelWidth >= width {
-		g.Text(x, y, fit(prefix, width), nodeDetailLabelStyle(node.Type))
+		g.Text(x, y, fit(prefix, width), nodeDetailLabelStyle(node.Type, panelStyle))
 		return
 	}
-	g.Text(x, y, fit(prefix, labelWidth), nodeDetailLabelStyle(node.Type))
+	g.Text(x, y, fit(prefix, labelWidth), nodeDetailLabelStyle(node.Type, panelStyle))
 	if padding := labelWidth - runeLen(prefix); padding > 0 {
-		g.Text(x+runeLen(prefix), y, strings.Repeat(" ", padding), nodeDetailLabelStyle(node.Type))
+		g.Text(x+runeLen(prefix), y, strings.Repeat(" ", padding), nodeDetailLabelStyle(node.Type, panelStyle))
 	}
 	g.Text(x+labelWidth, y, fit(value, width-labelWidth), valueStyle)
 }
 
-func nodeDetailLabelStyle(nodeType string) string {
+func nodeDetailLabelStyle(nodeType, panelStyle string) string {
 	switch nodeType {
 	case NodeSwitch:
-		return ansiYellow + ansiDim
+		return panelStyle + ansiYellow + ansiDim
 	case NodeExternal:
-		return ansiBrightMagenta + ansiDim
+		return panelStyle + ansiBrightMagenta + ansiDim
 	default:
-		return themeMuted
+		return panelStyle + ansiBrightBlack
 	}
 }
 
@@ -147,23 +162,12 @@ func stateGlyph(state string) string {
 
 func selectedBorderStyle(selected, graphFocused bool) string {
 	if !selected || !graphFocused {
-		return ""
+		return ansiWhite
 	}
 	return ansiBold + ansiBrightCyan
 }
 
 func styleBoxBorder(g *grid, r rect, style string) {
-	if r.W < 2 || r.H < 2 {
-		return
-	}
-	for x := r.X; x < r.X+r.W; x++ {
-		g.SetStyle(x, r.Y, style)
-		g.SetStyle(x, r.Y+r.H-1, style)
-	}
-	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
-		g.SetStyle(r.X, y, style)
-		g.SetStyle(r.X+r.W-1, y, style)
-	}
 }
 
 func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect) {
@@ -192,95 +196,154 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 }
 
 func drawMenuColumn(g *grid, column menuColumnLayout, isActive bool, editing bool, editValue string, editCursor int, deleteButtonSelected bool, mergeButtonSelected bool, detachButtonSelected bool, addLayerButtonSelected bool, diskMenu bool) {
+	clearRect(g, column.rect)
 	drawContextMenuItems(g, column.rect, menuItemLabels(column.items), menuItemActions(column.items), menuItemKinds(column.items), menuItemEnabled(column.items), column.selected, column.start, isActive, editing, editValue, editCursor, deleteButtonSelected, mergeButtonSelected, detachButtonSelected, addLayerButtonSelected, diskMenu)
 }
 
-func drawTopRibbon(g *grid, m Model, bounds rect, state ViewState) {
-	items := topRibbonRootItems()
-	buttons := topMenuButtonRects(items, bounds.W)
-	fillRow(g, 0, 0, g.Width, themeChrome)
-	activeRoot := normalizedMenuSelection(state.TopMenuRootSelected, len(items))
-	addRoot := topRibbonAddRootIndex(items)
-	for i, button := range buttons {
-		style := themeChrome
-		enabled := topRibbonRootEnabled(items[i], state)
-		if !enabled {
-			style = themeChrome + themeMuted
-		} else if state.Focus == FocusTop && i == activeRoot {
-			style = themeChromeActive
-		}
-		if state.TopMenuOpen && i == addRoot {
-			style = themeChromeActive
-		}
-		g.Text(button.X, button.Y, fit(" "+topMenuLabel(items[i])+" ", button.W), style)
-	}
-	drawTopRibbonContext(g, m, bounds, state, buttons)
-	if !state.TopMenuOpen || len(buttons) == 0 {
+func drawPalette(g *grid, m Model, state ViewState, width, height int) {
+	if !state.PaletteOpen {
 		return
 	}
-	dropdownItems := topRibbonAddItems()
-	if len(dropdownItems) == 0 {
-		return
-	}
-	if addRoot < 0 || addRoot >= len(buttons) {
-		return
-	}
-	menu, ok := layoutDropdownMenu(bounds, buttons[addRoot], menuItemsFromLabels(dropdownItems), state.TopMenuSelected)
+	layout, ok := paletteLayout(width, height)
 	if !ok {
 		return
 	}
-	drawMenuColumn(g, menu, true, false, "", 0, false, false, false, false, false)
+	drawPaletteOverlay(g, layout)
+	fillRect(g, layout, themePalette)
+	drawPalettePrompt(g, m, state, layout)
+	actions := filteredPaletteActions(m, state)
+	if len(actions) == 0 {
+		g.Text(layout.X+paletteRecordPaddingX, paletteEmptyY(layout), fit("no completions", layout.W-paletteRecordPaddingX*2), themePalette)
+		return
+	}
+	start := paletteStart(state, len(actions), layout)
+	selected := normalizedMenuSelection(state.PaletteSelected, len(actions))
+	visible := paletteVisibleRows(layout)
+	for row := 0; row < visible; row++ {
+		index := start + row
+		if index >= len(actions) {
+			break
+		}
+		y := paletteRowsY(layout) + row
+		action := actions[index]
+		rowStyle := themePalette
+		labelStyle := rowStyle
+		hintStyle := themePaletteHint
+		if index == selected {
+			rowStyle = themePaletteActive
+			labelStyle = rowStyle
+			hintStyle = rowStyle
+			fillRow(g, layout.X, y, layout.W, rowStyle)
+		}
+		if !action.Enabled {
+			labelStyle = rowStyle + ansiBrightBlack
+			hintStyle = rowStyle + ansiBrightBlack
+		}
+		labelX := layout.X + paletteRecordPaddingX
+		hint := paletteActionHint(action)
+		hintW := 0
+		if hint != "" && layout.W > 48 {
+			hintW = min(18, runeLen(hint)+2)
+		}
+		labelW := layout.W - paletteRecordPaddingX*2 - hintW
+		g.Text(labelX, y, fit(paletteActionDisplay(action), labelW), labelStyle)
+		if hintW > 0 {
+			g.Text(layout.X+layout.W-paletteRecordPaddingX-hintW, y, fit(hint, hintW), hintStyle)
+		}
+	}
+	if len(actions) > visible {
+		scroll := paletteScrollText(start, visible, len(actions))
+		if scroll != "" {
+			g.Text(layout.X+layout.W-1-runeLen(scroll), layout.Y, scroll, themePaletteMuted)
+		}
+	}
 }
 
-func drawTopRibbonContext(g *grid, m Model, bounds rect, state ViewState, buttons []rect) {
-	if bounds.W < 72 {
-		return
+func drawPaletteOverlay(g *grid, layout rect) {
+	for y := 0; y < g.Height; y++ {
+		for x := 0; x < g.Width; x++ {
+			if x >= layout.X && x < layout.X+layout.W && y >= layout.Y && y < layout.Y+layout.H {
+				continue
+			}
+			cell := &g.Cells[y*g.Width+x]
+			cell.Style = paletteOverlayStyle(cell.Style)
+		}
 	}
-	leftLimit := 0
-	if len(buttons) > 0 {
-		last := buttons[len(buttons)-1]
-		leftLimit = last.X + last.W + 1
-	}
-	context := topRibbonContext(m, state)
-	if state.StatusRefreshing {
-		context = spinner(state.AnimationFrame) + " " + context
-	}
-	if context == "" {
-		return
-	}
-	width := runeLen(context) + 2
-	x := bounds.X + bounds.W - width
-	if x <= leftLimit {
-		return
-	}
-	g.Text(x, bounds.Y, fit(" "+context+" ", width), themeChrome+themeMuted)
 }
 
-func topRibbonContext(m Model, state ViewState) string {
-	mode := "graph"
-	switch {
-	case state.CommandMode:
-		mode = "command"
-	case state.DiskExplorerOpen:
-		mode = "disks"
-	case state.MoveMode:
-		mode = "move"
-	case state.ConnectMode:
-		mode = "connect"
-	case state.ContextMenu:
-		mode = "menu"
-	case state.Focus == FocusTop:
-		mode = "top"
+func paletteOverlayStyle(style string) string {
+	if style == "" {
+		return themeTerminal + ansiDim
 	}
-	parts := []string{}
-	if m.ID != "" {
-		parts = append(parts, "lab "+m.ID)
+	if strings.Contains(style, ansiDim) {
+		return style
 	}
-	if node, ok := selectedNode(m, state.Selected); ok {
-		parts = append(parts, NodeKind(node.Type)+" "+firstNonEmpty(node.Label, node.ID))
+	return style + ansiDim
+}
+
+func drawPalettePrompt(g *grid, m Model, state ViewState, layout rect) {
+	actions := filteredPaletteActions(m, state)
+	selected := normalizedMenuSelection(state.PaletteSelected, len(actions))
+	query := state.PaletteQuery
+	normalized := normalizedPaletteQuery(query)
+	input := paletteInputRect(layout)
+	fillRect(g, input, themePaletteInput)
+	x := input.X + paletteInputPaddingX
+	y := input.Y + paletteInputPaddingY
+	maxW := input.W - paletteInputPaddingX*2
+	prompt := ":" + query
+	g.Text(x, y, fit(prompt, maxW), themePaletteInput+ansiBrightCyan+ansiBold)
+	if len(actions) == 0 || selected >= len(actions) {
+		return
 	}
-	parts = append(parts, "mode:"+mode)
-	return strings.Join(parts, " | ")
+	suffix := paletteCompletionSuffix(normalized, actions[selected].Query)
+	if suffix == "" {
+		return
+	}
+	offset := runeLen(prompt)
+	if offset >= maxW {
+		return
+	}
+	g.Text(x+offset, y, fit(suffix, maxW-offset), themePaletteInputHint)
+}
+
+func paletteCompletionSuffix(query, completion string) string {
+	if completion == "" || query == completion || !strings.HasPrefix(completion, query) {
+		return ""
+	}
+	return string([]rune(completion)[runeLen(query):])
+}
+
+func paletteActionDisplay(action paletteAction) string {
+	if action.Query != "" {
+		return action.Query
+	}
+	return strings.ToLower(action.Label)
+}
+
+func paletteActionHint(action paletteAction) string {
+	if !action.Enabled {
+		if action.DisabledReason != "" {
+			return "disabled"
+		}
+		return "unavailable"
+	}
+	if action.CompleteOnly {
+		return "complete"
+	}
+	if action.Hint != "" {
+		return action.Hint
+	}
+	return "run"
+}
+
+func paletteScrollText(start, visible, count int) string {
+	if visible <= 0 || count <= visible {
+		return ""
+	}
+	top := min(count, start+1)
+	bottom := min(count, start+visible)
+	return fmt.Sprintf("%d-%d/%d", top, bottom, count)
 }
 
 func drawConnectTargetMenu(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect) {
@@ -370,18 +433,17 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			}
 		}
 		rowStyle := themeMenuRow
-		textStyle := rowStyle
-		if isContextInfoItem(item) || !itemEnabled {
-			textStyle += themeMuted
-		}
 		if isActive && i == active {
 			rowStyle = themeMenuActive
-			textStyle = rowStyle
+		}
+		textStyle := rowStyle
+		if isContextInfoItem(item) || !itemEnabled {
+			textStyle = themeMenuMuted
+			if rowStyle == themeMenuActive {
+				textStyle = themeMenuMutedActive
+			}
 		}
 		fillRow(g, menu.X, menu.Y+row, menu.W, rowStyle)
-		if isActive && i == active {
-			g.Set(menu.X, menu.Y+row, ' ', ansiBgCyan)
-		}
 		textWidth := menu.W - 3
 		if isNICDetail(item) || kind == "uplink" || layerRow {
 			textWidth = max(0, menu.W-6)
@@ -415,7 +477,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 			}
 			lStyle := rowStyle
 			if isActive && i == active && addLayerButtonSelected {
-				lStyle = ansiBgCyan + ansiWhite + ansiBold
+				lStyle = ansiBrightCyan + ansiBold
 			}
 			xStyle := rowStyle
 			if isActive && i == active && deleteButtonSelected {
@@ -443,7 +505,7 @@ func drawContextMenuItems(g *grid, menu rect, items []string, actions []string, 
 		if layerRow {
 			mStyle := rowStyle
 			if isActive && i == active && mergeButtonSelected {
-				mStyle = ansiBgGreen + ansiWhite + ansiBold
+				mStyle = ansiGreen + ansiBold
 			}
 			dStyle := rowStyle
 			if isActive && i == active && detachButtonSelected {
@@ -496,10 +558,10 @@ func drawContextPlaceholder(g *grid, x, y int, item, rowStyle string) {
 
 func drawConsole(g *grid, state ViewState, width, height int) {
 	line := consoleLine(state)
-	if line == "" {
+	if line == "" || width <= 0 || height <= 0 {
 		return
 	}
-	drawConsoleLines(g, []string{line}, width, height, state.CommandMode)
+	drawNotification(g, notificationDisplayLine(line), notificationThemeForLine(line), width, height)
 }
 
 func consoleLine(state ViewState) string {
@@ -512,25 +574,206 @@ func consoleLine(state ViewState) string {
 	return ""
 }
 
-func drawConsoleLines(g *grid, lines []string, width, height int, commandMode bool) {
-	maxLines := min(len(lines), 1)
-	y := height - maxLines
-	for i := 0; i < maxLines; i++ {
-		line := lines[len(lines)-maxLines+i]
-		style := themeFooter
-		if commandMode && i == maxLines-1 {
-			style = themeFooterActive
-		}
-		fillRow(g, 0, y+i, width, style)
-		g.Text(1, y+i, fit(line, width-2), style)
+type notificationTheme struct {
+	body string
+	bar  string
+}
+
+func notificationThemeForLine(line string) notificationTheme {
+	theme := notificationTheme{body: themeNotification, bar: themeNotificationBar}
+	if isSuccessNotification(line) {
+		theme.bar = themeNotificationSuccessBar
 	}
+	return theme
+}
+
+func isSuccessNotification(line string) bool {
+	line = strings.TrimSpace(strings.ToLower(line))
+	if line == "" {
+		return false
+	}
+	for _, marker := range []string{" failed", " failed:", " not found", " unavailable", " denied", " missing", " invalid", " unsupported"} {
+		if strings.Contains(line, marker) {
+			return false
+		}
+	}
+	for _, prefix := range []string{
+		"applied lab ",
+		"attached disk:",
+		"created disk:",
+		"created disk layer:",
+		"deleted disk:",
+		"detached disk from ",
+		"merged disk layer:",
+		"renamed disk:",
+		"resized disk:",
+	} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func notificationDisplayLine(line string) string {
+	line = strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(line, "applied lab "):
+		return "Lab applied: " + strings.TrimSpace(strings.TrimPrefix(line, "applied lab "))
+	case strings.HasPrefix(line, "lab already applied "):
+		return "Lab already applied: " + strings.TrimSpace(strings.TrimPrefix(line, "lab already applied "))
+	case strings.HasPrefix(line, "created disk layer:"):
+		return "Disk layer created: " + strings.TrimSpace(strings.TrimPrefix(line, "created disk layer:"))
+	case strings.HasPrefix(line, "created disk:"):
+		return "Disk created: " + strings.TrimSpace(strings.TrimPrefix(line, "created disk:"))
+	case strings.HasPrefix(line, "deleted disk:"):
+		return "Disk deleted: " + strings.TrimSpace(strings.TrimPrefix(line, "deleted disk:"))
+	case strings.HasPrefix(line, "resized disk:"):
+		return "Disk resized: " + strings.TrimSpace(strings.TrimPrefix(line, "resized disk:"))
+	case strings.HasPrefix(line, "merged disk layer:"):
+		return "Disk layer merged: " + strings.TrimSpace(strings.TrimPrefix(line, "merged disk layer:"))
+	case strings.HasPrefix(line, "attached disk:"):
+		return formatDiskTargetNotification(line, "attached disk:", "Disk attached")
+	case strings.HasPrefix(line, "renamed disk:"):
+		return formatRenamedDiskNotification(line)
+	case strings.HasPrefix(line, "detached disk from "):
+		return "Disk detached from: " + strings.TrimSpace(strings.TrimPrefix(line, "detached disk from "))
+	default:
+		return capitalizeMessage(line)
+	}
+}
+
+func formatDiskTargetNotification(line, prefix, label string) string {
+	value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	id, target, ok := strings.Cut(value, " to ")
+	if !ok {
+		return label + ": " + value
+	}
+	return label + ": " + strings.TrimSpace(id) + " -> " + strings.TrimSpace(target)
+}
+
+func formatRenamedDiskNotification(line string) string {
+	value := strings.TrimSpace(strings.TrimPrefix(line, "renamed disk:"))
+	id, next, ok := strings.Cut(value, " to ")
+	if !ok {
+		return "Disk renamed: " + value
+	}
+	return "Disk renamed: " + strings.TrimSpace(id) + " -> " + strings.TrimSpace(next)
+}
+
+func capitalizeMessage(line string) string {
+	if line == "" {
+		return ""
+	}
+	runes := []rune(line)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+
+func drawNotification(g *grid, line string, theme notificationTheme, width, height int) {
+	if width <= 3 || height <= 0 {
+		return
+	}
+	const horizontalPadding = 2
+	const verticalPadding = 1
+	const maxNotificationLines = 4
+	maxW := min(width-2, max(24, width/2))
+	textW := maxW - 1 - horizontalPadding*2
+	if textW <= 0 {
+		return
+	}
+	x := 1
+	bottomY := height - 1
+	availableRows := bottomY + 1
+	paddingY := 0
+	if availableRows > verticalPadding*2 {
+		paddingY = verticalPadding
+	}
+	maxLines := min(maxNotificationLines, availableRows-paddingY*2)
+	lines := notificationLines(line, textW, maxLines)
+	if len(lines) == 0 {
+		return
+	}
+	longest := 0
+	for _, line := range lines {
+		longest = max(longest, runeLen(line))
+	}
+	bodyW := min(maxW-1, longest+horizontalPadding*2)
+	boxH := len(lines) + paddingY*2
+	startY := bottomY - boxH + 1
+	if startY < 0 {
+		startY = 0
+	}
+	for row := 0; row < boxH; row++ {
+		y := startY + row
+		g.Set(x, y, ' ', theme.bar)
+		fillRow(g, x+1, y, bodyW, theme.body)
+	}
+	for i, line := range lines {
+		y := startY + i
+		y += paddingY
+		g.Text(x+1+horizontalPadding, y, fit(line, bodyW-horizontalPadding*2), theme.body)
+	}
+}
+
+func notificationLines(text string, width, maxLines int) []string {
+	if width <= 0 || maxLines <= 0 {
+		return nil
+	}
+	lines := []string{}
+	for _, raw := range strings.Split(text, "\n") {
+		words := strings.Fields(raw)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		current := ""
+		for _, word := range words {
+			for runeLen(word) > width {
+				if current != "" {
+					lines = append(lines, current)
+					current = ""
+				}
+				prefix, rest := splitRunes(word, width)
+				lines = append(lines, prefix)
+				word = rest
+			}
+			if current == "" {
+				current = word
+				continue
+			}
+			next := current + " " + word
+			if runeLen(next) <= width {
+				current = next
+				continue
+			}
+			lines = append(lines, current)
+			current = word
+		}
+		if current != "" {
+			lines = append(lines, current)
+		}
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines[maxLines-1] = fit(lines[maxLines-1]+" ...", width)
+	}
+	return lines
+}
+
+func splitRunes(value string, width int) (string, string) {
+	runes := []rune(value)
+	if width <= 0 || width >= len(runes) {
+		return value, ""
+	}
+	return string(runes[:width]), string(runes[width:])
 }
 
 func drawMouseClickFeedback(g *grid, state ViewState) {
 	if !state.MouseClickActive {
 		return
 	}
-	style := ansiBgCyan + ansiWhite + ansiBold
+	style := ansiInverse
 	w := max(1, state.MouseClickW)
 	h := max(1, state.MouseClickH)
 	for y := state.MouseClickY; y < state.MouseClickY+h; y++ {

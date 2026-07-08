@@ -68,10 +68,13 @@ type App struct {
 	mousePanDownY         int
 	mousePanStartX        int
 	mousePanStartY        int
+	messageLifetimeValue  string
+	messageLifetimeSetAt  time.Time
 }
 
 const runtimeStatusTimeout = 5 * time.Second
 const daemonApplyTimeout = 90 * time.Second
+const notificationMessageTTL = 20 * time.Second
 
 func (a *App) Run() error {
 	if a.In == nil {
@@ -147,20 +150,24 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	statusRefreshActive := false
 	statusUpdates := make(chan statusUpdate, 1)
 	for {
+		now := time.Now()
 		if a.drainStatusUpdates(statusUpdates, &statusRefreshActive) {
 			dirty = true
 		}
 		a.State.StatusRefreshing = statusRefreshActive
-		if !statusRefreshActive && a.Lab != nil && time.Now().After(nextStatusRefresh) {
-			nextStatusRefresh = time.Now().Add(statusRefreshInterval)
+		if a.updateMessageLifetime(now) {
+			dirty = true
+		}
+		if !statusRefreshActive && a.Lab != nil && now.After(nextStatusRefresh) {
+			nextStatusRefresh = now.Add(statusRefreshInterval)
 			statusRefreshActive = true
 			a.State.StatusRefreshing = true
 			a.startStatusRefresh(ctx, statusUpdates)
 			dirty = true
 		}
-		if a.animationActive() && time.Since(lastAnimation) >= spinnerInterval {
+		if a.animationActive() && now.Sub(lastAnimation) >= spinnerInterval {
 			a.State.AnimationFrame++
-			lastAnimation = time.Now()
+			lastAnimation = now
 			dirty = true
 		}
 		width, height := size(a)
@@ -233,6 +240,28 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		dirty = true
 	}
+}
+
+func (a *App) updateMessageLifetime(now time.Time) bool {
+	if a.State.Message != a.messageLifetimeValue {
+		a.messageLifetimeValue = a.State.Message
+		if a.State.Message == "" {
+			a.messageLifetimeSetAt = time.Time{}
+		} else {
+			a.messageLifetimeSetAt = now
+		}
+		return false
+	}
+	if a.State.Message == "" || a.messageLifetimeSetAt.IsZero() {
+		return false
+	}
+	if now.Sub(a.messageLifetimeSetAt) < notificationMessageTTL {
+		return false
+	}
+	a.State.Message = ""
+	a.messageLifetimeValue = ""
+	a.messageLifetimeSetAt = time.Time{}
+	return true
 }
 
 func (a *App) animationActive() bool {
@@ -488,7 +517,7 @@ func (a *App) ensureAppliedAfterDesiredState(message string) {
 	ctx, cancel := context.WithTimeout(context.Background(), daemonApplyTimeout)
 	defer cancel()
 	if status, err := a.daemonStatus(ctx); err == nil && status.Active && sameLabPath(status.LabPath, current) {
-		a.State.Message = message
+		a.State.Message = ""
 		a.State.ApplyLabDisabled = true
 		a.refreshWorkloadStates()
 		return
@@ -502,7 +531,7 @@ func (a *App) ensureAppliedAfterDesiredState(message string) {
 		a.refreshApplyLabState()
 		return
 	}
-	a.State.Message = message + "; applied lab " + filepath.Base(current)
+	a.State.Message = ""
 	a.State.ApplyLabDisabled = true
 	a.refreshWorkloadStates()
 }

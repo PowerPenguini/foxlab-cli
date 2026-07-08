@@ -43,6 +43,9 @@ type ViewState struct {
 	TopMenuRootSelected    int
 	TopMenuOpen            bool
 	TopMenuSelected        int
+	PaletteOpen            bool
+	PaletteQuery           string
+	PaletteSelected        int
 	DiskExplorerOpen       bool
 	DiskExplorerSelected   int
 	DiskExplorerScroll     int
@@ -51,6 +54,7 @@ type ViewState struct {
 	DiskExplorerEditCursor int
 	DiskExplorerRows       []string
 	DiskExplorerKinds      []string
+	DiskExplorerRowViews   []DiskExplorerRowView
 	ApplyLabDisabled       bool
 	StatusRefreshing       bool
 	AnimationFrame         int
@@ -65,4 +69,15 @@ type ViewState struct {
 	CommandMode            bool
 	Command                string
 	Console                []string
+}
+
+type DiskExplorerRowView struct {
+	ID       string
+	Kind     string
+	Size     string
+	Format   string
+	Relation string
+	Path     string
+	Depth    int
+	Missing  bool
 }

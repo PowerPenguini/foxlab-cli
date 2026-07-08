@@ -13,7 +13,6 @@ func TestRenderMockFrame(t *testing.T) {
 		"[VM] router",
 		"[SW] edge",
 		"[UP] wlp0s20f3",
-		"╭",
 		"─",
 		"│",
 	} {
@@ -30,6 +29,8 @@ func TestRenderMockFrame(t *testing.T) {
 		"nic0 → edge",
 		"lifecycle >",
 		"qemu",
+		"╭",
+		"╰",
 	} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("render contains removed content %q:\n%s", notWant, out)
@@ -79,11 +80,11 @@ func TestRoutePlannerKeepsRouteCellsOutsideNodeBoxes(t *testing.T) {
 	drawBox(g, to, "", "")
 	drawRoutedEdge(g, route, ansiDim)
 	drawRoutedEdgePorts(g, route)
-	if got := g.Cells[route.start.border.Y*g.Width+route.start.border.X].Line & maskBetween(route.start.border, route.start.entry); got == 0 {
-		t.Fatalf("source border is not connected to route:\n%s", g.String(false))
+	if got := g.Cells[route.start.entry.Y*g.Width+route.start.entry.X].Line & maskBetween(route.start.entry, route.start.border); got == 0 {
+		t.Fatalf("source entry is not connected to route:\n%s", g.String(false))
 	}
-	if got := g.Cells[route.end.border.Y*g.Width+route.end.border.X].Line & maskBetween(route.end.border, route.end.entry); got == 0 {
-		t.Fatalf("target border is not connected to route:\n%s", g.String(false))
+	if got := g.Cells[route.end.entry.Y*g.Width+route.end.entry.X].Line & maskBetween(route.end.entry, route.end.border); got == 0 {
+		t.Fatalf("target entry is not connected to route:\n%s", g.String(false))
 	}
 }
 
@@ -114,8 +115,8 @@ func TestDrawRoutePortUsesCornerWhereEdgeTurnsIntoNodeStub(t *testing.T) {
 	if got := g.Cells[fromRight.entry.Y*g.Width+fromRight.entry.X].Ch; got != boxTopLeft {
 		t.Fatalf("entry reached from right = %q, want corner %q", got, boxTopLeft)
 	}
-	if got := g.Cells[fromLeft.border.Y*g.Width+fromLeft.border.X].Ch; got != '┴' {
-		t.Fatalf("node border port = %q, want original border tee", got)
+	if got := g.Cells[fromLeft.border.Y*g.Width+fromLeft.border.X].Ch; got != lineHorizontal {
+		t.Fatalf("node border port = %q, want untouched border", got)
 	}
 }
 
@@ -167,8 +168,8 @@ func TestRenderAvoidsCrossingNearSharedTarget(t *testing.T) {
 	g := renderGrid(m, ViewState{Focus: FocusGraph}, 90, 22)
 	rects := layoutNodeRects(m, rect{X: 0, Y: 0, W: 90, H: 22})
 	hello := rects[NodeKey(NodeVM, "hello")]
-	if got := g.Cells[hello.Y*g.Width+hello.X].Ch; got != '╭' {
-		t.Fatalf("hello top-left corner was used as a connection: %q\n%s", got, g.String(false))
+	if got := g.Cells[(hello.Y+1)*g.Width+hello.X].Style; got != nodeAccentStyle(NodeVM, false) {
+		t.Fatalf("hello card panel was overwritten by route: %q\n%s", got, g.String(false))
 	}
 }
 
@@ -306,9 +307,13 @@ func TestRenderSelectedRouteKeepsBorderStyle(t *testing.T) {
 		Edges: []Edge{{From: NodeKey(NodeSwitch, "sw1"), To: NodeKey(NodeVM, "hello")}},
 	}
 
+	out := RenderString(m, ViewState{Selected: 1, Focus: FocusGraph}, 60, 16, false)
+	if strings.Contains(out, "╭") || strings.Contains(out, "╰") {
+		t.Fatalf("node cards still render frame corners:\n%s", out)
+	}
 	ansiOut := RenderString(m, ViewState{Selected: 1, Focus: FocusGraph}, 60, 16, true)
-	if !strings.Contains(ansiOut, ansiBold+ansiBrightCyan) {
-		t.Fatalf("selected border was not highlighted:\n%q", ansiOut)
+	if !strings.Contains(ansiOut, nodePanelStyle(NodeVM, true)+ansiBold+ansiBrightCyan) {
+		t.Fatalf("selected card accent was not highlighted:\n%q", ansiOut)
 	}
 	if strings.Contains(ansiOut, ansiDim+"[VM] hello") {
 		t.Fatalf("selected node text was overwritten by edge style:\n%q", ansiOut)
@@ -330,7 +335,7 @@ func TestRenderSelectedRouteUsesActiveStyle(t *testing.T) {
 	}
 }
 
-func TestRenderNodeBordersKeepUniformStyleAfterEdges(t *testing.T) {
+func TestRenderNodeCardsKeepPanelStyleAfterEdges(t *testing.T) {
 	m := Model{
 		Nodes: []Node{
 			{ID: "sw1", Type: NodeSwitch, Label: "sw1", State: "macnat-bridge", X: 12, Y: 2},
@@ -341,28 +346,13 @@ func TestRenderNodeBordersKeepUniformStyleAfterEdges(t *testing.T) {
 
 	g := renderGrid(m, ViewState{Selected: 1, Focus: FocusGraph}, 60, 16)
 	rects := layoutNodeRects(m, rect{X: 0, Y: 0, W: 60, H: 16})
-	assertBorderStyle(t, g, rects[NodeKey(NodeVM, "hello")], ansiBold+ansiBrightCyan)
-	assertBorderStyle(t, g, rects[NodeKey(NodeSwitch, "sw1")], "")
-	if got := g.Cells[rects[NodeKey(NodeVM, "hello")].Y*g.Width+rects[NodeKey(NodeVM, "hello")].X-1].Style; got == ansiBold+ansiBrightCyan {
-		t.Fatalf("selected border style leaked to connector before box")
+	selected := rects[NodeKey(NodeVM, "hello")]
+	if got := g.Cells[(selected.Y+1)*g.Width+selected.X+1].Style; !strings.HasPrefix(got, nodePanelStyle(NodeVM, true)) {
+		t.Fatalf("selected card style = %q, want prefix %q", got, nodePanelStyle(NodeVM, true))
 	}
-}
-
-func assertBorderStyle(t *testing.T, g *grid, r rect, want string) {
-	t.Helper()
-	for x := r.X; x < r.X+r.W; x++ {
-		for _, y := range []int{r.Y, r.Y + r.H - 1} {
-			if got := g.Cells[y*g.Width+x].Style; got != want {
-				t.Fatalf("border style at (%d,%d) = %q, want %q", x, y, got, want)
-			}
-		}
-	}
-	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
-		for _, x := range []int{r.X, r.X + r.W - 1} {
-			if got := g.Cells[y*g.Width+x].Style; got != want {
-				t.Fatalf("border style at (%d,%d) = %q, want %q", x, y, got, want)
-			}
-		}
+	normal := rects[NodeKey(NodeSwitch, "sw1")]
+	if got := g.Cells[(normal.Y+1)*g.Width+normal.X+1].Style; !strings.HasPrefix(got, nodePanelStyle(NodeSwitch, false)) {
+		t.Fatalf("normal card style = %q, want prefix %q", got, nodePanelStyle(NodeSwitch, false))
 	}
 }
 
@@ -396,24 +386,99 @@ func TestRenderSelectedNodeANSIHighlight(t *testing.T) {
 	}
 }
 
-func TestRenderTopFocusDoesNotHighlightSelectedNode(t *testing.T) {
-	m := MockModel()
-	g := renderGrid(m, ViewState{Selected: 1, Focus: FocusTop}, 100, 30)
-	nodeRect := layoutNodeRects(m, rect{X: 0, Y: 0, W: 100, H: 30})[m.Nodes[1].Key()]
-	for x := nodeRect.X; x < nodeRect.X+nodeRect.W; x++ {
-		if got := g.Cells[nodeRect.Y*g.Width+x].Style; got != "" {
-			t.Fatalf("top border style at x=%d = %q, want empty", x, got)
+func TestRenderCanvasUsesBlackTerminalBackground(t *testing.T) {
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph}, 100, 30)
+	if got := g.Cells[1*g.Width+1].Style; got != themeTerminal {
+		t.Fatalf("empty canvas style = %q, want %q", got, themeTerminal)
+	}
+	out := g.String(true)
+	if !strings.Contains(out, themeTerminal) {
+		t.Fatalf("ANSI render missing terminal background:\n%q", out)
+	}
+}
+
+func TestRenderSelectedNodeUsesSubtlyBrighterPanelColor(t *testing.T) {
+	g := renderGrid(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 100, 30)
+	rects := layoutNodeRects(MockModel(), rect{X: 0, Y: 0, W: 100, H: 30})
+	checks := []struct {
+		key  string
+		typ  string
+		name string
+	}{
+		{NodeKey(NodeVM, "router"), NodeVM, "router"},
+		{NodeKey(NodeContainer, "web"), NodeContainer, "container"},
+		{NodeKey(NodeSwitch, "edge"), NodeSwitch, "switch"},
+		{NodeKey(NodeExternal, "uplink0"), NodeExternal, "uplink"},
+	}
+	normalPanel := nodePanelStyle(NodeVM, false)
+	selectedPanel := nodePanelStyle(NodeVM, true)
+	if selectedPanel == normalPanel {
+		t.Fatalf("selected panel style matches normal panel: %q", selectedPanel)
+	}
+	for _, check := range checks {
+		r := rects[check.key]
+		if r.W == 0 {
+			t.Fatalf("missing rect for %s", check.key)
 		}
-		if got := g.Cells[(nodeRect.Y+nodeRect.H-1)*g.Width+x].Style; got != "" {
-			t.Fatalf("bottom border style at x=%d = %q, want empty", x, got)
+		selected := check.key == NodeKey(NodeVM, "router")
+		want := nodePanelStyle(check.typ, selected)
+		if !selected && want != normalPanel {
+			t.Fatalf("%s panel style = %q, want shared normal %q", check.name, want, normalPanel)
+		}
+		if selected && want != selectedPanel {
+			t.Fatalf("%s panel style = %q, want selected %q", check.name, want, selectedPanel)
+		}
+		if got := g.Cells[(r.Y+1)*g.Width+r.X+2].Style; !strings.HasPrefix(got, want) {
+			t.Fatalf("%s card style = %q, want prefix %q", check.name, got, want)
+		}
+		accentWant := nodeAccentStyle(check.typ, selected)
+		if got := g.Cells[(r.Y+1)*g.Width+r.X].Style; got != accentWant {
+			t.Fatalf("%s accent style = %q, want %q", check.name, got, accentWant)
 		}
 	}
 }
 
-func TestRenderTopRibbonShowsContextOnWideTerminals(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 100, 30, false)
-	if !strings.Contains(out, "lab mock | VM router | mode:graph") {
-		t.Fatalf("render missing top context:\n%s", out)
+func TestRenderNodeAccentUsesNodeTypeColor(t *testing.T) {
+	checks := map[string]string{
+		NodeVM:        ansiBgTerminal + ansiBrightCyan,
+		NodeContainer: ansiBgTerminal + ansiGreen,
+		NodeSwitch:    ansiBgTerminal + ansiYellow,
+		NodeExternal:  ansiBgTerminal + ansiBrightMagenta,
+	}
+	for nodeType, want := range checks {
+		if got := nodeAccentStyle(nodeType, false); got != want {
+			t.Fatalf("%s accent style = %q, want %q", nodeType, got, want)
+		}
+		if got := nodeAccentStyle(nodeType, true); got != want+ansiBold {
+			t.Fatalf("%s selected accent style = %q, want %q", nodeType, got, want+ansiBold)
+		}
+	}
+}
+
+func TestRenderTopFocusDoesNotHighlightSelectedNode(t *testing.T) {
+	m := MockModel()
+	g := renderGrid(m, ViewState{Selected: 1, Focus: FocusTop}, 100, 30)
+	nodeRect := layoutNodeRects(m, rect{X: 0, Y: 0, W: 100, H: 30})[m.Nodes[1].Key()]
+	want := nodePanelStyle(m.Nodes[1].Type, false)
+	for y := nodeRect.Y; y < nodeRect.Y+nodeRect.H; y++ {
+		if got := g.Cells[y*g.Width+nodeRect.X].Style; got != nodeAccentStyle(m.Nodes[1].Type, false) {
+			t.Fatalf("accent style at y=%d = %q, want %q", y, got, nodeAccentStyle(m.Nodes[1].Type, false))
+		}
+		if got := g.Cells[y*g.Width+nodeRect.X+1].Style; !strings.HasPrefix(got, want) {
+			t.Fatalf("card style at y=%d = %q, want prefix %q", y, got, want)
+		}
+	}
+}
+
+func TestRenderSidebarDoesNotShowFooterContext(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
+	for _, notWant := range []string{"lab mock", ": actions"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("render still shows sidebar footer context %q:\n%s", notWant, out)
+		}
+	}
+	if strings.Contains(out, "mode:") {
+		t.Fatalf("render still shows mode in context:\n%s", out)
 	}
 }
 
@@ -423,14 +488,19 @@ func TestRenderShowsModernSpinnersForProgressStates(t *testing.T) {
 		Nodes: []Node{{ID: "vm1", Type: NodeVM, Badge: "VM", Label: "vm1", State: "starting", X: 4, Y: 3}},
 	}
 	state := ViewState{Selected: 0, Focus: FocusGraph, StatusRefreshing: true, AnimationFrame: 1}
-	out := RenderString(m, state, 100, 20, false)
+	out := RenderString(m, state, 120, 20, false)
 	for _, want := range []string{
 		spinner(1) + " starting",
-		spinner(1) + " lab demo | VM vm1 | mode:graph",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing spinner text %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "lab demo | VM vm1") {
+		t.Fatalf("render still shows selected node in status:\n%s", out)
+	}
+	if strings.Contains(out, "mode:") {
+		t.Fatalf("render still shows mode in status:\n%s", out)
 	}
 	if strings.Contains(out, "refreshing runtime status") {
 		t.Fatalf("render shows refresh text in bottom console:\n%s", out)
@@ -541,10 +611,10 @@ func TestRenderKeepsPannedVisibleNodeConnectedToOffscreenEndpoint(t *testing.T) 
 func TestRenderClipsPartiallyVisibleNodes(t *testing.T) {
 	m := Model{Nodes: []Node{{ID: "partial", Type: NodeSwitch, X: 50, Y: 5, Label: "partial", State: "bridge"}}}
 	out := RenderString(m, ViewState{Focus: FocusGraph}, 56, 20, false)
-	if !strings.Contains(out, "[SW]") || !strings.Contains(out, "Mode:") {
+	if !strings.Contains(out, "[SW]") || !strings.Contains(out, "Mode") {
 		t.Fatalf("render did not clip partially visible node:\n%s", out)
 	}
-	if strings.Contains(out, "partial") || strings.Contains(out, "Bridge ") {
+	if strings.Contains(out, "partial") || strings.Contains(out, "Bridge") {
 		t.Fatalf("render did not cut node at viewport edge:\n%s", out)
 	}
 }
@@ -667,9 +737,6 @@ func TestRenderContextSubmenuHasNoGap(t *testing.T) {
 		ContextGroup:     "config-menu",
 		ContextInSubmenu: true,
 	}, 100, 30, false)
-	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
-		t.Fatalf("expected global top ribbon:\n%s", out)
-	}
 	if !strings.Contains(out, "Configuration >   Run") {
 		t.Fatalf("expected context submenu to sit next to node menu:\n%s", out)
 	}
@@ -679,16 +746,22 @@ func TestRenderWideInspectorShowsSelectedNodeDetails(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
 	for _, want := range []string{
 		"[VM] router",
-		"state  ● running",
-		"cpu    2",
-		"mem    2G",
+		"State",
+		"state ● running",
+		"Identity",
+		"id router",
+		"Configuration",
+		"cpu 2",
+		"mem 2G",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("wide render missing inspector detail %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "actions Space menu") {
-		t.Fatalf("wide render still shows inspector actions:\n%s", out)
+	for _, notWant := range []string{"actions Space menu", ": actions"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("wide render still shows inspector action hint %q:\n%s", notWant, out)
+		}
 	}
 }
 
@@ -748,7 +821,7 @@ func TestRenderUplinkUsesMagentaAccent(t *testing.T) {
 	}
 
 	ansiOut := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 80, 20, true)
-	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiBold+"[UP]") {
+	if !strings.Contains(ansiOut, nodePanelStyle(NodeExternal, true)+ansiBrightMagenta+ansiBold+"[UP]") {
 		t.Fatalf("ANSI render missing magenta uplink badge:\n%q", ansiOut)
 	}
 	if !strings.Contains(ansiOut, ansiBrightMagenta+ansiBold+"● link") {
@@ -772,10 +845,10 @@ func TestRenderSwitchUsesYellowModeAccent(t *testing.T) {
 	}
 
 	ansiOut := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 80, 20, true)
-	if !strings.Contains(ansiOut, ansiYellow+ansiBold+"[SW]") {
+	if !strings.Contains(ansiOut, nodePanelStyle(NodeSwitch, true)+ansiYellow+ansiBold+"[SW]") {
 		t.Fatalf("ANSI render missing yellow switch badge:\n%q", ansiOut)
 	}
-	if !strings.Contains(ansiOut, ansiYellow+ansiDim+"Mode: ") {
+	if !strings.Contains(ansiOut, nodePanelStyle(NodeSwitch, true)+ansiYellow+ansiDim+"Mode: ") {
 		t.Fatalf("ANSI render missing dim switch mode label:\n%q", ansiOut)
 	}
 	if !strings.Contains(ansiOut, ansiYellow+ansiBold+"Bridge") {
@@ -796,7 +869,7 @@ func TestRenderUplinkShowsModeAndInterfaceLines(t *testing.T) {
 	if !strings.Contains(out, "Mode:  NAT") {
 		t.Fatalf("render missing uplink mode line:\n%s", out)
 	}
-	if !strings.Contains(out, "Iface: wlp0s20f3") {
+	if !strings.Contains(out, "Iface: wlp0s20") {
 		t.Fatalf("render missing uplink interface line:\n%s", out)
 	}
 	if strings.Contains(out, "nat wlp0s20f3") {
@@ -829,18 +902,115 @@ func TestOnlyUplinkNodesUseTallCards(t *testing.T) {
 	}
 }
 
-func TestRenderTopRibbonAddDropdown(t *testing.T) {
-	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, TopMenuOpen: true}, 100, 30, false)
-	for _, want := range []string{" Add ", " VM", " Container", " Switch", " Disk", " Uplink"} {
+func TestRenderCommandPaletteShowsGlobalActions(t *testing.T) {
+	state := ViewState{Focus: FocusGraph, PaletteOpen: true}
+	out := RenderString(MockModel(), state, 100, 30, false)
+	for _, want := range []string{":add", "add", "apply", "disk", "quit", "complete"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("render missing top add dropdown item %q:\n%s", want, out)
+			t.Fatalf("render missing palette item %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "External") {
-		t.Fatalf("top add dropdown still contains External:\n%s", out)
+	if strings.Contains(out, " q ") || strings.Contains(out, "\nq ") {
+		t.Fatalf("palette shows q as explicit suggestion:\n%s", out)
 	}
-	if strings.Contains(out, " Link") {
-		t.Fatalf("top add dropdown still contains Link:\n%s", out)
+	for _, notWant := range []string{"commands", "Actions", "Add VM", "Add CT", "Add SW", "Add Disk", "Add Uplink", "Exit", "configuration", "connect", "move"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("palette still contains flat action %q:\n%s", notWant, out)
+		}
+	}
+	layout, ok := paletteLayout(100, 30)
+	if !ok {
+		t.Fatal("palette layout unavailable")
+	}
+	if layout.Y != (30-layout.H)/2 {
+		t.Fatalf("palette Y = %d, want centered %d", layout.Y, (30-layout.H)/2)
+	}
+	g := renderGrid(MockModel(), state, 100, 30)
+	rects := layoutNodeRects(MockModel(), graphBounds(100, 30))
+	router := rects[NodeKey(NodeVM, "router")]
+	if got := g.Cells[(router.Y+1)*g.Width+router.X+1].Style; !strings.Contains(got, ansiDim) {
+		t.Fatalf("palette overlay did not dim graph node style: %q", got)
+	}
+	input := paletteInputRect(layout)
+	if input.X != layout.X || input.Y != layout.Y || input.W != layout.W {
+		t.Fatalf("palette input rect = %#v, want flush with palette %#v", input, layout)
+	}
+	if input.H != 3 {
+		t.Fatalf("palette input height = %d, want restored vertical padding", input.H)
+	}
+	if got := g.Cells[input.Y*g.Width+input.X+paletteInputPaddingX].Style; got != themePaletteInput {
+		t.Fatalf("palette input top padding style = %q, want %q", got, themePaletteInput)
+	}
+	if got := g.Cells[(input.Y+paletteInputPaddingY)*g.Width+input.X].Ch; got != ' ' {
+		t.Fatalf("palette input horizontal padding char = %q, want space", got)
+	}
+	if got := g.Cells[(input.Y+paletteInputPaddingY)*g.Width+input.X+paletteInputPaddingX].Ch; got != ':' {
+		t.Fatalf("palette prompt starts at %q, want input after padding", got)
+	}
+	if got := g.Cells[(input.Y+input.H-1)*g.Width+input.X+paletteInputPaddingX].Ch; got != ' ' {
+		t.Fatalf("palette input bottom padding char = %q, want space", got)
+	}
+	rowY := paletteRowsY(layout)
+	if got := g.Cells[rowY*g.Width+layout.X].Style; got != themePaletteActive {
+		t.Fatalf("palette selected record left padding style = %q, want %q", got, themePaletteActive)
+	}
+	if got := g.Cells[rowY*g.Width+layout.X+paletteRecordPaddingX].Ch; got != 'a' {
+		t.Fatalf("palette first result starts at %q, want one record padding", got)
+	}
+	if got := g.Cells[rowY*g.Width+layout.X+layout.W-1].Style; got != themePaletteActive {
+		t.Fatalf("palette selected record right padding style = %q, want %q", got, themePaletteActive)
+	}
+	hintY := paletteRowsY(layout) + 2
+	hintX := layout.X + layout.W - paletteRecordPaddingX - min(18, runeLen("explorer")+2)
+	if got := g.Cells[hintY*g.Width+hintX].Style; got != themePaletteHint {
+		t.Fatalf("palette hint style = %q, want %q", got, themePaletteHint)
+	}
+}
+
+func TestRenderCommandPaletteShowsGhostCompletion(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "ad"}, 100, 30, false)
+	if !strings.Contains(out, ":add") {
+		t.Fatalf("render missing ghost completion:\n%s", out)
+	}
+	if !strings.Contains(out, "complete") {
+		t.Fatalf("render missing completion hint:\n%s", out)
+	}
+}
+
+func TestRenderCommandPaletteNoCompletionsUsesPadding(t *testing.T) {
+	state := ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "no"}
+	layout, ok := paletteLayout(100, 30)
+	if !ok {
+		t.Fatal("palette layout unavailable")
+	}
+	g := renderGrid(MockModel(), state, 100, 30)
+	emptyY := paletteEmptyY(layout)
+
+	if got := g.Cells[paletteRowsY(layout)*g.Width+layout.X+paletteRecordPaddingX].Ch; got != ' ' {
+		t.Fatalf("palette no-completion row padding = %q, want blank row", got)
+	}
+	if got := g.Cells[emptyY*g.Width+layout.X].Ch; got != ' ' {
+		t.Fatalf("palette no-completion left padding char = %q, want space", got)
+	}
+	if got := g.Cells[emptyY*g.Width+layout.X+paletteRecordPaddingX].Ch; got != 'n' {
+		t.Fatalf("palette no-completion text starts at %q, want n after padding", got)
+	}
+	if got := g.Cells[emptyY*g.Width+layout.X+paletteRecordPaddingX].Style; got != themePalette {
+		t.Fatalf("palette no-completion style = %q, want %q", got, themePalette)
+	}
+}
+
+func TestRenderCommandPaletteShowsAddSuggestions(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "add"}, 100, 30, false)
+	for _, want := range []string{":add vm", "add vm", "add sw", "add ct", "add disk", "add uplink"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing add suggestion %q:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{"Add VM", "Add CT", "Exit", "apply"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("palette kept unrelated action %q:\n%s", notWant, out)
+		}
 	}
 }
 
@@ -926,7 +1096,7 @@ func TestRenderContextFormShowsEmptyPlaceholder(t *testing.T) {
 		t.Fatalf("render still contains question fallback:\n%s", out)
 	}
 	ansiOut := RenderString(model, state, 100, 30, true)
-	if !strings.Contains(ansiOut, ansiBgGray+ansiWhite+ansiDim+"empty") {
+	if !strings.Contains(ansiOut, ansiDim+"empty") {
 		t.Fatalf("ANSI render missing dim empty placeholder:\n%q", ansiOut)
 	}
 }
@@ -964,7 +1134,7 @@ func TestRenderDiskSubmenuMarksMergeButtonGreen(t *testing.T) {
 		DiskMenuActions:    []string{diskMenuActionCreate, diskMenuActionAttach, diskMenuActionNone},
 		DiskMenuKinds:      []string{"", "base", "layer"},
 	}, 100, 30, true)
-	if !strings.Contains(out, ansiBgGreen+ansiWhite+ansiBold+" M ") {
+	if !strings.Contains(out, ansiGreen+ansiBold+" M ") {
 		t.Fatalf("render did not mark selected merge M green:\n%q", out)
 	}
 }
@@ -1125,8 +1295,8 @@ func TestRenderConnectModeDrawsDashedPreview(t *testing.T) {
 	if got := g.Cells[y*g.Width+source.X+source.W+1].Ch; got != ' ' {
 		t.Fatalf("connect preview gap = %q, want blank", got)
 	}
-	if got := g.Cells[y*g.Width+source.X+source.W-1].Ch; got != lineVertical {
-		t.Fatalf("connect preview changed source border = %q, want vertical border", got)
+	if got := g.Cells[y*g.Width+source.X+source.W-1].Style; !strings.HasPrefix(got, nodePanelStyle(NodeVM, false)) {
+		t.Fatalf("connect preview changed source card panel = %q", got)
 	}
 }
 
@@ -1219,7 +1389,7 @@ func TestRenderContextInlineEditEmptyPlaceholder(t *testing.T) {
 		t.Fatalf("render leaked disk controls into config edit row:\n%s", out)
 	}
 	ansiOut := RenderString(MockModel(), state, 100, 30, true)
-	if !strings.Contains(ansiOut, ansiBgGray+ansiWhite+ansiBold+ansiDim+"empty") {
+	if !strings.Contains(ansiOut, ansiDim+"empty") {
 		t.Fatalf("ANSI render missing dim empty placeholder:\n%q", ansiOut)
 	}
 }
@@ -1234,16 +1404,133 @@ func TestRenderNoHooksMenuItem(t *testing.T) {
 func TestRenderContextMenuANSIStyle(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Selected: 1, Focus: FocusGraph, ContextMenu: true}, 100, 30, true)
 	for _, want := range []string{
-		ansiBgGray + ansiWhite,
-		ansiBgGray + ansiWhite + ansiBold,
-		ansiBgCyan,
+		themeChrome,
+		themeMenuActive,
+		"Configuration >",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ANSI render missing context menu style %q:\n%q", want, out)
 		}
 	}
-	if strings.Contains(out, ansiBrightCyan+"Configuration") || strings.Contains(out, "▸") {
-		t.Fatalf("ANSI render contains unwanted menu accent:\n%q", out)
+	for _, notWant := range []string{ansiBgGray + ansiWhite, ansiBgCyan, "▸"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("ANSI render contains old menu accent %q:\n%q", notWant, out)
+		}
+	}
+}
+
+func TestRenderDisabledContextItemKeepsMenuBackground(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Selected: 5, Focus: FocusGraph, ContextMenu: true}, 100, 30, true)
+	if !strings.Contains(out, themeMenuMuted+"Connect") {
+		t.Fatalf("disabled context item missing muted menu style:\n%q", out)
+	}
+	if strings.Contains(out, themeMenuRow+themeMuted+"Connect") {
+		t.Fatalf("disabled context item used terminal-muted style:\n%q", out)
+	}
+}
+
+func TestRenderRemovesTopRibbonAndSidebarFooter(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Focus: FocusTop}, 120, 30, true)
+	for _, notWant := range []string{"Apply lab", " Add ", " Disks ", " Exit ", "lab mock", ": actions", "mode:"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("render still contains removed chrome %q:\n%q", notWant, out)
+		}
+	}
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if strings.Contains(firstLine, "lab mock") {
+		t.Fatalf("render still shows status in top ribbon:\n%q", out)
+	}
+}
+
+func TestRenderDisabledPaletteActionKeepsPaletteBackground(t *testing.T) {
+	out := RenderString(MockModel(), ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "apply", ApplyLabDisabled: true}, 100, 30, true)
+	if !strings.Contains(out, themePaletteActive+ansiBrightBlack+"apply") {
+		t.Fatalf("disabled palette item missing muted active palette style:\n%q", out)
+	}
+	if strings.Contains(out, themePalette+themeMuted+"apply") {
+		t.Fatalf("disabled palette item used terminal-muted style:\n%q", out)
+	}
+}
+
+func TestRenderInspectorUsesColorPanelWithoutFrame(t *testing.T) {
+	width, height := 120, 30
+	panel := inspectorBounds(width, height)
+	if panel.W <= 0 {
+		t.Fatal("inspector unavailable")
+	}
+	g := renderGrid(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, width, height)
+
+	topLeft := g.Cells[panel.Y*g.Width+panel.X]
+	if topLeft.Ch == '╭' {
+		t.Fatalf("inspector still renders a frame corner:\n%s", g.String(false))
+	}
+	if topLeft.Style != themePanelInspector {
+		t.Fatalf("inspector corner style = %q, want %q", topLeft.Style, themePanelInspector)
+	}
+	header := g.Cells[(panel.Y+1)*g.Width+panel.X+2]
+	if header.Style != themePanelInspectorHeader+nodeBadgeStyle(NodeVM) {
+		t.Fatalf("inspector header style = %q, want %q", header.Style, themePanelInspectorHeader+nodeBadgeStyle(NodeVM))
+	}
+	body := g.Cells[(panel.Y+2)*g.Width+panel.X]
+	if body.Style != themePanelInspector {
+		t.Fatalf("inspector body style = %q, want %q", body.Style, themePanelInspector)
+	}
+	bottomRight := g.Cells[(height-1)*g.Width+panel.X+panel.W-1]
+	if bottomRight.Style != themePanelInspector {
+		t.Fatalf("inspector bottom-right style = %q, want %q", bottomRight.Style, themePanelInspector)
+	}
+	brandX := panel.X + 2
+	brandY := height - 1
+	for offset, want := range []rune("// FoxLab") {
+		if got := g.Cells[brandY*g.Width+brandX+offset].Ch; got != want {
+			t.Fatalf("brand char at offset %d = %q, want %q", offset, got, want)
+		}
+	}
+	if got := g.Cells[brandY*g.Width+brandX+3].Style; got != themePanelInspector+ansiOrange+ansiBold {
+		t.Fatalf("brand Fox style = %q, want orange", got)
+	}
+	if got := g.Cells[brandY*g.Width+brandX+6].Style; got != themePanelInspector+ansiWhite+ansiBold {
+		t.Fatalf("brand Lab style = %q, want white", got)
+	}
+}
+
+func TestRenderDiskExplorerUsesColorPanelWithoutFrame(t *testing.T) {
+	width, height := 100, 30
+	layout, ok := diskExplorerLayout(width, height)
+	if !ok {
+		t.Fatal("disk explorer layout unavailable")
+	}
+	state := ViewState{
+		DiskExplorerOpen: true,
+		DiskExplorerRows: []string{"data  base  10G  qcow2  disks/data.qcow2"},
+		DiskExplorerRowViews: []DiskExplorerRowView{{
+			ID:       "data",
+			Kind:     "base",
+			Size:     "10G",
+			Format:   "qcow2",
+			Relation: "-",
+			Path:     "disks/data.qcow2",
+		}},
+	}
+	g := renderGrid(Model{ID: "demo"}, state, width, height)
+
+	topLeft := g.Cells[layout.Y*g.Width+layout.X]
+	if topLeft.Ch == '╭' {
+		t.Fatalf("disk explorer still renders a frame corner:\n%s", g.String(false))
+	}
+	if topLeft.Style != themePanelDiskHeader {
+		t.Fatalf("disk explorer header style = %q, want %q", topLeft.Style, themePanelDiskHeader)
+	}
+	body := g.Cells[(layout.Y+3)*g.Width+layout.X]
+	if body.Style != themePanelDisk {
+		t.Fatalf("disk explorer body style = %q, want %q", body.Style, themePanelDisk)
+	}
+	if themePanelDisk != ansiBgNode+ansiWhite {
+		t.Fatalf("disk explorer body is not the shared dark panel: %q", themePanelDisk)
+	}
+	selected := g.Cells[diskExplorerRowsY(layout)*g.Width+layout.X+1]
+	if !strings.HasPrefix(selected.Style, themePanelDiskSelected) {
+		t.Fatalf("disk explorer selected row style = %q, want prefix %q", selected.Style, themePanelDiskSelected)
 	}
 }
 
@@ -1288,7 +1575,7 @@ func TestContextMenuLayoutClampsSubmenuInsideBounds(t *testing.T) {
 	}
 }
 
-func TestRenderStatusBarIgnoresCommandConsole(t *testing.T) {
+func TestRenderNotificationIgnoresCommandConsole(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{
 		Focus:       FocusGraph,
 		CommandMode: true,
@@ -1296,13 +1583,128 @@ func TestRenderStatusBarIgnoresCommandConsole(t *testing.T) {
 		Console:     []string{"help: :help :quit"},
 		Message:     "old message",
 	}, 100, 30, false)
-	if !strings.Contains(out, "old message") {
+	if !strings.Contains(out, "Old message") {
 		t.Fatalf("render missing status message:\n%s", out)
 	}
 	for _, notWant := range []string{":help", "help: :help :quit"} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("status render contains removed command console text %q:\n%s", notWant, out)
 		}
+	}
+}
+
+func TestRenderMessageUsesBottomLeftNotification(t *testing.T) {
+	const width, height = 100, 30
+	message := "failed to apply lab"
+	rendered := "Failed to apply lab"
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: message}, width, height)
+	topPaddingY := height - 3
+	textY := height - 2
+	bottomPaddingY := height - 1
+	for _, y := range []int{topPaddingY, textY, bottomPaddingY} {
+		if got := g.Cells[y*g.Width+1].Style; got != themeNotificationBar {
+			t.Fatalf("notification line %d accent style = %q, want %q", y, got, themeNotificationBar)
+		}
+		if got := g.Cells[y*g.Width+2].Style; got != themeNotification {
+			t.Fatalf("notification line %d body style = %q, want %q", y, got, themeNotification)
+		}
+	}
+	if got := g.Cells[textY*g.Width+1].Style; got != themeNotificationBar {
+		t.Fatalf("notification accent style = %q, want %q", got, themeNotificationBar)
+	}
+	if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
+		t.Fatalf("notification body style = %q, want %q", got, themeNotification)
+	}
+	if got := g.Cells[topPaddingY*g.Width+4].Ch; got != ' ' {
+		t.Fatalf("notification top padding = %q, want space", got)
+	}
+	if got := g.Cells[bottomPaddingY*g.Width+4].Ch; got != ' ' {
+		t.Fatalf("notification bottom padding = %q, want space", got)
+	}
+	if got := g.Cells[textY*g.Width+2].Ch; got != ' ' {
+		t.Fatalf("notification left padding = %q, want space", got)
+	}
+	if got := g.Cells[textY*g.Width+3].Ch; got != ' ' {
+		t.Fatalf("notification second left padding = %q, want space", got)
+	}
+	if got := g.Cells[textY*g.Width+4].Ch; got != 'F' {
+		t.Fatalf("notification text starts at %q, want first message character", got)
+	}
+	out := g.String(false)
+	if !strings.Contains(out, rendered) {
+		t.Fatalf("render missing notification message:\n%s", out)
+	}
+	lastLine := strings.Split(strings.TrimSuffix(out, "\n"), "\n")[height-1]
+	if strings.Contains(lastLine, rendered) {
+		t.Fatalf("notification text rendered into bottom padding row:\n%s", out)
+	}
+	for x := 1 + 1 + min(max(24, width/2)-1, runeLen(rendered)+4); x < width; x++ {
+		if got := g.Cells[textY*g.Width+x].Style; got == themeNotification {
+			t.Fatalf("notification filled past its compact width at x=%d", x)
+		}
+	}
+}
+
+func TestRenderDiskSuccessMessageUsesSuccessNotification(t *testing.T) {
+	const width, height = 100, 30
+	for _, tt := range []struct {
+		message string
+		want    string
+	}{
+		{message: "created disk:disk", want: "Disk created: disk"},
+		{message: "deleted disk:disk", want: "Disk deleted: disk"},
+	} {
+		g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: tt.message}, width, height)
+		textY := height - 2
+		if got := g.Cells[textY*g.Width+1].Style; got != themeNotificationSuccessBar {
+			t.Fatalf("%q success notification accent style = %q, want %q", tt.message, got, themeNotificationSuccessBar)
+		}
+		if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
+			t.Fatalf("%q success notification body style = %q, want %q", tt.message, got, themeNotification)
+		}
+		out := g.String(false)
+		if !strings.Contains(out, tt.want) {
+			t.Fatalf("render missing formatted success notification %q:\n%s", tt.want, out)
+		}
+		if strings.Contains(out, tt.message) {
+			t.Fatalf("render kept raw disk success message:\n%s", out)
+		}
+	}
+}
+
+func TestRenderLongMessageUsesMultilineNotification(t *testing.T) {
+	const width, height = 80, 24
+	message := "failed to apply lab because libvirt network default is not active"
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: message}, width, height)
+	topPaddingY := height - 4
+	firstTextY := height - 3
+	secondTextY := height - 2
+	bottomPaddingY := height - 1
+	for _, y := range []int{topPaddingY, firstTextY, secondTextY, bottomPaddingY} {
+		if got := g.Cells[y*g.Width+1].Style; got != themeNotificationBar {
+			t.Fatalf("notification line %d accent style = %q, want %q", y, got, themeNotificationBar)
+		}
+		if got := g.Cells[y*g.Width+2].Style; got != themeNotification {
+			t.Fatalf("notification line %d body style = %q, want %q", y, got, themeNotification)
+		}
+	}
+	for _, y := range []int{topPaddingY, bottomPaddingY} {
+		if got := g.Cells[y*g.Width+4].Ch; got != ' ' {
+			t.Fatalf("notification vertical padding at line %d = %q, want space", y, got)
+		}
+	}
+	out := g.String(false)
+	for _, want := range []string{
+		"Failed to apply lab because libvirt",
+		"network default is not active",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing wrapped notification line %q:\n%s", want, out)
+		}
+	}
+	lastLine := strings.Split(strings.TrimSuffix(out, "\n"), "\n")[height-1]
+	if strings.Contains(lastLine, "network default is not active") {
+		t.Fatalf("notification text rendered into bottom padding row:\n%s", out)
 	}
 }
 
@@ -1371,7 +1773,7 @@ func TestRenderMouseClickFeedback(t *testing.T) {
 		MouseClickW:      4,
 		MouseClickH:      2,
 	}, 100, 30)
-	style := ansiBgCyan + ansiWhite + ansiBold
+	style := ansiInverse
 	for y := 5; y < 7; y++ {
 		for x := 10; x < 14; x++ {
 			if got := g.Cells[y*g.Width+x].Style; got != style {
@@ -1385,25 +1787,25 @@ func TestRenderMouseClickFeedback(t *testing.T) {
 }
 
 func TestRenderGlobalContextMenuForEmptyModel(t *testing.T) {
-	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true}, 80, 20, false)
-	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
-		t.Fatalf("render missing top add ribbon:\n%s", out)
+	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, PaletteOpen: true}, 80, 20, false)
+	if !strings.Contains(out, "add") || !strings.Contains(out, "quit") {
+		t.Fatalf("render missing global palette actions:\n%s", out)
 	}
-	for _, notWant := range []string{"add >", "add vm", "add cont", "add sw", "create external", " help", "list"} {
+	for _, notWant := range []string{"add >", "add vm", "add cont", "add sw", "create external", " help", "list", "Add VM", "Exit"} {
 		if strings.Contains(out, notWant) {
-			t.Fatalf("render contains removed global context item %q:\n%s", notWant, out)
+			t.Fatalf("render contains removed global palette item %q:\n%s", notWant, out)
 		}
 	}
 }
 
 func TestRenderGlobalCreateSubmenuForEmptyModel(t *testing.T) {
-	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "create-menu"}, 80, 20, false)
-	if !strings.Contains(out, " Add ") || !strings.Contains(out, " Exit ") {
-		t.Fatalf("render missing top add ribbon:\n%s", out)
+	out := RenderString(Model{ID: "empty"}, ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "add"}, 80, 20, false)
+	if !strings.Contains(out, "add vm") || !strings.Contains(out, "add uplink") {
+		t.Fatalf("render missing global create palette actions:\n%s", out)
 	}
-	for _, notWant := range []string{"add vm", "add cont", "add sw", "create external"} {
+	for _, notWant := range []string{"add cont", "create external", "Add VM", "Add Uplink"} {
 		if strings.Contains(out, notWant) {
-			t.Fatalf("render contains removed global create submenu item %q:\n%s", notWant, out)
+			t.Fatalf("render contains removed global create palette item %q:\n%s", notWant, out)
 		}
 	}
 }

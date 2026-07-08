@@ -313,9 +313,11 @@ func (a *App) diskExplorerRenderState() ViewState {
 	rows := a.diskExplorerRows()
 	state.DiskExplorerRows = make([]string, 0, len(rows))
 	state.DiskExplorerKinds = make([]string, 0, len(rows))
+	state.DiskExplorerRowViews = make([]DiskExplorerRowView, 0, len(rows))
 	for _, row := range rows {
 		state.DiskExplorerRows = append(state.DiskExplorerRows, a.diskExplorerRowLabel(row))
 		state.DiskExplorerKinds = append(state.DiskExplorerKinds, diskKindUI(row.Disk))
+		state.DiskExplorerRowViews = append(state.DiskExplorerRowViews, a.diskExplorerRowView(row))
 	}
 	return state
 }
@@ -335,7 +337,7 @@ func diskExplorerLayout(width, height int) (rect, bool) {
 }
 
 func diskExplorerVisibleRows(layout rect) int {
-	return max(0, layout.H-5)
+	return max(0, layout.H-6)
 }
 
 func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
@@ -375,13 +377,17 @@ func diskExplorerRowAt(layout rect, scroll, x, y, count, visibleRows int) (int, 
 	if x < layout.X+1 || x >= layout.X+layout.W-1 {
 		return 0, false
 	}
-	firstY := layout.Y + 3
+	firstY := diskExplorerRowsY(layout)
 	lastY := firstY + visibleRows
 	if y < firstY || y >= lastY {
 		return 0, false
 	}
 	index := scroll + y - firstY
 	return index, index >= 0 && index < count
+}
+
+func diskExplorerRowsY(layout rect) int {
+	return layout.Y + 4
 }
 
 func diskExplorerActionAt(layout rect, x, y int) (string, bool) {
@@ -453,6 +459,38 @@ func (a *App) diskExplorerRowLabel(row diskExplorerRow) string {
 		parts = append(parts, disk.Path)
 	}
 	return strings.Join(parts, "  ")
+}
+
+func (a *App) diskExplorerRowView(row diskExplorerRow) DiskExplorerRowView {
+	disk := row.Disk
+	size := "-"
+	if disk.SizeGB > 0 {
+		size = fmt.Sprintf("%dG", disk.SizeGB)
+	}
+	relation := "-"
+	if disk.Base != "" {
+		relation = "base:" + disk.Base
+	}
+	if disk.AttachedType != "" && disk.AttachedTo != "" {
+		relation = a.diskExplorerAttachmentLabel(disk)
+	}
+	if row.Missing && disk.Base != "" {
+		relation = "missing:" + disk.Base
+	}
+	path := disk.Path
+	if path == "" {
+		path = "-"
+	}
+	return DiskExplorerRowView{
+		ID:       disk.ID,
+		Kind:     diskKindUI(disk),
+		Size:     size,
+		Format:   diskFormatLabel(disk),
+		Relation: relation,
+		Path:     path,
+		Depth:    row.Depth,
+		Missing:  row.Missing,
+	}
 }
 
 func (a *App) diskExplorerAttachmentLabel(disk lab.Disk) string {
