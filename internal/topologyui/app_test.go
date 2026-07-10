@@ -1179,8 +1179,8 @@ func TestContextMenuInlineEditVMName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.VMs[0].Name != "web" {
-		t.Fatalf("vm name = %q, want web", reloaded.VMs[0].Name)
+	if reloaded.VMs[0].ID != "web" || reloaded.VMs[0].Name != "" {
+		t.Fatalf("vm identity = id:%q name:%q, want mnemonic id web", reloaded.VMs[0].ID, reloaded.VMs[0].Name)
 	}
 }
 
@@ -1978,6 +1978,39 @@ func TestAppRenderReusesRouteCacheWhileMovingNode(t *testing.T) {
 	}
 	if app.RouteCacheKey == key {
 		t.Fatal("route cache did not refresh after move mode ended")
+	}
+}
+
+func TestAppRenderRefreshesRouteCacheWhenViewportChangesDuringMoveMode(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+	var out bytes.Buffer
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	key := app.RouteCacheKey
+	app.startMove(app.Model.Nodes[0])
+	app.State.PanX = -2
+	out.Reset()
+	if err := app.render(&out, 100, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey == key {
+		t.Fatal("route cache was reused after viewport pan during move mode")
+	}
+	if app.RouteCachePanX != -2 {
+		t.Fatalf("route cache panX = %d, want -2", app.RouteCachePanX)
+	}
+
+	key = app.RouteCacheKey
+	out.Reset()
+	if err := app.render(&out, 96, 30, true); err != nil {
+		t.Fatal(err)
+	}
+	if app.RouteCacheKey == key {
+		t.Fatal("route cache was reused after viewport resize during move mode")
+	}
+	if app.RouteCacheWidth != 96 || app.RouteCacheHeight != 30 {
+		t.Fatalf("route cache size = %dx%d, want 96x30", app.RouteCacheWidth, app.RouteCacheHeight)
 	}
 }
 
@@ -3143,10 +3176,23 @@ func TestPaletteDisksOpensDiskExplorer(t *testing.T) {
 		t.Fatalf("disk explorer did not open: %#v", app.State)
 	}
 	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
-	for _, want := range []string{"Disks: demo", "DISK", "TYPE", "ATTACHED/BASE", "data", "base", "10G", "vm:router", "N create"} {
+	for _, want := range []string{"DISK", "TYPE", "ATTACHED/BASE", "data", "base", "10G", "vm:router", "N create"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("disk explorer render missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "I info") {
+		t.Fatalf("disk explorer still renders info action:\n%s", out)
+	}
+	if strings.Contains(out, "Disks: demo") || strings.Contains(out, "1 disk") {
+		t.Fatalf("disk explorer still renders title/count header:\n%s", out)
+	}
+	message := app.State.Message
+	console := append([]string(nil), app.State.Console...)
+	app.handleKey("char:I")
+	app.handleKey("enter")
+	if app.State.Message != message || !reflect.DeepEqual(app.State.Console, console) {
+		t.Fatalf("disk explorer info keys changed state: %#v", app.State)
 	}
 }
 
@@ -3200,7 +3246,7 @@ func TestDiskExplorerRenderMarksSelectedRow(t *testing.T) {
 	}
 }
 
-func TestDiskExplorerKeyboardResizeAndInfo(t *testing.T) {
+func TestDiskExplorerKeyboardResize(t *testing.T) {
 	fakeQemuImg(t)
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
@@ -3250,18 +3296,6 @@ func TestDiskExplorerKeyboardResizeAndInfo(t *testing.T) {
 	if reloaded.Disks[0].SizeGB != 12 {
 		t.Fatalf("sizeGB = %d, want 12", reloaded.Disks[0].SizeGB)
 	}
-
-	app.handleKey("char:I")
-	if app.State.Message != "disk info:data" {
-		t.Fatalf("info message = %q", app.State.Message)
-	}
-	if got := strings.Join(app.State.Console, "\n"); !strings.Contains(got, "disk data") || !strings.Contains(got, "attached: vm:router") || !strings.Contains(got, "path:") {
-		t.Fatalf("info console = %#v", app.State.Console)
-	}
-	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
-	if !strings.Contains(out, "disk data") || !strings.Contains(out, "attached: vm:router") {
-		t.Fatalf("disk explorer render missing info panel:\n%s", out)
-	}
 }
 
 func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
@@ -3292,7 +3326,7 @@ func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
 	}
 }
 
-func TestDiskExplorerInfoShowsMetadataWhenQemuFails(t *testing.T) {
+func TestDiskInfoKeepsQemuFailureOutOfMetadata(t *testing.T) {
 	fakeQemuImgScript(t, "#!/bin/sh\necho qemu unavailable >&2\nexit 1\n")
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
@@ -3310,23 +3344,22 @@ func TestDiskExplorerInfoShowsMetadataWhenQemuFails(t *testing.T) {
 		Model:      ModelFromLab(loaded),
 		Lab:        loaded,
 		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		State:      ViewState{},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
 
-	app.handleKey("char:I")
+	app.diskInfo("data")
 
 	if !strings.HasPrefix(app.State.Message, "disk info failed:") {
 		t.Fatalf("info message = %q", app.State.Message)
 	}
 	got := strings.Join(app.State.Console, "\n")
-	if !strings.Contains(got, "disk data") || !strings.Contains(got, "path:") || !strings.Contains(got, "disk info failed:") || !strings.Contains(got, "qemu unavailable") {
+	if !strings.Contains(got, "disk data") || !strings.Contains(got, "path:") {
 		t.Fatalf("info console = %#v", app.State.Console)
 	}
-	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
-	if !strings.Contains(out, "disk data") || !strings.Contains(out, "qemu unavailable") {
-		t.Fatalf("disk explorer render missing failed info panel:\n%s", out)
+	if strings.Contains(got, "disk info failed:") || strings.Contains(got, "qemu unavailable") {
+		t.Fatalf("disk metadata contains runtime failure: %#v", app.State.Console)
 	}
 }
 
@@ -3553,7 +3586,7 @@ func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
 		t.Fatal("disk explorer layout unavailable")
 	}
 	layerX := layout.X + 1 + runeLen(" N create ") + 1
-	layerY := layout.Y + layout.H - 2
+	layerY := layout.Y + layout.H - 1
 
 	app.handleKey("mouse:" + strconv.Itoa(layerX) + ":" + strconv.Itoa(layerY) + ":0")
 
@@ -3582,7 +3615,7 @@ func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 		t.Fatal("disk explorer layout unavailable")
 	}
 	layerX := layout.X + 1 + runeLen(" N create ") + 1
-	layerY := layout.Y + layout.H - 2
+	layerY := layout.Y + layout.H - 1
 
 	r, ok := app.diskExplorerFeedbackRect(mouseEvent{x: layerX, y: layerY, button: 0})
 	if !ok {
@@ -4308,7 +4341,7 @@ func TestCommandVMCreateSavesLab(t *testing.T) {
 	if len(reloaded.VMs) != 1 {
 		t.Fatalf("vm count = %d, want 1", len(reloaded.VMs))
 	}
-	if reloaded.VMs[0].ID == "" || reloaded.VMs[0].ID == "vm1" || reloaded.VMs[0].Name != "vm1" || reloaded.VMs[0].CPUs != 4 || reloaded.VMs[0].MemoryMB != 4096 {
+	if reloaded.VMs[0].ID != "vm1" || reloaded.VMs[0].Name != "" || reloaded.VMs[0].CPUs != 4 || reloaded.VMs[0].MemoryMB != 4096 {
 		t.Fatalf("saved vm = %#v", reloaded.VMs[0])
 	}
 	if len(reloaded.VMs[0].Networks) != 1 || reloaded.VMs[0].Networks[0].Switch != reloaded.Switches[0].ID {
@@ -4349,7 +4382,7 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 		t.Fatalf("container count = %d, want 1", len(reloaded.Containers))
 	}
 	ct := reloaded.Containers[0]
-	if ct.ID == "" || ct.ID == "web" || ct.Name != "web" || ct.Image != "docker.io/library/nginx:latest" || len(ct.Networks) != 1 || ct.Networks[0].Switch != reloaded.Switches[0].ID {
+	if ct.ID != "web" || ct.Name != "" || ct.Image != "docker.io/library/nginx:latest" || len(ct.Networks) != 1 || ct.Networks[0].Switch != reloaded.Switches[0].ID {
 		t.Fatalf("saved container = %#v", ct)
 	}
 	if len(app.Model.Nodes) == 0 || app.Model.Nodes[0].ID != ct.ID || app.Model.Nodes[0].Label != "web" || app.Model.Nodes[0].Type != NodeContainer || app.Model.Nodes[0].Badge != "CT" {
@@ -4628,13 +4661,13 @@ func TestCommandAddCreatesGraphNodesWithMinimalData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.VMs) != 1 || reloaded.VMs[0].ID == "" || reloaded.VMs[0].ID == "vm1" || reloaded.VMs[0].Name != "vm1" {
+	if len(reloaded.VMs) != 1 || reloaded.VMs[0].ID != "vm1" || reloaded.VMs[0].Name != "" {
 		t.Fatalf("minimal vm was not saved: %#v", reloaded.VMs)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID == "" || reloaded.Switches[0].ID == "sw1" || reloaded.Switches[0].Name != "sw1" {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "sw1" || reloaded.Switches[0].Name != "" {
 		t.Fatalf("minimal switch was not saved: %#v", reloaded.Switches)
 	}
-	if len(reloaded.Containers) != 1 || reloaded.Containers[0].ID == "" || reloaded.Containers[0].ID == "web" || reloaded.Containers[0].Name != "web" || reloaded.Containers[0].Image == "" {
+	if len(reloaded.Containers) != 1 || reloaded.Containers[0].ID != "web" || reloaded.Containers[0].Name != "" || reloaded.Containers[0].Image == "" {
 		t.Fatalf("minimal container was not saved with placeholder image: %#v", reloaded.Containers)
 	}
 	if len(app.Model.Nodes) != 3 {
@@ -4736,14 +4769,14 @@ func TestCommandVMSetAcceptsQuotedValues(t *testing.T) {
 	}
 	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
 
-	app.executeCommand(`vm set vm1 name="web server" iso="images/debian 12.iso"`)
+	app.executeCommand(`vm set vm1 name="web-server" iso="images/debian 12.iso"`)
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.VMs[0].Name != "web server" || reloaded.VMs[0].ISO != "images/debian 12.iso" {
-		t.Fatalf("vm quoted fields = name:%q iso:%q", reloaded.VMs[0].Name, reloaded.VMs[0].ISO)
+	if reloaded.VMs[0].ID != "web-server" || reloaded.VMs[0].Name != "" || reloaded.VMs[0].ISO != "images/debian 12.iso" {
+		t.Fatalf("vm quoted fields = id:%q name:%q iso:%q", reloaded.VMs[0].ID, reloaded.VMs[0].Name, reloaded.VMs[0].ISO)
 	}
 }
 
@@ -5199,13 +5232,13 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID == "" || reloaded.ExternalLinks[0].ID == "uplink1" || reloaded.ExternalLinks[0].Name != "uplink1" {
+	if len(reloaded.ExternalLinks) != 1 || reloaded.ExternalLinks[0].ID != "uplink1" || reloaded.ExternalLinks[0].Name != "" {
 		t.Fatalf("external links = %#v", reloaded.ExternalLinks)
 	}
 	if reloaded.ExternalLinks[0].Mode != lab.ExternalModeMacNAT {
 		t.Fatalf("external mode = %q, want macnat", reloaded.ExternalLinks[0].Mode)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Name != "lan" || reloaded.Switches[0].Mode != "nat" || !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "lan" || reloaded.Switches[0].Name != "" || reloaded.Switches[0].Mode != "nat" || !reflect.DeepEqual(lab.SwitchExternalLinks(reloaded.Switches[0]), []string{reloaded.ExternalLinks[0].ID}) {
 		t.Fatalf("switches = %#v", reloaded.Switches)
 	}
 
@@ -5238,7 +5271,7 @@ func TestContextMenuGlobalCreateCommands(t *testing.T) {
 	}
 
 	app.runGlobalMenuAction("add vm")
-	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID == "" || app.Lab.VMs[0].Name != "vm-1" {
+	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID != "vm-1" || app.Lab.VMs[0].Name != "" {
 		t.Fatalf("vms after global add = %#v", app.Lab.VMs)
 	}
 
@@ -5264,7 +5297,7 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		ID: "demo",
 		VMs: []lab.VM{{
 			ID:       "vm1",
-			Name:     "web server",
+			Name:     "web-server",
 			MemoryMB: 2048,
 			CPUs:     2,
 			Disk:     "labs/demo/disks/web server.qcow2",
@@ -5273,7 +5306,7 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		}},
 		Containers:    []lab.Container{{ID: "web", Image: "docker.io/library/nginx:latest", Networks: []lab.ContainerNetwork{{}}}},
 		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge"}},
-		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Name: "office uplink", Interface: "enp 1s0"}},
+		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Name: "office-uplink", Interface: "enp 1s0"}},
 	}
 	if err := lab.SaveFile(path, loaded); err != nil {
 		t.Fatal(err)
@@ -5327,7 +5360,7 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	app.runMenuAction(Node{ID: loaded.Switches[0].ID, Type: NodeSwitch}, "add vm")
 	foundSwitchVM := false
 	for _, vm := range app.Lab.VMs {
-		if vm.Name != "web server" && len(vm.Networks) > 0 && vm.Networks[0].Switch == loaded.Switches[0].ID {
+		if vm.Name != "web-server" && len(vm.Networks) > 0 && vm.Networks[0].Switch == loaded.Switches[0].ID {
 			foundSwitchVM = true
 		}
 	}
@@ -6062,7 +6095,7 @@ func TestConnectedExternalConnectActionDoesNotStartConnectMode(t *testing.T) {
 	if !app.State.ContextMenu {
 		t.Fatal("disabled connect action closed the context menu")
 	}
-	if app.State.Message != "uplink already connected: uplink1" {
+	if app.State.Message != "uplink already connected: br0" {
 		t.Fatalf("message = %q", app.State.Message)
 	}
 }

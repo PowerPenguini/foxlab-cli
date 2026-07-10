@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+var (
+	idPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+	uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
 
 func (l *Lab) Validate() error {
 	var problems []string
@@ -20,14 +21,14 @@ func (l *Lab) Validate() error {
 		problems = append(problems, "lab name must start with a letter/number and contain only letters, numbers, '_' or '-'")
 	}
 
-	nodeNames := map[string]string{}
+	nodeRefs := map[string]string{}
 	switchIDs := map[string]struct{}{}
 	for _, sw := range l.Switches {
 		swRef := displayNodeRef(sw.ID, sw.Name)
-		if !validNodeID(sw.ID) {
-			problems = append(problems, fmt.Sprintf("switch %q has non-UUID id", sw.ID))
+		if problem := nodeIDProblem("switch", sw.ID); problem != "" {
+			problems = append(problems, problem)
 		}
-		problems = append(problems, validateNodeName("switch", sw.ID, sw.Name, nodeNames)...)
+		problems = append(problems, validateNodeIdentity("switch", sw.ID, sw.Name, nodeRefs)...)
 		if _, exists := switchIDs[sw.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate switch id %q", sw.ID))
 		}
@@ -43,10 +44,10 @@ func (l *Lab) Validate() error {
 	externalLinkIDs := map[string]struct{}{}
 	for _, link := range l.ExternalLinks {
 		linkRef := displayNodeRef(link.ID, link.Name)
-		if !validNodeID(link.ID) {
-			problems = append(problems, fmt.Sprintf("external link %q has non-UUID id", link.ID))
+		if problem := nodeIDProblem("external link", link.ID); problem != "" {
+			problems = append(problems, problem)
 		}
-		problems = append(problems, validateNodeName("external link", link.ID, link.Name, nodeNames)...)
+		problems = append(problems, validateNodeIdentity("external link", link.ID, link.Name, nodeRefs)...)
 		if _, exists := externalLinkIDs[link.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate external link id %q", link.ID))
 		}
@@ -72,10 +73,10 @@ func (l *Lab) Validate() error {
 	vmNames := map[string]string{}
 	for _, vm := range l.VMs {
 		vmRef := displayNodeRef(vm.ID, vm.Name)
-		if !validNodeID(vm.ID) {
-			problems = append(problems, fmt.Sprintf("vm %q has non-UUID id", vm.ID))
+		if problem := nodeIDProblem("vm", vm.ID); problem != "" {
+			problems = append(problems, problem)
 		}
-		problems = append(problems, validateNodeName("vm", vm.ID, vm.Name, nodeNames)...)
+		problems = append(problems, validateNodeIdentity("vm", vm.ID, vm.Name, nodeRefs)...)
 		if _, exists := vmIDs[vm.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate vm id %q", vm.ID))
 		}
@@ -117,10 +118,10 @@ func (l *Lab) Validate() error {
 	containerNames := map[string]string{}
 	for _, ct := range l.Containers {
 		ctRef := displayNodeRef(ct.ID, ct.Name)
-		if !validNodeID(ct.ID) {
-			problems = append(problems, fmt.Sprintf("container %q has non-UUID id", ct.ID))
+		if problem := nodeIDProblem("container", ct.ID); problem != "" {
+			problems = append(problems, problem)
 		}
-		problems = append(problems, validateNodeName("container", ct.ID, ct.Name, nodeNames)...)
+		problems = append(problems, validateNodeIdentity("container", ct.ID, ct.Name, nodeRefs)...)
 		if _, exists := containerIDs[ct.ID]; exists {
 			problems = append(problems, fmt.Sprintf("duplicate container id %q", ct.ID))
 		}
@@ -173,6 +174,7 @@ func (l *Lab) Validate() error {
 			nodeIDs[id] = node.kind
 		}
 	}
+	problems = append(problems, validateManagedNameCollisions(l)...)
 
 	diskIDs := map[string]struct{}{}
 	diskKinds := map[string]string{}
@@ -358,19 +360,75 @@ func validID(id string) bool {
 }
 
 func validNodeID(id string) bool {
-	_, err := uuid.Parse(id)
-	return err == nil
+	return validID(id) && !uuidPattern.MatchString(id)
 }
 
-func validateNodeName(kind, id, name string, seen map[string]string) []string {
-	if name == "" {
-		return []string{fmt.Sprintf("%s %q name is required", kind, id)}
+func nodeIDProblem(kind, id string) string {
+	if uuidPattern.MatchString(id) {
+		return fmt.Sprintf("%s %q uses a UUID id; use a mnemonic id", kind, id)
 	}
-	if existing, exists := seen[name]; exists {
-		return []string{fmt.Sprintf("duplicate node name %q used by %s and %s %q", name, existing, kind, id)}
+	if !validNodeID(id) {
+		return fmt.Sprintf("%s %q has invalid mnemonic id", kind, id)
 	}
-	seen[name] = kind + " " + id
-	return nil
+	return ""
+}
+
+func validateNodeIdentity(kind, id, name string, seen map[string]string) []string {
+	var problems []string
+	register := func(value, role string) {
+		key := strings.ToLower(value)
+		if existing, exists := seen[key]; exists {
+			problems = append(problems, fmt.Sprintf("duplicate node reference %q used by %s and %s %q", value, existing, kind, id))
+			return
+		}
+		seen[key] = kind + " " + id + " " + role
+	}
+	if id != "" {
+		register(id, "id")
+	}
+	if name == "" || strings.EqualFold(name, id) {
+		return problems
+	}
+	if !validNodeID(name) {
+		problems = append(problems, fmt.Sprintf("%s %q has invalid mnemonic name %q", kind, id, name))
+		return problems
+	}
+	register(name, "name")
+	return problems
+}
+
+func validateManagedNameCollisions(l *Lab) []string {
+	if l == nil {
+		return nil
+	}
+	var problems []string
+	register := func(seen map[string]string, name, ref string) {
+		key := strings.ToLower(name)
+		if existing, exists := seen[key]; exists {
+			problems = append(problems, fmt.Sprintf("managed runtime name %q collides for %s and %s", name, existing, ref))
+			return
+		}
+		seen[key] = ref
+	}
+	domains := map[string]string{}
+	for _, vm := range l.VMs {
+		register(domains, l.ManagedDomainName(vm), "vm:"+vm.ID)
+	}
+	containers := map[string]string{}
+	for _, ct := range l.Containers {
+		register(containers, l.ManagedContainerName(ct), "container:"+ct.ID)
+	}
+	bridges := map[string]string{}
+	for _, sw := range l.Switches {
+		register(bridges, l.ManagedSwitchBridgeName(sw), "switch:"+sw.ID)
+	}
+	for _, link := range l.ExternalLinks {
+		register(bridges, l.ManagedExternalBridgeName(link), "external:"+link.ID)
+	}
+	for _, link := range l.NetworkLinks {
+		register(bridges, l.ManagedNetworkLinkBridgeName(link), "network link:"+networkEndpointKey(link.From)+"-"+networkEndpointKey(link.To))
+	}
+	return problems
 }
 
 func displayNodeRef(id, name string) string {

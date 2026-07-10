@@ -44,6 +44,8 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 	}
 	changedImage := base
 	changedImage.Image = "docker.io/kalilinux/kali-rolling:latest"
+	changedID := base
+	changedID.ID = "web-renamed"
 	changedShell := base
 	changedShell.Shell = "/bin/bash"
 	changedDisk := base
@@ -62,6 +64,9 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 
 	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(changedImage, containerDiskMount{}) {
 		t.Fatal("image change did not change hash")
+	}
+	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(changedID, containerDiskMount{}) {
+		t.Fatal("id change did not change hash")
 	}
 	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(changedShell, containerDiskMount{}) {
 		t.Fatal("shell change did not change hash")
@@ -126,7 +131,7 @@ func TestDesiredContainerNamesAndManagedPrefix(t *testing.T) {
 	l := &lab.Lab{
 		ID: "default",
 		Containers: []lab.Container{
-			{ID: "323eeeef-8ab2-59a9-97f1-96cfc3ceda53"},
+			{ID: "kali"},
 			{ID: "other"},
 		},
 	}
@@ -136,7 +141,7 @@ func TestDesiredContainerNamesAndManagedPrefix(t *testing.T) {
 	}
 	names := desiredContainerNames(l)
 	for _, want := range []string{
-		"foxlab-default-323eeeef-8ab2-59a9-97f1-96cfc3ceda53",
+		"foxlab-default-kali",
 		"foxlab-default-other",
 	} {
 		if !names[want] {

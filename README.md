@@ -35,3 +35,32 @@ Run one non-interactive frame for smoke checks:
 ```sh
 foxlab --no-raw --width 140 --height 36
 ```
+
+## Lab identifiers
+
+Node identifiers in `.lab` files are mnemonic names used by references throughout
+the topology. They must start with a letter or number and contain only letters,
+numbers, `_`, or `-`. UUID node identifiers are not supported.
+
+```yaml
+name: demo
+vms:
+  - id: victim-a
+    memoryMB: 2048
+    cpus: 2
+    disk: ""
+    networks:
+      - switch: lan
+containers:
+  - id: kali
+    image: docker.io/kalilinux/kali-rolling:latest
+    networks:
+      - switch: lan
+switches:
+  - id: lan
+    mode: bridge
+```
+
+The optional node `name` is only a display alias. Creating or renaming a node
+through FoxLab uses the supplied mnemonic value as its durable `id`; a rename
+therefore updates references and recreates the corresponding runtime resource.

@@ -11,8 +11,6 @@ const (
 	ansiBgPanelInspectorHeader = "\x1b[48;5;233m"
 	ansiBgPanelMenu            = "\x1b[48;5;237m"
 	ansiBgPanelMenuActive      = "\x1b[48;5;31m"
-	ansiBgPanelDisk            = "\x1b[48;5;235m"
-	ansiBgPanelDiskSelected    = "\x1b[48;5;237m"
 	ansiBgPanelStatus          = "\x1b[48;5;236m"
 	ansiBgTerminal             = "\x1b[48;5;232m"
 	ansiBgNode                 = "\x1b[48;5;235m"
@@ -45,10 +43,11 @@ const (
 	themePanelInspector       = ansiBgPanelInspector + ansiWhite
 	themePanelInspectorHeader = ansiBgPanelInspectorHeader + ansiWhite + ansiBold
 	themePanelInspectorMuted  = ansiBgPanelInspector + ansiBrightBlack
-	themePanelDisk            = ansiBgPanelDisk + ansiWhite
-	themePanelDiskHeader      = ansiBgPanelDisk + ansiBrightCyan + ansiBold
-	themePanelDiskMuted       = ansiBgPanelDisk + ansiWhite + ansiDim
-	themePanelDiskSelected    = ansiBgPanelDiskSelected + ansiWhite + ansiBold
+	themePanelDisk            = themePalette
+	themePanelDiskHeader      = themePaletteHeader
+	themePanelDiskMuted       = themePaletteHint
+	themePanelDiskSelected    = themePaletteActive
+	themePanelDiskActions     = themePaletteInput
 )
 
 func nodePanelStyle(_ string, selected bool) string {

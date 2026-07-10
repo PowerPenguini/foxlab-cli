@@ -8,7 +8,7 @@ import (
 )
 
 func TestDisplayDaemonMessageUsesNodeNames(t *testing.T) {
-	const id = "d036228c-cd30-56e4-8534-2dabb1ee75e7"
+	const id = "victim-a-id"
 	l := &lab.Lab{
 		VMs: []lab.VM{{
 			ID:   id,
@@ -19,7 +19,7 @@ func TestDisplayDaemonMessageUsesNodeNames(t *testing.T) {
 	got := displayDaemonMessage(l, `start vm:`+id+`: start domain "`+id+`": virError`)
 
 	if strings.Contains(got, id) {
-		t.Fatalf("message still contains UUID: %q", got)
+		t.Fatalf("message still contains internal id: %q", got)
 	}
 	if !strings.Contains(got, "start vm:Victim-a") {
 		t.Fatalf("message = %q, want named workload", got)

@@ -275,7 +275,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "vm duplicate name",
 			run:  func() string { return service.VMCreate("existing", map[string]string{}) },
-			want: "node name already exists as switch: existing",
+			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "container",
@@ -285,7 +285,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "container duplicate name",
 			run:  func() string { return service.ContainerCreate("existing", map[string]string{}) },
-			want: "node name already exists as switch: existing",
+			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "switch",
@@ -295,7 +295,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "switch duplicate name",
 			run:  func() string { return service.SwitchCreate("existing", map[string]string{}) },
-			want: "node name already exists as switch: existing",
+			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "external",
@@ -305,7 +305,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		{
 			name: "external duplicate name",
 			run:  func() string { return service.ExternalCreate("existing", map[string]string{"interface": "eth0"}) },
-			want: "node name already exists as switch: existing",
+			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "external interface",
@@ -322,7 +322,7 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 	if len(service.Lab.VMs) != 0 || len(service.Lab.Containers) != 0 || len(service.Lab.Switches) != 1 || len(service.Lab.ExternalLinks) != 0 {
 		t.Fatalf("empty-id create mutated lab: %#v", service.Lab)
 	}
-	if service.Lab.Switches[0].Name != "existing" {
+	if service.Lab.Switches[0].ID != "existing" || service.Lab.Switches[0].Name != "" {
 		t.Fatalf("empty-id create mutated existing switch: %#v", service.Lab.Switches)
 	}
 	if len(service.Lab.Layout.Nodes) != 1 {
@@ -385,10 +385,10 @@ func TestServiceSwitchAndExternalRejectUnsupportedArgs(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].Name != "lan" || service.Lab.Switches[0].Mode != "bridge" {
+	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Name != "" || service.Lab.Switches[0].Mode != "bridge" {
 		t.Fatalf("unsupported switch args mutated lab: %#v", service.Lab.Switches)
 	}
-	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].Name != "uplink" || service.Lab.ExternalLinks[0].Interface != "eth0" {
+	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].ID != "uplink" || service.Lab.ExternalLinks[0].Name != "" || service.Lab.ExternalLinks[0].Interface != "eth0" {
 		t.Fatalf("unsupported external args mutated lab: %#v", service.Lab.ExternalLinks)
 	}
 }
@@ -472,7 +472,7 @@ func TestServiceVMRejectsInvalidTypedArgsWithoutMutatingLab(t *testing.T) {
 		t.Fatalf("invalid vm args created vms: %#v", service.Lab.VMs)
 	}
 	vm := service.Lab.VMs[0]
-	if vm.Name != "vm1" || vm.Disk != "disks/vm1.qcow2" || vm.CPUs != 1 || vm.MemoryMB != 512 || !vm.VNC {
+	if vm.ID != "vm1" || vm.Name != "" || vm.Disk != "disks/vm1.qcow2" || vm.CPUs != 1 || vm.MemoryMB != 512 || !vm.VNC {
 		t.Fatalf("invalid vm args mutated vm: %#v", vm)
 	}
 }
@@ -970,22 +970,22 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 		{
 			name: "vm collides with container",
 			run:  func(s *Service) string { return s.VMCreate("web", nil) },
-			want: "node name already exists as container: web",
+			want: "node id already exists as container: web",
 		},
 		{
 			name: "container collides with vm",
 			run:  func(s *Service) string { return s.ContainerCreate("vm1", map[string]string{"image": "alpine"}) },
-			want: "node name already exists as vm: vm1",
+			want: "node id already exists as vm: vm1",
 		},
 		{
 			name: "switch collides with external",
 			run:  func(s *Service) string { return s.SwitchCreate("uplink", nil) },
-			want: "node name already exists as uplink: uplink",
+			want: "node id already exists as uplink: uplink",
 		},
 		{
 			name: "external collides with switch",
 			run:  func(s *Service) string { return s.ExternalCreate("lan", map[string]string{"interface": "eth0"}) },
-			want: "node name already exists as switch: lan",
+			want: "node id already exists as switch: lan",
 		},
 	}
 
@@ -1148,14 +1148,124 @@ func TestSaveAndRefreshFailureReloadsPersistedLab(t *testing.T) {
 	if !strings.Contains(got, "unsupported mode") {
 		t.Fatalf("SwitchCreate = %q, want validation failure", got)
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].Name != "lan" || service.Lab.Switches[0].Mode != "bridge" {
+	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Name != "" || service.Lab.Switches[0].Mode != "bridge" {
 		t.Fatalf("service did not reload persisted lab after failed save: %#v", service.Lab.Switches)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatalf("reload lab: %v", err)
 	}
-	if len(reloaded.Switches) != 1 || reloaded.Switches[0].Name != "lan" || reloaded.Switches[0].Mode != "bridge" {
+	if len(reloaded.Switches) != 1 || reloaded.Switches[0].ID != "lan" || reloaded.Switches[0].Name != "" || reloaded.Switches[0].Mode != "bridge" {
 		t.Fatalf("persisted lab changed after failed save: %#v", reloaded.Switches)
+	}
+}
+
+func TestNodeRenameRewritesAllMnemonicReferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{
+		ID: "demo",
+		VMs: []lab.VM{{
+			ID:       "vm-old",
+			MemoryMB: 512,
+			CPUs:     1,
+			Disk:     "disks/vm.qcow2",
+			Networks: []lab.VMNetwork{{Switch: "sw-old"}, {ExternalLink: "up-old"}, {}},
+		}},
+		Containers: []lab.Container{{
+			ID:       "ct-old",
+			Image:    "alpine",
+			Disk:     "disks/ct.qcow2",
+			Networks: []lab.ContainerNetwork{{Switch: "sw-old"}, {ExternalLink: "up-old"}, {}},
+		}},
+		Switches: []lab.Switch{{
+			ID:            "sw-old",
+			Mode:          "bridge",
+			ExternalLinks: []string{"up-old"},
+		}},
+		ExternalLinks: []lab.ExternalLink{{ID: "up-old", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+		NetworkLinks: []lab.NetworkLink{{
+			From: lab.NetworkEndpoint{Type: "vm", ID: "vm-old", NIC: 2},
+			To:   lab.NetworkEndpoint{Type: "container", ID: "ct-old", NIC: 2},
+		}},
+		Disks: []lab.Disk{
+			{ID: "vm-root", Path: "disks/vm.qcow2", Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm-old"},
+			{ID: "ct-root", Path: "disks/ct.qcow2", Format: "qcow2", Kind: "base", AttachedType: "container", AttachedTo: "ct-old"},
+		},
+		Layout: lab.Layout{
+			Nodes: map[string]lab.Position{
+				"vm-old": {X: 1, Y: 2}, "ct-old": {X: 3, Y: 4}, "sw-old": {X: 5, Y: 6}, "up-old": {X: 7, Y: 8},
+			},
+			Links: []lab.LayoutLink{
+				{From: lab.LayoutEndpoint{Type: "vm", ID: "vm-old"}, To: lab.LayoutEndpoint{Type: "switch", ID: "sw-old"}},
+				{From: lab.LayoutEndpoint{Type: "container", ID: "ct-old"}, To: lab.LayoutEndpoint{Type: "external", ID: "up-old"}},
+			},
+		},
+	}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatalf("save initial lab: %v", err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load initial lab: %v", err)
+	}
+	service := NewService(loaded, path)
+	for label, got := range map[string]string{
+		"vm":        service.VMSet("vm-old", map[string]string{"name": "vm-new"}),
+		"container": service.ContainerSet("ct-old", map[string]string{"name": "ct-new"}),
+		"switch":    service.SwitchSet("sw-old", map[string]string{"name": "sw-new"}),
+		"external":  service.ExternalSet("up-old", map[string]string{"name": "up-new"}),
+	} {
+		if !strings.Contains(got, "runtime will be recreated") {
+			t.Fatalf("%s rename message = %q", label, got)
+		}
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatalf("reload renamed lab: %v", err)
+	}
+	if reloaded.VMs[0].ID != "vm-new" || reloaded.VMs[0].Name != "" || reloaded.Containers[0].ID != "ct-new" || reloaded.Containers[0].Name != "" {
+		t.Fatalf("workload ids after rename: vm=%#v container=%#v", reloaded.VMs[0], reloaded.Containers[0])
+	}
+	if reloaded.Switches[0].ID != "sw-new" || reloaded.ExternalLinks[0].ID != "up-new" {
+		t.Fatalf("network node ids after rename: switch=%#v external=%#v", reloaded.Switches[0], reloaded.ExternalLinks[0])
+	}
+	if reloaded.VMs[0].Networks[0].Switch != "sw-new" || reloaded.VMs[0].Networks[1].ExternalLink != "up-new" || reloaded.Containers[0].Networks[0].Switch != "sw-new" || reloaded.Containers[0].Networks[1].ExternalLink != "up-new" {
+		t.Fatalf("network references after rename: vm=%#v container=%#v", reloaded.VMs[0].Networks, reloaded.Containers[0].Networks)
+	}
+	if got := lab.SwitchExternalLinks(reloaded.Switches[0]); len(got) != 1 || got[0] != "up-new" {
+		t.Fatalf("switch external refs after rename: %#v", got)
+	}
+	if reloaded.NetworkLinks[0].From.ID != "vm-new" || reloaded.NetworkLinks[0].To.ID != "ct-new" {
+		t.Fatalf("direct link after rename: %#v", reloaded.NetworkLinks[0])
+	}
+	if reloaded.Disks[0].AttachedTo != "vm-new" || reloaded.Disks[1].AttachedTo != "ct-new" {
+		t.Fatalf("disk attachments after rename: %#v", reloaded.Disks)
+	}
+	for _, id := range []string{"vm-new", "ct-new", "sw-new", "up-new"} {
+		if _, ok := reloaded.Layout.Nodes[id]; !ok {
+			t.Fatalf("layout node %q missing after rename: %#v", id, reloaded.Layout.Nodes)
+		}
+	}
+	for _, link := range reloaded.Layout.Links {
+		for _, endpoint := range []lab.LayoutEndpoint{link.From, link.To} {
+			if strings.HasSuffix(endpoint.ID, "-old") {
+				t.Fatalf("stale layout endpoint after rename: %#v", endpoint)
+			}
+		}
+	}
+}
+
+func TestNodeRenameCollisionDoesNotMutateLab(t *testing.T) {
+	initial := &lab.Lab{
+		ID:       "demo",
+		VMs:      []lab.VM{{ID: "router", MemoryMB: 512, CPUs: 1}},
+		Switches: []lab.Switch{{ID: "lan", Mode: "bridge"}},
+	}
+	service := NewService(lab.Clone(initial), "")
+	if err := service.renameNodeID("vm", "router", "LAN"); err == nil || err.Error() != "node id already exists as switch: LAN" {
+		t.Fatalf("rename collision = %v", err)
+	}
+	if !reflect.DeepEqual(service.Lab, initial) {
+		t.Fatalf("rename collision mutated lab:\ngot  %#v\nwant %#v", service.Lab, initial)
 	}
 }

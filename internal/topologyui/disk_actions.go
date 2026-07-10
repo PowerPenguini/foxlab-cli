@@ -518,14 +518,10 @@ func (a *App) diskInfo(id string) {
 	info, msg := a.ensureService().DiskInfo(id)
 	a.State.Message = msg
 	if strings.HasPrefix(msg, "disk not found:") || strings.HasPrefix(msg, "disk info needs") {
-		a.State.Console = []string{msg}
+		a.State.Console = nil
 		return
 	}
-	lines := a.diskInfoLines(info)
-	if strings.HasPrefix(msg, "disk info failed:") {
-		lines = append(lines, msg)
-	}
-	a.State.Console = lines
+	a.State.Console = a.diskInfoLines(info)
 }
 
 func (a *App) diskRename(id, newID string) {

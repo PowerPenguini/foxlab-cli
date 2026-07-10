@@ -48,6 +48,8 @@ type App struct {
 	ViewHeight            int
 	RouteCacheKey         string
 	RouteCacheStableKey   string
+	RouteCacheWidth       int
+	RouteCacheHeight      int
 	RouteCachePanX        int
 	RouteCachePanY        int
 	RouteCacheRoutes      []visibleEdge
@@ -121,6 +123,8 @@ func (a *App) syncFromService() {
 func (a *App) resetRouteCache() {
 	a.RouteCacheKey = ""
 	a.RouteCacheStableKey = ""
+	a.RouteCacheWidth = 0
+	a.RouteCacheHeight = 0
 	a.RouteCachePanX = 0
 	a.RouteCachePanY = 0
 	a.RouteCacheRoutes = nil
@@ -401,12 +405,20 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	renderState := a.diskExplorerRenderState()
 	key := renderRouteCacheKey(a.Model, width, height, a.State.PanX, a.State.PanY)
 	stableKey := renderRouteCacheStableKey(a.Model, width, height)
-	reuseMovingRoutes := a.State.MoveMode && a.RouteCacheKey != "" && len(a.RouteCacheRoutes) > 0
+	reuseMovingRoutes := a.State.MoveMode &&
+		a.RouteCacheKey != "" &&
+		len(a.RouteCacheRoutes) > 0 &&
+		a.RouteCacheWidth == width &&
+		a.RouteCacheHeight == height &&
+		a.RouteCachePanX == a.State.PanX &&
+		a.RouteCachePanY == a.State.PanY
 	reusePanningRoutes := a.mousePanActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
 	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
 		_, routes := planRenderRoutes(a.Model, renderState, width, height)
 		a.RouteCacheKey = key
 		a.RouteCacheStableKey = stableKey
+		a.RouteCacheWidth = width
+		a.RouteCacheHeight = height
 		a.RouteCachePanX = a.State.PanX
 		a.RouteCachePanY = a.State.PanY
 		a.RouteCacheRoutes = routes

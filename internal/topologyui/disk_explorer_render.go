@@ -2,13 +2,11 @@ package topologyui
 
 import (
 	"fmt"
-	"strings"
 )
 
 type diskExplorerActionButton struct {
 	label  string
 	action string
-	style  string
 }
 
 type diskExplorerColumns struct {
@@ -23,17 +21,16 @@ type diskExplorerColumns struct {
 
 func diskExplorerActionButtons() []diskExplorerActionButton {
 	return []diskExplorerActionButton{
-		{label: " N create ", action: diskExplorerActionCreate, style: themePanelDiskHeader},
-		{label: " L layer ", action: diskExplorerActionLayer, style: themePanelDiskHeader + ansiBrightCyan + ansiBold},
-		{label: " E rename ", action: diskExplorerActionRename, style: themePanelDiskHeader},
-		{label: " R resize ", action: diskExplorerActionResize, style: themePanelDiskHeader},
-		{label: " M merge ", action: diskExplorerActionMerge, style: themePanelDiskHeader + ansiGreen + ansiBold},
-		{label: " X delete ", action: diskExplorerActionDelete, style: ansiBgRed + ansiWhite + ansiBold},
-		{label: " I info ", action: diskExplorerActionInfo, style: themePanelDiskHeader},
+		{label: " N create ", action: diskExplorerActionCreate},
+		{label: " L layer ", action: diskExplorerActionLayer},
+		{label: " E rename ", action: diskExplorerActionRename},
+		{label: " R resize ", action: diskExplorerActionResize},
+		{label: " M merge ", action: diskExplorerActionMerge},
+		{label: " X delete ", action: diskExplorerActionDelete},
 	}
 }
 
-func drawDiskExplorer(g *grid, m Model, state ViewState, width, height int) {
+func drawDiskExplorer(g *grid, _ Model, state ViewState, width, height int) {
 	if !state.DiskExplorerOpen {
 		return
 	}
@@ -42,16 +39,6 @@ func drawDiskExplorer(g *grid, m Model, state ViewState, width, height int) {
 		return
 	}
 	fillRect(g, layout, themePanelDisk)
-	fillRow(g, layout.X, layout.Y, layout.W, themePanelDiskHeader)
-	title := "Disks"
-	if m.ID != "" {
-		title = "Disks: " + m.ID
-	}
-	g.Text(layout.X+1, layout.Y, fit(title, layout.W-2), themePanelDiskHeader)
-	count := diskExplorerCountText(len(state.DiskExplorerRows))
-	if count != "" && runeLen(count)+2 < layout.W {
-		g.Text(layout.X+layout.W-1-runeLen(count), layout.Y, count, themePanelDiskMuted)
-	}
 	drawDiskExplorerTableHeader(g, layout)
 	rows := state.DiskExplorerRows
 	if len(rows) == 0 {
@@ -59,7 +46,6 @@ func drawDiskExplorer(g *grid, m Model, state ViewState, width, height int) {
 	} else {
 		drawDiskExplorerRows(g, state, layout)
 	}
-	drawDiskExplorerInfo(g, state, layout)
 	drawDiskExplorerActions(g, state, layout)
 }
 
@@ -93,7 +79,7 @@ func drawDiskExplorerRows(g *grid, state ViewState, layout rect) {
 
 func drawDiskExplorerTableHeader(g *grid, layout rect) {
 	columns := diskExplorerTableColumns(layout)
-	y := layout.Y + 2
+	y := layout.Y + 1
 	style := themePanelDiskMuted + ansiBold
 	g.Text(columns.ID.X, y, fit("DISK", columns.ID.W), style)
 	g.Text(columns.Kind.X, y, fit("TYPE", columns.Kind.W), style)
@@ -118,7 +104,7 @@ func drawDiskExplorerStructuredRow(g *grid, columns diskExplorerColumns, y int, 
 	if selected {
 		switch state.DiskExplorerEdit {
 		case diskExplorerActionRename:
-			id = "rename=" + contextEditText(state.DiskExplorerEditValue, state.DiskExplorerEditCursor)
+			id = diskExplorerEditLabel(id, state.DiskExplorerEdit, state.DiskExplorerEditValue, state.DiskExplorerEditCursor)
 		case diskExplorerActionResize:
 			row.Size = contextEditText(state.DiskExplorerEditValue, state.DiskExplorerEditCursor) + "G"
 		}
@@ -129,7 +115,7 @@ func drawDiskExplorerStructuredRow(g *grid, columns diskExplorerColumns, y int, 
 	g.Text(columns.Size.X, y, fit(row.Size, columns.Size.W), rowStyle+ansiWhite)
 	g.Text(columns.Format.X, y, fit(row.Format, columns.Format.W), rowStyle+ansiWhite)
 	g.Text(columns.Relation.X, y, fit(row.Relation, columns.Relation.W), diskExplorerRelationStyle(row, rowStyle))
-	g.Text(columns.Path.X, y, fit(row.Path, columns.Path.W), rowStyle+ansiBrightBlack)
+	g.Text(columns.Path.X, y, fit(row.Path, columns.Path.W), rowStyle)
 }
 
 func diskExplorerTableColumns(layout rect) diskExplorerColumns {
@@ -177,52 +163,22 @@ func diskExplorerRelationStyle(row DiskExplorerRowView, rowStyle string) string 
 	return rowStyle + ansiWhite
 }
 
-func diskExplorerCountText(count int) string {
-	switch count {
-	case 0:
-		return "no disks"
-	case 1:
-		return "1 disk"
-	default:
-		return fmt.Sprintf("%d disks", count)
-	}
-}
-
-func drawDiskExplorerInfo(g *grid, state ViewState, layout rect) {
-	lines := diskExplorerVisibleInfoLines(state, layout)
-	if len(lines) == 0 {
-		return
-	}
-	height := len(lines)
-	y := layout.Y + layout.H - 2 - height
-	separatorY := y - 1
-	if separatorY > layout.Y+2 {
-		fillRow(g, layout.X, separatorY, layout.W, themePanelDiskHeader)
-	}
-	for i := 0; i < height; i++ {
-		line := lines[i]
-		style := themePanelDiskMuted
-		if i == 0 {
-			style = themePanelDisk + ansiBrightCyan + ansiBold
-		}
-		fillRow(g, layout.X+1, y+i, layout.W-2, themePanelDisk)
-		g.Text(layout.X+1, y+i, fit(line, layout.W-2), style)
-	}
-}
-
 func diskExplorerEditLabel(label, edit, value string, cursor int) string {
+	if edit == diskExplorerActionRename {
+		return contextEditText(value, cursor)
+	}
 	return label + "  " + edit + "=" + contextEditText(value, cursor)
 }
 
 func drawDiskExplorerActions(g *grid, state ViewState, layout rect) {
-	y := layout.Y + layout.H - 2
-	fillRow(g, layout.X, y, layout.W, themePanelDiskHeader)
+	y := layout.Y + layout.H - 1
+	fillRow(g, layout.X, y, layout.W, themePanelDiskActions)
 	x := layout.X + 1
 	for _, action := range diskExplorerActionButtons() {
 		if x >= layout.X+layout.W-1 {
 			break
 		}
-		g.Text(x, y, fit(action.label, layout.X+layout.W-1-x), action.style)
+		g.Text(x, y, fit(action.label, layout.X+layout.W-1-x), themePanelDiskActions)
 		x += runeLen(action.label)
 	}
 	footer := "Esc close"
@@ -230,7 +186,7 @@ func drawDiskExplorerActions(g *grid, state ViewState, layout rect) {
 		footer = "Enter apply  Esc cancel"
 	}
 	if x+1 < layout.X+layout.W-1 {
-		g.Text(x+1, y, fit(footer, layout.X+layout.W-2-x), themePanelDiskHeader+ansiBrightBlack)
+		g.Text(x+1, y, fit(footer, layout.X+layout.W-2-x), themePanelDiskActions)
 	}
 	if len(state.DiskExplorerRows) > diskExplorerVisibleRowsForState(state, layout) {
 		pos := diskExplorerScrollText(state, layout)
@@ -248,43 +204,6 @@ func diskExplorerScrollText(state ViewState, layout rect) string {
 	return fmt.Sprintf("%d-%d/%d", top, bottom, len(state.DiskExplorerRows))
 }
 
-func diskExplorerVisibleRowsForState(state ViewState, layout rect) int {
-	visible := diskExplorerVisibleRows(layout)
-	if diskExplorerInfoHeight(state, layout) > 0 {
-		visible -= diskExplorerInfoHeight(state, layout) + 1
-	}
-	return max(0, visible)
-}
-
-func diskExplorerInfoHeight(state ViewState, layout rect) int {
-	return len(diskExplorerVisibleInfoLines(state, layout))
-}
-
-func diskExplorerVisibleInfoLines(state ViewState, layout rect) []string {
-	lines := diskExplorerInfoLines(state)
-	if len(lines) == 0 {
-		return nil
-	}
-	height := min(len(lines), min(6, max(1, layout.H-7)))
-	if len(lines) <= height {
-		return lines
-	}
-	visible := make([]string, 0, height)
-	visible = append(visible, lines[0])
-	visible = append(visible, lines[len(lines)-height+1:]...)
-	return visible
-}
-
-func diskExplorerInfoLines(state ViewState) []string {
-	if len(state.Console) == 0 {
-		return nil
-	}
-	switch {
-	case strings.HasPrefix(state.Message, "disk info:"),
-		strings.HasPrefix(state.Message, "disk info failed:"),
-		strings.HasPrefix(state.Message, "disk not found:"):
-		return state.Console
-	default:
-		return nil
-	}
+func diskExplorerVisibleRowsForState(_ ViewState, layout rect) int {
+	return diskExplorerVisibleRows(layout)
 }

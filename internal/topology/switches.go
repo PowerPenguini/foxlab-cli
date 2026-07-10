@@ -21,7 +21,7 @@ func (s *Service) SwitchCreate(name string, args map[string]string) string {
 	if err != nil {
 		return "switch create failed: " + err.Error()
 	}
-	id := newNodeID()
+	id := name
 	if err := s.validateSwitchConfig(name, mode, externals); err != nil {
 		return "switch create failed: " + err.Error()
 	}
@@ -31,7 +31,6 @@ func (s *Service) SwitchCreate(name string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.Switches = append(s.Lab.Switches, lab.Switch{
 		ID:            id,
-		Name:          name,
 		Mode:          mode,
 		ExternalLinks: externals,
 	})
@@ -74,14 +73,16 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 			return "switch config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
+		renamed := false
 		if value := args["name"]; value != "" {
-			if err := s.validateNodeName(value, id); err != "" {
-				return err
+			if err := s.renameNodeID("switch", id, value); err != nil {
+				return "switch rename failed: " + err.Error()
 			}
 			if err := s.requireSavePath(); err != nil {
 				return "switch config failed: " + err.Error()
 			}
-			s.Lab.Switches[i].Name = value
+			renamed = id != value
+			id = value
 		}
 		if value := args["mode"]; value != "" {
 			if err := s.requireSavePath(); err != nil {
@@ -99,7 +100,11 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "switch config failed: " + err.Error()
 		}
-		return "configured switch:" + s.nodeDisplayName("switch", id)
+		message := "configured switch:" + s.nodeDisplayName("switch", id)
+		if renamed {
+			message += "; runtime will be recreated"
+		}
+		return message
 	}
 	return "switch not found: " + id
 }

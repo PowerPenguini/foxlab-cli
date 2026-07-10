@@ -20,7 +20,7 @@ func (s *Service) ExternalCreate(name string, args map[string]string) string {
 		return "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]"
 	}
 	mode := firstNonEmpty(args["mode"], lab.ExternalModeNAT)
-	id := newNodeID()
+	id := name
 	if err := validateExternalConfig(name, mode); err != nil {
 		return "uplink create failed: " + err.Error()
 	}
@@ -30,7 +30,6 @@ func (s *Service) ExternalCreate(name string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.ExternalLinks = append(s.Lab.ExternalLinks, lab.ExternalLink{
 		ID:        id,
-		Name:      name,
 		Interface: args["interface"],
 		Mode:      mode,
 	})
@@ -67,14 +66,16 @@ func (s *Service) ExternalSet(ref string, args map[string]string) string {
 			return "uplink config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
+		renamed := false
 		if value := args["name"]; value != "" {
-			if err := s.validateNodeName(value, id); err != "" {
-				return err
+			if err := s.renameNodeID("external", id, value); err != nil {
+				return "uplink rename failed: " + err.Error()
 			}
 			if err := s.requireSavePath(); err != nil {
 				return "uplink config failed: " + err.Error()
 			}
-			s.Lab.ExternalLinks[i].Name = value
+			renamed = id != value
+			id = value
 		}
 		if value := args["interface"]; value != "" {
 			if err := s.requireSavePath(); err != nil {
@@ -91,7 +92,11 @@ func (s *Service) ExternalSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "uplink config failed: " + err.Error()
 		}
-		return "configured uplink:" + s.nodeDisplayName("uplink", id)
+		message := "configured uplink:" + s.nodeDisplayName("uplink", id)
+		if renamed {
+			message += "; runtime will be recreated"
+		}
+		return message
 	}
 	return "uplink not found: " + id
 }

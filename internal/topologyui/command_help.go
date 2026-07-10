@@ -36,7 +36,7 @@ func helpLines(topic string) []string {
 		return []string{
 			"disk: open Disks from the palette or use Disk menu from a workload",
 			"disk buttons: L creates a layer, M merges, D detaches, X deletes",
-			"disk explorer: N creates base, L creates layer, E renames, R resizes, M merges, X deletes, I shows info",
+			"disk explorer: N creates base, L creates layer, E renames, R resizes, M merges, X deletes",
 			"disk commands: create, attach, detach, merge, rename, resize, info, layer create/delete, delete",
 		}
 	case "link", "links":

@@ -59,7 +59,7 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
 		switchRef = s.Lab.Switches[0].ID
 	}
-	id := newNodeID()
+	id := name
 	if err := s.validateVMNetworkRefs(name, switchRef, externalRef); err != nil {
 		return "create failed: " + err.Error()
 	}
@@ -69,7 +69,6 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	vm := lab.VM{
 		ID:       id,
-		Name:     name,
 		MemoryMB: memory,
 		CPUs:     cpus,
 		Disk:     filepath.ToSlash(args["disk"]),
@@ -160,11 +159,13 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 			return "config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
+		renamed := false
 		if value := args["name"]; value != "" {
-			if err := s.validateNodeName(value, id); err != "" {
-				return err
+			if err := s.renameNodeID("vm", id, value); err != nil {
+				return "vm rename failed: " + err.Error()
 			}
-			s.Lab.VMs[i].Name = value
+			renamed = id != value
+			id = value
 		}
 		if value, ok := args["disk"]; ok {
 			s.Lab.VMs[i].Disk = value
@@ -192,7 +193,11 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "config failed: " + err.Error()
 		}
-		return "configured " + s.workloadDisplayRef("vm", id)
+		message := "configured " + s.workloadDisplayRef("vm", id)
+		if renamed {
+			message += "; runtime will be recreated"
+		}
+		return message
 	}
 	return "vm not found: " + id
 }
@@ -262,7 +267,7 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
 		switchRef = s.Lab.Switches[0].ID
 	}
-	id := newNodeID()
+	id := name
 	if err := s.validateContainerNetworkRefs(name, switchRef, externalRef); err != nil {
 		return "container create failed: " + err.Error()
 	}
@@ -272,7 +277,6 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 	snapshot := lab.Clone(s.Lab)
 	ct := lab.Container{
 		ID:      id,
-		Name:    name,
 		Image:   firstNonEmpty(args["image"], "?"),
 		Disk:    args["disk"],
 		Command: splitCommand(args["command"]),
@@ -339,11 +343,13 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 			return "container config failed: " + err.Error()
 		}
 		snapshot := lab.Clone(s.Lab)
+		renamed := false
 		if value := args["name"]; value != "" {
-			if err := s.validateNodeName(value, id); err != "" {
-				return err
+			if err := s.renameNodeID("container", id, value); err != nil {
+				return "container rename failed: " + err.Error()
 			}
-			s.Lab.Containers[i].Name = value
+			renamed = id != value
+			id = value
 		}
 		if value := args["image"]; value != "" {
 			s.Lab.Containers[i].Image = value
@@ -370,7 +376,11 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 			return "container config failed: " + err.Error()
 		}
-		return "configured " + s.workloadDisplayRef("container", id)
+		message := "configured " + s.workloadDisplayRef("container", id)
+		if renamed {
+			message += "; runtime will be recreated"
+		}
+		return message
 	}
 	return "container not found: " + id
 }

@@ -15,7 +15,6 @@ const (
 	diskExplorerActionResize = "resize"
 	diskExplorerActionMerge  = "merge"
 	diskExplorerActionDelete = "delete"
-	diskExplorerActionInfo   = "info"
 )
 
 type diskExplorerRow struct {
@@ -143,8 +142,6 @@ func (a *App) handleDiskExplorerKey(key string) bool {
 		a.runDiskExplorerAction(diskExplorerActionMerge)
 	case "char:x", "char:X", "delete":
 		a.runDiskExplorerAction(diskExplorerActionDelete)
-	case "char:i", "char:I", "enter":
-		a.runDiskExplorerAction(diskExplorerActionInfo)
 	}
 	a.clampDiskExplorerSelection()
 	a.ensureDiskExplorerSelectionVisible()
@@ -265,13 +262,6 @@ func (a *App) runDiskExplorerAction(action string) {
 			return
 		}
 		a.diskDelete(row.Disk.ID)
-	case diskExplorerActionInfo:
-		row, ok := a.selectedDiskExplorerRow()
-		if !ok {
-			a.State.Message = "disk info needs disk id"
-			return
-		}
-		a.diskInfo(row.Disk.ID)
 	}
 	a.clampDiskExplorerSelection()
 }
@@ -337,7 +327,7 @@ func diskExplorerLayout(width, height int) (rect, bool) {
 }
 
 func diskExplorerVisibleRows(layout rect) int {
-	return max(0, layout.H-6)
+	return max(0, layout.H-4)
 }
 
 func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
@@ -387,7 +377,7 @@ func diskExplorerRowAt(layout rect, scroll, x, y, count, visibleRows int) (int, 
 }
 
 func diskExplorerRowsY(layout rect) int {
-	return layout.Y + 4
+	return layout.Y + 3
 }
 
 func diskExplorerActionAt(layout rect, x, y int) (string, bool) {
@@ -413,7 +403,7 @@ type diskExplorerPositionedActionButton struct {
 }
 
 func diskExplorerActionButtonAt(layout rect, x, y int) (diskExplorerPositionedActionButton, bool) {
-	if y != layout.Y+layout.H-2 || x < layout.X+1 || x >= layout.X+layout.W-1 {
+	if y != layout.Y+layout.H-1 || x < layout.X+1 || x >= layout.X+layout.W-1 {
 		return diskExplorerPositionedActionButton{}, false
 	}
 	pos := layout.X + 1

@@ -539,6 +539,7 @@ func deleteContainer(ctx context.Context, container containerd.Container) error 
 
 func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string {
 	var parts []string
+	parts = append(parts, "id="+ct.ID)
 	parts = append(parts, "image="+ct.Image)
 	parts = append(parts, "shell="+ct.Shell)
 	parts = append(parts, "disk="+ct.Disk)

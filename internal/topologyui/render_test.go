@@ -1518,19 +1518,108 @@ func TestRenderDiskExplorerUsesColorPanelWithoutFrame(t *testing.T) {
 	if topLeft.Ch == '╭' {
 		t.Fatalf("disk explorer still renders a frame corner:\n%s", g.String(false))
 	}
-	if topLeft.Style != themePanelDiskHeader {
-		t.Fatalf("disk explorer header style = %q, want %q", topLeft.Style, themePanelDiskHeader)
+	if topLeft.Style != themePanelDisk {
+		t.Fatalf("disk explorer top row style = %q, want body style %q", topLeft.Style, themePanelDisk)
 	}
-	body := g.Cells[(layout.Y+3)*g.Width+layout.X]
+	if strings.Contains(g.String(false), "Disks: demo") || strings.Contains(g.String(false), "1 disk") {
+		t.Fatalf("disk explorer still renders title/count header:\n%s", g.String(false))
+	}
+	body := g.Cells[(layout.Y+2)*g.Width+layout.X]
 	if body.Style != themePanelDisk {
 		t.Fatalf("disk explorer body style = %q, want %q", body.Style, themePanelDisk)
 	}
-	if themePanelDisk != ansiBgNode+ansiWhite {
-		t.Fatalf("disk explorer body is not the shared dark panel: %q", themePanelDisk)
+	if themePanelDisk != themePalette {
+		t.Fatalf("disk explorer body style = %q, want palette style %q", themePanelDisk, themePalette)
+	}
+	if themePanelDiskHeader != themePaletteHeader {
+		t.Fatalf("disk explorer header style = %q, want palette header style %q", themePanelDiskHeader, themePaletteHeader)
+	}
+	if themePanelDiskMuted != themePaletteHint {
+		t.Fatalf("disk explorer muted style = %q, want palette hint style %q", themePanelDiskMuted, themePaletteHint)
+	}
+	if themePanelDiskSelected != themePaletteActive {
+		t.Fatalf("disk explorer selected style = %q, want palette active style %q", themePanelDiskSelected, themePaletteActive)
 	}
 	selected := g.Cells[diskExplorerRowsY(layout)*g.Width+layout.X+1]
 	if !strings.HasPrefix(selected.Style, themePanelDiskSelected) {
 		t.Fatalf("disk explorer selected row style = %q, want prefix %q", selected.Style, themePanelDiskSelected)
+	}
+	columns := diskExplorerTableColumns(layout)
+	selectedPath := g.Cells[diskExplorerRowsY(layout)*g.Width+columns.Path.X]
+	if selectedPath.Style != themePanelDiskSelected {
+		t.Fatalf("disk explorer selected path style = %q, want active row style %q", selectedPath.Style, themePanelDiskSelected)
+	}
+}
+
+func TestRenderDiskExplorerActionsMatchPaletteInput(t *testing.T) {
+	const width, height = 100, 30
+	layout, ok := diskExplorerLayout(width, height)
+	if !ok {
+		t.Fatal("disk explorer layout unavailable")
+	}
+	g := renderGrid(Model{ID: "demo"}, ViewState{DiskExplorerOpen: true}, width, height)
+	y := layout.Y + layout.H - 1
+	x := layout.X + 1
+	for _, action := range diskExplorerActionButtons() {
+		for offset := range []rune(action.label) {
+			if got := g.Cells[y*g.Width+x+offset].Style; got != themePaletteInput {
+				t.Fatalf("disk explorer action %q style = %q, want palette input style %q", action.label, got, themePaletteInput)
+			}
+		}
+		x += runeLen(action.label)
+	}
+	footerX := x + 1
+	if got := g.Cells[y*g.Width+footerX].Style; got != themePaletteInput {
+		t.Fatalf("disk explorer footer style = %q, want palette input style %q", got, themePaletteInput)
+	}
+	if got := g.Cells[y*g.Width+layout.X+layout.W-1].Style; got != themePaletteInput {
+		t.Fatalf("disk explorer action row background style = %q, want palette input style %q", got, themePaletteInput)
+	}
+}
+
+func TestRenderDiskExplorerRenameEditOmitsPrefix(t *testing.T) {
+	state := ViewState{
+		DiskExplorerOpen:       true,
+		DiskExplorerEdit:       diskExplorerActionRename,
+		DiskExplorerEditValue:  "disk",
+		DiskExplorerEditCursor: 4,
+		DiskExplorerRows:       []string{"disk"},
+		DiskExplorerRowViews: []DiskExplorerRowView{{
+			ID:     "disk",
+			Kind:   "base",
+			Format: "qcow2",
+			Path:   "disks/disk.qcow2",
+		}},
+	}
+	out := RenderString(Model{}, state, 100, 30, false)
+	if !strings.Contains(out, "disk|") {
+		t.Fatalf("disk explorer rename edit missing value and cursor:\n%s", out)
+	}
+	if strings.Contains(out, "rename=") {
+		t.Fatalf("disk explorer rename edit still shows prefix:\n%s", out)
+	}
+}
+
+func TestRenderDiskExplorerUnselectedPathUsesRowForeground(t *testing.T) {
+	const width, height = 100, 30
+	layout, ok := diskExplorerLayout(width, height)
+	if !ok {
+		t.Fatal("disk explorer layout unavailable")
+	}
+	state := ViewState{
+		DiskExplorerOpen:     true,
+		DiskExplorerSelected: 1,
+		DiskExplorerRows:     []string{"first", "second"},
+		DiskExplorerRowViews: []DiskExplorerRowView{
+			{ID: "first", Kind: "base", Format: "qcow2", Path: "disks/first.qcow2"},
+			{ID: "second", Kind: "base", Format: "qcow2", Path: "disks/second.qcow2"},
+		},
+	}
+	g := renderGrid(Model{}, state, width, height)
+	columns := diskExplorerTableColumns(layout)
+	path := g.Cells[diskExplorerRowsY(layout)*g.Width+columns.Path.X]
+	if path.Style != themePanelDisk {
+		t.Fatalf("disk explorer unselected path style = %q, want row style %q", path.Style, themePanelDisk)
 	}
 }
 
