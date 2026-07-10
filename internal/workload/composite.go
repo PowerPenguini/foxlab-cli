@@ -82,11 +82,19 @@ func (c *Composite) GetFile(ctx context.Context, l *lab.Lab, ref Ref, guestPath,
 }
 
 func (c *Composite) Start(ctx context.Context, l *lab.Lab, ref Ref) error {
+	_, err := c.StartWithOutcome(ctx, l, ref)
+	return err
+}
+
+func (c *Composite) StartWithOutcome(ctx context.Context, l *lab.Lab, ref Ref) (StartOutcome, error) {
 	runtime, err := c.runtimeFor(ref)
 	if err != nil {
-		return err
+		return StartOutcome{}, err
 	}
-	return runtime.Start(ctx, l, ref)
+	if outcomeRuntime, ok := runtime.(StartOutcomeRuntime); ok {
+		return outcomeRuntime.StartWithOutcome(ctx, l, ref)
+	}
+	return StartOutcome{}, runtime.Start(ctx, l, ref)
 }
 
 func (c *Composite) Stop(ctx context.Context, l *lab.Lab, ref Ref) error {

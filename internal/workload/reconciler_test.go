@@ -55,6 +55,16 @@ type cancelingRuntime struct {
 	cancel context.CancelFunc
 }
 
+type outcomeRuntime struct {
+	fakeRuntime
+	outcome StartOutcome
+}
+
+func (f *outcomeRuntime) StartWithOutcome(_ context.Context, _ *lab.Lab, ref Ref) (StartOutcome, error) {
+	f.started = append(f.started, Key(ref))
+	return f.outcome, nil
+}
+
 func (f *cancelingRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
 	f.cancel()
 	return map[string]string{
@@ -178,6 +188,21 @@ func TestReconcilerCallsStartForAlreadyRunningDesiredWorkload(t *testing.T) {
 	}
 	if len(result.Actions) != 0 {
 		t.Fatalf("actions = %#v, want no visible action for already running workload", result.Actions)
+	}
+}
+
+func TestReconcilerReportsRuntimeStartOutcome(t *testing.T) {
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", DesiredState: lab.DesiredStateRunning, MemoryMB: 512, CPUs: 1}}}
+	runtime := &outcomeRuntime{
+		fakeRuntime: fakeRuntime{states: map[string]string{Key(Ref{Type: TypeVM, ID: "vm1"}): "running"}},
+		outcome:     StartOutcome{Action: "restarted vm:vm1 for configuration change"},
+	}
+	result := (&Reconciler{Runtime: runtime}).Step(context.Background(), l)
+	if len(result.Errors) != 0 {
+		t.Fatalf("errors = %v", result.Errors)
+	}
+	if len(result.Actions) != 1 || result.Actions[0] != runtime.outcome.Action {
+		t.Fatalf("actions = %#v", result.Actions)
 	}
 }
 

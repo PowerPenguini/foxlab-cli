@@ -71,11 +71,20 @@ func (r *Reconciler) reconcileRef(ctx context.Context, l *lab.Lab, ref Ref, desi
 			result.Errors = append(result.Errors, err)
 			return
 		}
-		if err := r.Runtime.Start(ctx, l, ref); err != nil {
+		outcome := StartOutcome{}
+		var err error
+		if outcomeRuntime, ok := r.Runtime.(StartOutcomeRuntime); ok {
+			outcome, err = outcomeRuntime.StartWithOutcome(ctx, l, ref)
+		} else {
+			err = r.Runtime.Start(ctx, l, ref)
+		}
+		if err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("start %s: %w", Key(ref), err))
 			return
 		}
-		if actual != "running" {
+		if outcome.Action != "" {
+			result.Actions = append(result.Actions, outcome.Action)
+		} else if actual != "running" {
 			result.Actions = append(result.Actions, "started "+Key(ref))
 		}
 		result.States[Key(ref)] = "running"

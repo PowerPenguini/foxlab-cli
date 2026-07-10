@@ -5,12 +5,56 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	libvirt "github.com/libvirt/libvirt-go"
 )
+
+func TestWriteAtomicVMHostFileReplacesDestinationAfterSuccess(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	if err := os.WriteFile(dest, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicVMHostFile(dest, 0o640, func(file *os.File) error {
+		_, err := file.WriteString("new")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new" {
+		t.Fatalf("destination = %q", data)
+	}
+}
+
+func TestWriteAtomicVMHostFilePreservesDestinationOnFailure(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	if err := os.WriteFile(dest, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := writeAtomicVMHostFile(dest, 0o640, func(file *os.File) error {
+		_, _ = file.WriteString("partial")
+		return errors.New("guest read failed")
+	})
+	if err == nil {
+		t.Fatal("expected guest read failure")
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old" {
+		t.Fatalf("destination = %q", data)
+	}
+}
 
 type fakeQemuAgent struct {
 	writes bytes.Buffer

@@ -481,19 +481,37 @@ func (a *App) diskDetach(id string, args map[string]string) {
 }
 
 func (a *App) diskMerge(id string) {
-	if a.shouldRefreshRuntimeAfterMutation() {
-		a.refreshWorkloadStates()
+	service := a.ensureService()
+	service.StatesConfirmed = false
+	if a.diskAttached(id) && !a.refreshDiskOperationStates() {
+		return
 	}
-	a.State.Message = a.ensureService().DiskMerge(id)
+	a.State.Message = service.DiskMerge(id)
+	service.StatesConfirmed = false
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskResize(id string, args map[string]string) {
-	if a.shouldRefreshRuntimeAfterMutation() {
-		a.refreshWorkloadStates()
+	service := a.ensureService()
+	service.StatesConfirmed = false
+	if a.diskAttached(id) && !a.refreshDiskOperationStates() {
+		return
 	}
-	a.State.Message = a.ensureService().DiskResize(id, args)
+	a.State.Message = service.DiskResize(id, args)
+	service.StatesConfirmed = false
 	a.syncAfterServiceMutation()
+}
+
+func (a *App) diskAttached(id string) bool {
+	if a.Lab == nil {
+		return false
+	}
+	for _, disk := range a.Lab.Disks {
+		if disk.ID == id {
+			return disk.AttachedType != "" && disk.AttachedTo != ""
+		}
+	}
+	return false
 }
 
 func (a *App) diskInfo(id string) {

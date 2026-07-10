@@ -95,7 +95,7 @@ func (a *App) executeDiskCommand(fields []string) {
 		a.diskMerge(fields[2])
 	case "resize":
 		if len(fields) < 4 {
-			a.State.Message = "usage: disk resize <id> size=N"
+			a.State.Message = "usage: disk resize <id> size=N [force=true]"
 			return
 		}
 		args, err := parseArgs(fields[3:])

@@ -297,6 +297,7 @@ func (a *App) statusRefreshInterval() time.Duration {
 type statusUpdate struct {
 	lab                 *lab.Lab
 	states              map[string]string
+	statesConfirmed     bool
 	vncPorts            map[string]int
 	message             string
 	clearStatusMessage  bool
@@ -332,7 +333,7 @@ func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdat
 			sendStatusUpdate(ctx, updates, update)
 			return
 		}
-		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states), clearStatusMessage: true}
+		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states), statesConfirmed: true, clearStatusMessage: true}
 		if ports, err := runtimeVNCPorts(statusCtx, runtime, snapshot); err == nil {
 			update.vncPorts = cloneRuntimePortMap(ports)
 		} else {
@@ -372,6 +373,7 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 				a.WorkloadStates = cloneRuntimeStateMap(update.states)
 				if a.Service != nil {
 					a.Service.States = a.WorkloadStates
+					a.Service.StatesConfirmed = update.statesConfirmed
 				}
 				a.clearPendingStartsFromStates(a.WorkloadStates, update.message != "")
 				a.applyWorkloadStates()
@@ -537,7 +539,8 @@ func (a *App) ensureAppliedAfterDesiredState(message string) {
 }
 
 func (a *App) refreshWorkloadStates() bool {
-	a.ensureService()
+	service := a.ensureService()
+	service.StatesConfirmed = false
 	if a.Lab == nil {
 		return false
 	}
@@ -563,11 +566,40 @@ func (a *App) refreshWorkloadStates() bool {
 	}
 	a.WorkloadStates = cloneRuntimeStateMap(states)
 	a.Service.States = a.WorkloadStates
+	a.Service.StatesConfirmed = true
 	if portErr := a.refreshVNCPortsWithRuntime(ctx, runtime); portErr != nil {
 		a.State.Message = "vnc status failed: " + portErr.Error()
 	} else if statusRefreshMessage(a.State.Message) {
 		a.State.Message = ""
 	}
+	a.applyWorkloadStates()
+	return true
+}
+
+func (a *App) refreshDiskOperationStates() bool {
+	service := a.ensureService()
+	service.StatesConfirmed = false
+	if a.Lab == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
+	defer cancel()
+	runtime, closeRuntime, err := a.runtime()
+	if err != nil {
+		a.State.Message = "runtime connection failed: " + err.Error()
+		return false
+	}
+	defer closeRuntime()
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
+	states, err := runtime.States(ctx, a.Lab)
+	if err != nil {
+		a.State.Message = "runtime status failed: " + err.Error()
+		return false
+	}
+	a.WorkloadStates = cloneRuntimeStateMap(states)
+	service.States = a.WorkloadStates
+	service.StatesConfirmed = true
 	a.applyWorkloadStates()
 	return true
 }
@@ -606,12 +638,15 @@ func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.S
 	update := statusUpdate{
 		lab:                 l,
 		states:              cloneRuntimeStateMap(snapshot.States),
+		statesConfirmed:     len(snapshot.Errors) == 0,
 		vncPorts:            cloneRuntimePortMap(snapshot.VNCPorts),
 		applyStatus:         DaemonStatus{Active: true, LabPath: snapshot.LabPath},
 		applyStatusReceived: true,
 	}
 	if len(snapshot.Errors) > 0 {
 		update.message = "foxlabd status: " + strings.Join(displayDaemonMessages(l, snapshot.Errors), "; ")
+	} else if len(snapshot.Actions) > 0 {
+		update.message = "foxlabd: " + strings.Join(displayDaemonMessages(l, snapshot.Actions), "; ")
 	} else {
 		update.clearStatusMessage = true
 	}
@@ -621,11 +656,14 @@ func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.S
 func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
 	a.WorkloadStates = cloneRuntimeStateMap(snapshot.States)
 	a.Service.States = a.WorkloadStates
+	a.Service.StatesConfirmed = len(snapshot.Errors) == 0
 	a.VNCPorts = cloneRuntimePortMap(snapshot.VNCPorts)
 	a.clearPendingStartsFromStates(a.WorkloadStates, len(snapshot.Errors) > 0)
 	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
 	if len(snapshot.Errors) > 0 {
 		a.State.Message = "foxlabd status: " + strings.Join(displayDaemonMessages(a.Lab, snapshot.Errors), "; ")
+	} else if len(snapshot.Actions) > 0 {
+		a.State.Message = "foxlabd: " + strings.Join(displayDaemonMessages(a.Lab, snapshot.Actions), "; ")
 	} else if statusRefreshMessage(a.State.Message) {
 		a.State.Message = ""
 	}
@@ -636,6 +674,7 @@ func statusRefreshMessage(message string) bool {
 	message = strings.TrimSpace(message)
 	for _, prefix := range []string{
 		"foxlabd status:",
+		"foxlabd:",
 		"runtime connection failed:",
 		"runtime status failed:",
 		"vnc status failed:",

@@ -99,16 +99,52 @@ func (s *Service) attachedDiskIndex(targetType, targetID, diskID string) int {
 	return -1
 }
 
-func (s *Service) diskAttachedRunning(disk lab.Disk) bool {
+func (s *Service) requireDiskOffline(disk lab.Disk) error {
 	if disk.AttachedType == "" || disk.AttachedTo == "" {
-		return false
+		return nil
+	}
+	desired := ""
+	switch disk.AttachedType {
+	case workload.TypeVM:
+		for _, vm := range s.Lab.VMs {
+			if vm.ID == disk.AttachedTo {
+				desired = lab.DesiredState(vm.DesiredState)
+				break
+			}
+		}
+	case workload.TypeContainer:
+		for _, ct := range s.Lab.Containers {
+			if ct.ID == disk.AttachedTo {
+				desired = lab.DesiredState(ct.DesiredState)
+				break
+			}
+		}
+	}
+	if desired != lab.DesiredStateStopped {
+		return fmt.Errorf("disk operation needs desired workload state stopped: %s", disk.ID)
+	}
+	if !s.StatesConfirmed {
+		return fmt.Errorf("disk operation needs confirmed stopped runtime state: %s", disk.ID)
 	}
 	key := workload.Key(workload.Ref{Type: disk.AttachedType, ID: disk.AttachedTo})
-	state := strings.ToLower(s.States[key])
+	state := strings.ToLower(strings.TrimSpace(s.States[key]))
 	if state == "" {
 		name := s.nodeDisplayName(disk.AttachedType, disk.AttachedTo)
 		key = workload.Key(workload.Ref{Type: disk.AttachedType, ID: name})
-		state = strings.ToLower(s.States[key])
+		state = strings.ToLower(strings.TrimSpace(s.States[key]))
 	}
-	return state == "running"
+	safe := false
+	switch disk.AttachedType {
+	case workload.TypeVM:
+		safe = state == "missing" || state == "shutoff" || state == "stopped"
+	case workload.TypeContainer:
+		safe = state == "missing" || state == "created" || state == "stopped"
+	}
+	if !safe {
+		if state == "" {
+			state = "unknown"
+		}
+		return fmt.Errorf("disk operation needs stopped workload; %s is %s", s.workloadDisplayRef(disk.AttachedType, disk.AttachedTo), state)
+	}
+	return nil
 }

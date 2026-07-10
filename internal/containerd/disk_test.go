@@ -124,6 +124,29 @@ func TestCtrGlobalArgsIncludesCustomAddressAndNamespace(t *testing.T) {
 	}
 }
 
+func TestContainerDiskMountActiveUsesManagedMountPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SUDO_USER", "")
+	l := &lab.Lab{ID: "demo"}
+	ct := lab.Container{ID: "web", Disk: "/tmp/web.qcow2"}
+	mountPath, err := containerDiskMountPath(l, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHooks := containerDiskHooks
+	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+		if path != mountPath {
+			t.Fatalf("mount path = %q, want %q", path, mountPath)
+		}
+		return true, "/dev/nbd0", nil
+	}
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	mounted, err := containerDiskMountActive(l, ct)
+	if err != nil || !mounted {
+		t.Fatalf("containerDiskMountActive = %t, %v", mounted, err)
+	}
+}
+
 func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

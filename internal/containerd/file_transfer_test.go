@@ -2,11 +2,36 @@ package containerd
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestWriteAtomicHostFilePreservesDestinationOnFailure(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := writeAtomicHostFile(dest, 0o644, func(file *os.File) error {
+		_, _ = file.WriteString("partial")
+		return errors.New("transfer failed")
+	})
+	if err == nil {
+		t.Fatal("expected transfer failure")
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "original" {
+		t.Fatalf("destination = %q", data)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(dest), ".dest.txt.tmp-*")); len(matches) != 0 {
+		t.Fatalf("temporary files remain: %#v", matches)
+	}
+}
 
 func TestSplitGuestFilePathRequiresAbsoluteFile(t *testing.T) {
 	dir, name, err := splitGuestFilePath("/tmp/file")

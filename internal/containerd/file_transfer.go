@@ -34,9 +34,6 @@ func (r *Runtime) PutFile(ctx context.Context, l *lab.Lab, ref workload.Ref, hos
 	if err != nil {
 		return err
 	}
-	if ct.Disk != "" {
-		return putFileIntoMountedContainerRoot(l, ct, hostPath, guestPath)
-	}
 	file, err := os.Open(hostPath)
 	if err != nil {
 		return err
@@ -69,9 +66,6 @@ func (r *Runtime) GetFile(ctx context.Context, l *lab.Lab, ref workload.Ref, gue
 	if err != nil {
 		return err
 	}
-	if ct.Disk != "" {
-		return getFileFromMountedContainerRoot(l, ct, guestPath, hostPath)
-	}
 	dest := hostPath
 	if info, err := os.Stat(hostPath); err == nil && info.IsDir() {
 		dest = filepath.Join(hostPath, filepath.Base(name))
@@ -79,105 +73,48 @@ func (r *Runtime) GetFile(ctx context.Context, l *lab.Lab, ref workload.Ref, gue
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	return writeAtomicHostFile(dest, 0o644, func(file *os.File) error {
+		var stderr bytes.Buffer
+		err := r.execContainerTransfer(ctx, l, ct, []string{"/bin/sh", "-c", `exec cat "$1/$2"`, "foxlab-cp", dir, name}, strings.NewReader(""), file, &stderr)
+		if err != nil {
+			return appendTransferStderr("get container file", err, stderr.String())
+		}
+		return nil
+	})
+}
+
+func writeAtomicHostFile(dest string, mode os.FileMode, write func(*os.File) error) (retErr error) {
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	var stderr bytes.Buffer
-	err = r.execContainerTransfer(ctx, l, ct, []string{"/bin/sh", "-c", `exec cat "$1/$2"`, "foxlab-cp", dir, name}, strings.NewReader(""), file, &stderr)
-	if err != nil {
-		return appendTransferStderr("get container file", err, stderr.String())
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if err := write(tmp); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return err
 	}
 	return nil
-}
-
-func putFileIntoMountedContainerRoot(l *lab.Lab, ct lab.Container, hostPath, guestPath string) error {
-	dest, err := mountedContainerGuestPath(l, ct, guestPath)
-	if err != nil {
-		return err
-	}
-	src, err := os.Open(hostPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	info, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("host path is not a regular file: %s", hostPath)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-func getFileFromMountedContainerRoot(l *lab.Lab, ct lab.Container, guestPath, hostPath string) error {
-	srcPath, err := mountedContainerGuestPath(l, ct, guestPath)
-	if err != nil {
-		return err
-	}
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	info, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("guest path is not a regular file: %s", guestPath)
-	}
-	dest := hostPath
-	if hostInfo, err := os.Stat(hostPath); err == nil && hostInfo.IsDir() {
-		dest = filepath.Join(hostPath, filepath.Base(guestPath))
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-func mountedContainerGuestPath(l *lab.Lab, ct lab.Container, guestPath string) (string, error) {
-	if _, _, err := splitGuestFilePath(guestPath); err != nil {
-		return "", err
-	}
-	mountPath, err := containerDiskMountPath(l, ct)
-	if err != nil {
-		return "", err
-	}
-	root := filepath.Join(mountPath, "merged")
-	if info, err := os.Stat(root); err != nil {
-		return "", fmt.Errorf("container rootfs is not mounted: %w", err)
-	} else if !info.IsDir() {
-		return "", fmt.Errorf("container rootfs is not a directory: %s", root)
-	}
-	rel := strings.TrimPrefix(path.Clean(guestPath), "/")
-	dest := filepath.Clean(filepath.Join(root, rel))
-	if dest != root && !strings.HasPrefix(dest, root+string(os.PathSeparator)) {
-		return "", fmt.Errorf("guest path escapes container rootfs: %s", guestPath)
-	}
-	return dest, nil
 }
 
 func (r *Runtime) execContainerTransfer(ctx context.Context, l *lab.Lab, ct lab.Container, args []string, in io.Reader, out, errOut io.Writer) error {

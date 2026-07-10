@@ -74,23 +74,48 @@ func (r *LibvirtRuntime) GetFile(ctx context.Context, l *lab.Lab, ref workload.R
 	if info, err := os.Stat(hostPath); err == nil && info.IsDir() {
 		dest = filepath.Join(hostPath, filepath.Base(name))
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 	dom, err := r.runningDomain(ctx, l.ManagedDomainName(vm), vm.ID)
 	if err != nil {
 		return err
 	}
 	defer dom.Free()
-	if err := qemuAgentGetFile(ctx, dom, guestPath, file); err != nil {
-		return fmt.Errorf("get vm file %q: %w", vm.ID, err)
+	return writeAtomicVMHostFile(dest, 0o644, func(file *os.File) error {
+		if err := qemuAgentGetFile(ctx, dom, guestPath, file); err != nil {
+			return fmt.Errorf("get vm file %q: %w", vm.ID, err)
+		}
+		return nil
+	})
+}
+
+func writeAtomicVMHostFile(dest string, mode os.FileMode, write func(*os.File) error) (retErr error) {
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
-	return nil
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if err := write(tmp); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, dest)
 }
 
 func (r *LibvirtRuntime) runningDomain(ctx context.Context, name, id string) (*libvirt.Domain, error) {

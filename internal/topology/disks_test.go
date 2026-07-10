@@ -837,8 +837,9 @@ func TestDiskMergeRefusesRunningWorkload(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 	service.States = map[string]string{workload.Key(workload.Ref{Type: workload.TypeVM, ID: "vm1"}): "running"}
+	service.StatesConfirmed = true
 
-	if got := service.DiskMerge("data-layer"); got != "disk merge needs stopped workload: data-layer" {
+	if got := service.DiskMerge("data-layer"); got != "disk operation needs stopped workload; vm:vm1 is running" {
 		t.Fatalf("DiskMerge running = %q", got)
 	}
 }
@@ -874,6 +875,7 @@ func TestDiskMergeRemovesAttachedLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(loaded, path)
+	confirmAttachedWorkloadsStopped(service)
 
 	if got := service.DiskMerge("data-layer"); got != "merged disk layer:data-layer" {
 		t.Fatalf("DiskMerge = %q", got)
@@ -919,6 +921,7 @@ func TestDiskMergeValidatesFinalLabBeforeCommit(t *testing.T) {
 			{ID: "data-layer", Path: layer, Format: "qcow2", Kind: "layer", Base: "data", AttachedType: "vm", AttachedTo: "vm1"},
 		},
 	}, path)
+	confirmAttachedWorkloadsStopped(service)
 
 	if got := service.DiskMerge("data-layer"); !strings.Contains(got, "disk merge failed:") {
 		t.Fatalf("DiskMerge = %q, want validation failure", got)
@@ -964,6 +967,7 @@ func TestDiskMergeKeepsLayerAndRestoresLabOnSaveFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(loaded, t.TempDir())
+	confirmAttachedWorkloadsStopped(service)
 
 	if got := service.DiskMerge("data-layer"); !strings.Contains(got, "disk merge failed:") {
 		t.Fatalf("DiskMerge = %q, want save failure", got)
@@ -1034,7 +1038,7 @@ func TestDiskResizeGrowsAndShrinks(t *testing.T) {
 	if got := service.DiskResize("data", map[string]string{"size": "12"}); got != "resized disk:data" {
 		t.Fatalf("grow DiskResize = %q", got)
 	}
-	if got := service.DiskResize("data", map[string]string{"size": "8"}); got != "resized disk:data" {
+	if got := service.DiskResize("data", map[string]string{"size": "8", "force": "true"}); got != "resized disk:data" {
 		t.Fatalf("shrink DiskResize = %q", got)
 	}
 	want := []string{
@@ -1050,6 +1054,63 @@ func TestDiskResizeGrowsAndShrinks(t *testing.T) {
 	}
 	if reloaded.Disks[0].SizeGB != 8 {
 		t.Fatalf("sizeGB = %d, want 8", reloaded.Disks[0].SizeGB)
+	}
+}
+
+func TestDiskResizeRequiresForceToShrink(t *testing.T) {
+	restore := stubDiskCommands(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Path: "data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}}}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(loaded, path)
+	if got := service.DiskResize("data", map[string]string{"size": "8"}); !strings.Contains(got, "force=true") {
+		t.Fatalf("unforced shrink = %q", got)
+	}
+	if got := service.DiskResize("data", map[string]string{"size": "8", "force": "maybe"}); got != "invalid disk resize force: maybe" {
+		t.Fatalf("invalid force = %q", got)
+	}
+}
+
+func TestDiskCreatePreservesExistingManagedPath(t *testing.T) {
+	restore := stubDiskCommands(t)
+	defer restore()
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{ID: "demo"}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diskPath, err := loaded.DiskStoragePath("data", "qcow2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(diskPath, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(loaded, path)
+	if got := service.DiskCreate("data", nil); !strings.Contains(got, "disk path already exists") {
+		t.Fatalf("DiskCreate = %q", got)
+	}
+	data, err := os.ReadFile(diskPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "keep" {
+		t.Fatalf("existing disk data = %q", data)
 	}
 }
 
@@ -1072,18 +1133,57 @@ func TestDiskResizeRejectsInvalidAndRunning(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 	service.States = map[string]string{workload.Key(workload.Ref{Type: "vm", ID: "vm1"}): "running"}
+	service.StatesConfirmed = true
 
-	if got := service.DiskResize("data", map[string]string{}); got != "usage: disk resize <id> size=N" {
+	if got := service.DiskResize("data", map[string]string{}); got != "usage: disk resize <id> size=N [force=true]" {
 		t.Fatalf("missing size = %q", got)
 	}
 	if got := service.DiskResize("data", map[string]string{"siz": "12"}); got != "unsupported disk resize argument: siz" {
 		t.Fatalf("unsupported arg = %q", got)
 	}
-	if got := service.DiskResize("data", map[string]string{"size": "abc"}); got != "usage: disk resize <id> size=N" {
+	if got := service.DiskResize("data", map[string]string{"size": "abc"}); got != "usage: disk resize <id> size=N [force=true]" {
 		t.Fatalf("bad size = %q", got)
 	}
-	if got := service.DiskResize("data", map[string]string{"size": "12"}); got != "disk resize needs stopped workload: data" {
+	if got := service.DiskResize("data", map[string]string{"size": "12"}); got != "disk operation needs stopped workload; vm:vm1 is running" {
 		t.Fatalf("running resize = %q", got)
+	}
+}
+
+func TestDiskOfflineGuardFailsClosed(t *testing.T) {
+	disk := lab.Disk{ID: "data", AttachedType: workload.TypeVM, AttachedTo: "vm1"}
+	base := &lab.Lab{
+		ID:    "demo",
+		VMs:   []lab.VM{{ID: "vm1", DesiredState: lab.DesiredStateStopped, MemoryMB: 512, CPUs: 1}},
+		Disks: []lab.Disk{disk},
+	}
+	tests := []struct {
+		name      string
+		desired   string
+		state     string
+		confirmed bool
+		wantErr   bool
+	}{
+		{name: "unconfirmed", state: "shutoff", wantErr: true},
+		{name: "missing state", confirmed: true, wantErr: true},
+		{name: "paused", state: "paused", confirmed: true, wantErr: true},
+		{name: "unknown", state: "unknown", confirmed: true, wantErr: true},
+		{name: "desired running", desired: lab.DesiredStateRunning, state: "shutoff", confirmed: true, wantErr: true},
+		{name: "confirmed shutoff", state: "shutoff", confirmed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loaded := lab.Clone(base)
+			if tt.desired != "" {
+				loaded.VMs[0].DesiredState = tt.desired
+			}
+			service := NewService(loaded, "demo.lab")
+			service.StatesConfirmed = tt.confirmed
+			service.States = map[string]string{workload.Key(workload.Ref{Type: workload.TypeVM, ID: "vm1"}): tt.state}
+			err := service.requireDiskOffline(disk)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("requireDiskOffline error = %v, wantErr=%t", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -1106,12 +1206,8 @@ func TestDiskResizeRestoresSizeOnSaveFailure(t *testing.T) {
 	if got := service.DiskResize("data", map[string]string{"size": "12"}); !strings.Contains(got, "disk resize failed:") {
 		t.Fatalf("DiskResize = %q, want save failure", got)
 	}
-	want := []string{
-		"qemu-img resize " + diskPath + " 12G",
-		"qemu-img resize --shrink " + diskPath + " 10G",
-	}
-	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("resize rollback calls = %#v, want %#v", calls, want)
+	if len(calls) != 0 {
+		t.Fatalf("resize commands = %#v, want none before metadata persists", calls)
 	}
 	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].SizeGB != 10 {
 		t.Fatalf("failed resize mutated disks: %#v", service.Lab.Disks)
@@ -1153,6 +1249,7 @@ func TestDiskLayerCreateCreatesUnattachedLayer(t *testing.T) {
 	calls := []string{}
 	restore := stubDiskCommandsWithCalls(t, &calls)
 	defer restore()
+	t.Setenv("HOME", t.TempDir())
 
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	basePath := filepath.Join(t.TempDir(), "base.qcow2")
@@ -1252,6 +1349,23 @@ func TestDiskRenameRejectsInvalidAndDuplicateID(t *testing.T) {
 func stubDiskCommands(t *testing.T) func() {
 	t.Helper()
 	return stubDiskCommandsWithCalls(t, nil)
+}
+
+func confirmAttachedWorkloadsStopped(service *Service) {
+	service.StatesConfirmed = true
+	service.States = map[string]string{}
+	for _, disk := range service.Lab.Disks {
+		if disk.AttachedType == "" || disk.AttachedTo == "" {
+			continue
+		}
+		state := "stopped"
+		if disk.AttachedType == workload.TypeVM {
+			state = "shutoff"
+		} else if disk.AttachedType == workload.TypeContainer {
+			state = "created"
+		}
+		service.States[workload.Key(workload.Ref{Type: disk.AttachedType, ID: disk.AttachedTo})] = state
+	}
 }
 
 func stubDiskCommandsWithCalls(t *testing.T, calls *[]string) func() {

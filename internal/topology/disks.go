@@ -59,7 +59,11 @@ func (s *Service) DiskCreate(id string, args map[string]string) string {
 	if err := ensureDiskDirectoryWritable(filepath.Dir(path)); err != nil {
 		return "disk create failed: " + err.Error()
 	}
+	if err := reserveDiskPath(path); err != nil {
+		return "disk create failed: " + err.Error()
+	}
 	if err := runDiskCommand("qemu-img", "create", "-f", format, path, strconv.Itoa(sizeGB)+"G"); err != nil {
+		_ = os.Remove(path)
 		return "disk create failed: " + err.Error()
 	}
 	snapshot := lab.Clone(s.Lab)
@@ -162,9 +166,13 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
 		return "disk layer create failed: " + err.Error()
 	}
+	if err := reserveDiskPath(layerPath); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
 	basePath := s.Lab.ResolvePath(base.Path)
 	baseFormat := diskFormat(base)
 	if err := runDiskCommand("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
+		_ = os.Remove(layerPath)
 		return "disk layer create failed: " + err.Error()
 	}
 	snapshot := lab.Clone(s.Lab)
@@ -220,9 +228,13 @@ func (s *Service) DiskLayerCreate(baseID, layerID string) string {
 	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
 		return "disk layer create failed: " + err.Error()
 	}
+	if err := reserveDiskPath(layerPath); err != nil {
+		return "disk layer create failed: " + err.Error()
+	}
 	basePath := s.Lab.ResolvePath(base.Path)
 	baseFormat := diskFormat(base)
 	if err := runDiskCommand("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
+		_ = os.Remove(layerPath)
 		return "disk layer create failed: " + err.Error()
 	}
 	snapshot := lab.Clone(s.Lab)
@@ -298,8 +310,8 @@ func (s *Service) DiskMerge(id string) string {
 	if diskKind(disk) != "layer" {
 		return "disk is not a layer: " + id
 	}
-	if s.diskAttachedRunning(disk) {
-		return "disk merge needs stopped workload: " + id
+	if err := s.requireDiskOffline(disk); err != nil {
+		return err.Error()
 	}
 	if _, ok := s.diskByID(disk.Base); !ok {
 		return "disk base not found: " + disk.Base
@@ -347,37 +359,46 @@ func (s *Service) DiskResize(id string, args map[string]string) string {
 	}
 	sizeGB, present, ok := positiveIntField(args, "size")
 	if !present || !ok {
-		return "usage: disk resize <id> size=N"
+		return "usage: disk resize <id> size=N [force=true]"
 	}
-	if s.diskAttachedRunning(disk) {
-		return "disk resize needs stopped workload: " + id
+	if err := s.requireDiskOffline(disk); err != nil {
+		return err.Error()
 	}
 	if err := s.requireSavePath(); err != nil {
 		return "disk resize failed: " + err.Error()
 	}
 	oldSizeGB := disk.SizeGB
+	force := false
+	if value, present := args["force"]; present {
+		var valid bool
+		force, valid = parseBool(value)
+		if !valid {
+			return "invalid disk resize force: " + value
+		}
+	}
+	shrinking := oldSizeGB > 0 && sizeGB < oldSizeGB
+	if shrinking && !force {
+		return "disk shrink is destructive; shrink the guest filesystem first, then rerun with force=true"
+	}
 	resizeArgs := []string{"resize"}
-	if oldSizeGB > 0 && sizeGB < oldSizeGB {
+	if shrinking {
 		resizeArgs = append(resizeArgs, "--shrink")
 	}
 	diskPath := s.Lab.ResolvePath(disk.Path)
 	resizeArgs = append(resizeArgs, diskPath, strconv.Itoa(sizeGB)+"G")
-	if err := runDiskCommand("qemu-img", resizeArgs...); err != nil {
-		return "disk resize failed: " + err.Error()
-	}
 	snapshot := lab.Clone(s.Lab)
 	s.Lab.Disks[index].SizeGB = sizeGB
 	if err := s.SaveAndRefresh(); err != nil {
 		s.Lab = snapshot
-		restoreArgs := []string{"resize"}
-		if oldSizeGB > 0 && oldSizeGB < sizeGB {
-			restoreArgs = append(restoreArgs, "--shrink")
-		}
-		if oldSizeGB > 0 {
-			restoreArgs = append(restoreArgs, diskPath, strconv.Itoa(oldSizeGB)+"G")
-			_ = runDiskCommand("qemu-img", restoreArgs...)
-		}
 		return "disk resize failed: " + err.Error()
+	}
+	if err := runDiskCommand("qemu-img", resizeArgs...); err != nil {
+		commandErr := err
+		s.Lab = snapshot
+		if rollbackErr := s.SaveAndRefresh(); rollbackErr != nil {
+			return "disk resize failed: " + commandErr.Error() + "; metadata rollback failed: " + rollbackErr.Error()
+		}
+		return "disk resize failed: " + commandErr.Error()
 	}
 	return "resized disk:" + id
 }

@@ -40,6 +40,14 @@ type FileTransferer interface {
 	GetFile(context.Context, *lab.Lab, Ref, string, string) error
 }
 
+type StartOutcome struct {
+	Action string
+}
+
+type StartOutcomeRuntime interface {
+	StartWithOutcome(context.Context, *lab.Lab, Ref) (StartOutcome, error)
+}
+
 func Key(ref Ref) string {
 	return ref.Type + ":" + ref.ID
 }

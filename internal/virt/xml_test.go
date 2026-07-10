@@ -47,6 +47,7 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		`<console type="pty">`,
 		`<target type="serial" port="0"/>`,
 		`<target type="virtio" name="org.qemu.guest_agent.0"/>`,
+		`configSHA256="`,
 	} {
 		if !strings.Contains(xmlText, want) {
 			t.Fatalf("domain XML missing %q:\n%s", want, xmlText)
@@ -54,6 +55,67 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 	if strings.Contains(xmlText, `<source network="`+l.ManagedNetworkName(l.Switches[0])+`"/>`) {
 		t.Fatalf("domain XML still uses libvirt network for switch NIC:\n%s", xmlText)
+	}
+}
+
+func TestDomainConfigMatchesFingerprintAndLegacyXML(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "vm.qcow2")
+	if err := writeEmptyFile(diskPath); err != nil {
+		t.Fatal(err)
+	}
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 1024, CPUs: 2, Disk: diskPath, VNC: true}}}
+	l.Normalize()
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err := domainConfigMatches(l, l.VMs[0], xmlText)
+	if err != nil || !matched {
+		t.Fatalf("fingerprinted match = %t, err = %v", matched, err)
+	}
+	externallyChangedXML := strings.Replace(xmlText, "<vcpu>2</vcpu>", "<vcpu>3</vcpu>", 1)
+	matched, err = domainConfigMatches(l, l.VMs[0], externallyChangedXML)
+	if err != nil || matched {
+		t.Fatalf("externally changed live XML match = %t, err = %v", matched, err)
+	}
+	changed := l.VMs[0]
+	changed.CPUs++
+	matched, err = domainConfigMatches(l, changed, xmlText)
+	if err != nil || matched {
+		t.Fatalf("fingerprinted drift match = %t, err = %v", matched, err)
+	}
+	_, _, hash, ok := managedDomainMetadata(xmlText)
+	if !ok || hash == "" {
+		t.Fatalf("managed metadata missing hash: ok=%t hash=%q", ok, hash)
+	}
+	legacyXML := strings.Replace(xmlText, ` configSHA256="`+hash+`"`, "", 1)
+	matched, err = domainConfigMatches(l, l.VMs[0], legacyXML)
+	if err != nil || !matched {
+		t.Fatalf("legacy match = %t, err = %v", matched, err)
+	}
+	matched, err = domainConfigMatches(l, changed, legacyXML)
+	if err != nil || matched {
+		t.Fatalf("legacy drift match = %t, err = %v", matched, err)
+	}
+}
+
+func TestOrphanManagedDomainID(t *testing.T) {
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 512, CPUs: 1}}}
+	l.Normalize()
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := map[string]bool{l.VMs[0].ID: true}
+	if id, orphan := orphanManagedDomainID(l, desired, xmlText); orphan || id != l.VMs[0].ID {
+		t.Fatalf("desired domain orphan = %t id=%q", orphan, id)
+	}
+	if id, orphan := orphanManagedDomainID(l, map[string]bool{}, xmlText); !orphan || id != l.VMs[0].ID {
+		t.Fatalf("absent managed domain orphan = %t id=%q", orphan, id)
+	}
+	unmanaged := strings.Replace(xmlText, `kind="domain"`, `kind="external"`, 1)
+	if _, orphan := orphanManagedDomainID(l, map[string]bool{}, unmanaged); orphan {
+		t.Fatal("unmanaged domain classified as orphan")
 	}
 }
 

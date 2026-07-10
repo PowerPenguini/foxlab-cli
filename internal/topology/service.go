@@ -8,9 +8,10 @@ import (
 )
 
 type Service struct {
-	Lab    *lab.Lab
-	Path   string
-	States map[string]string
+	Lab             *lab.Lab
+	Path            string
+	States          map[string]string
+	StatesConfirmed bool
 }
 
 func NewService(loadedLab *lab.Lab, path string) *Service {

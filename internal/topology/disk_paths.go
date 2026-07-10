@@ -51,6 +51,21 @@ func ensureDiskDirectoryWritable(dir string) error {
 	return nil
 }
 
+func reserveDiskPath(path string) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("disk path already exists: %s", path)
+		}
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
 func (s *Service) nextLayerID(baseID string) string {
 	base := baseID + "-layer"
 	if _, exists := s.diskByID(base); !exists {

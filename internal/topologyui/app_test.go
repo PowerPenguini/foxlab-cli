@@ -1008,6 +1008,21 @@ func TestRefreshWorkloadStatesQueriesAppliedDaemonSocketPath(t *testing.T) {
 	}
 }
 
+func TestDaemonRestartActionIsShownWithDisplayName(t *testing.T) {
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm-id", Name: "router", MemoryMB: 512, CPUs: 1}}}
+	app := App{Lab: l}
+	update := app.statusUpdateFromDaemonSnapshot(l, daemonstatus.Snapshot{
+		States:  map[string]string{NodeKey(NodeVM, "vm-id"): "running"},
+		Actions: []string{"restarted vm:vm-id for configuration change"},
+	})
+	if update.message != "foxlabd: restarted vm:router for configuration change" {
+		t.Fatalf("message = %q", update.message)
+	}
+	if !update.statesConfirmed {
+		t.Fatal("successful daemon snapshot did not confirm states")
+	}
+}
+
 func TestRefreshWorkloadStatesFallsBackWhenFoxlabdSnapshotIsForAnotherLab(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
@@ -3209,9 +3224,12 @@ func TestDiskExplorerKeyboardResizeAndInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		Runtime: &fakeVMRuntime{states: map[string]string{
+			NodeKey(NodeVM, loaded.VMs[0].ID): "shutoff",
+		}},
 		State:      ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
@@ -3243,6 +3261,34 @@ func TestDiskExplorerKeyboardResizeAndInfo(t *testing.T) {
 	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
 	if !strings.Contains(out, "disk data") || !strings.Contains(out, "attached: vm:router") {
 		t.Fatalf("disk explorer render missing info panel:\n%s", out)
+	}
+}
+
+func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", DesiredState: lab.DesiredStateStopped, MemoryMB: 512, CPUs: 1, Disk: "data.qcow2"}},
+		Disks: []lab.Disk{{
+			ID: "data", Path: "data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm1",
+		}},
+	}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		Runtime: &fakeVMRuntime{statesErr: errors.New("libvirt unavailable")},
+	}
+	app.diskResize("data", map[string]string{"size": "12"})
+	if app.State.Message != "runtime status failed: libvirt unavailable" {
+		t.Fatalf("message = %q", app.State.Message)
 	}
 }
 
@@ -3286,6 +3332,7 @@ func TestDiskExplorerInfoShowsMetadataWhenQemuFails(t *testing.T) {
 
 func TestDiskExplorerCreatesLayer(t *testing.T) {
 	fakeQemuImg(t)
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:    "demo",
@@ -3382,6 +3429,7 @@ func TestDiskExplorerRenamesBaseDisk(t *testing.T) {
 
 func TestDiskExplorerCreateCancelsActiveRename(t *testing.T) {
 	fakeQemuImg(t)
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:    "demo",
@@ -3479,6 +3527,7 @@ func TestDiskExplorerDeleteCancelsActiveRename(t *testing.T) {
 
 func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
 	fakeQemuImg(t)
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:    "demo",
@@ -5009,8 +5058,8 @@ func TestCommandMissingRequiredIDReportsUsage(t *testing.T) {
 		{"external delete", "usage: uplink delete <id>"},
 		{"ext rm", "usage: uplink delete <id>"},
 		{"disk merge", "usage: disk merge <id>"},
-		{"disk resize", "usage: disk resize <id> size=N"},
-		{"disk resize data", "usage: disk resize <id> size=N"},
+		{"disk resize", "usage: disk resize <id> size=N [force=true]"},
+		{"disk resize data", "usage: disk resize <id> size=N [force=true]"},
 		{"disk info", "usage: disk info <id>"},
 		{"disk rename", "usage: disk rename <id> <new-id>"},
 		{"disk rename data", "usage: disk rename <id> <new-id>"},

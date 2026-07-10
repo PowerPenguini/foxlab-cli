@@ -2,6 +2,7 @@ package virt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -110,10 +111,15 @@ func (r *LibvirtRuntime) VNCPorts(ctx context.Context, l *lab.Lab) (map[string]i
 }
 
 func (r *LibvirtRuntime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
+	_, err := r.StartWithOutcome(ctx, l, ref)
+	return err
+}
+
+func (r *LibvirtRuntime) StartWithOutcome(ctx context.Context, l *lab.Lab, ref workload.Ref) (workload.StartOutcome, error) {
 	if ref.Type != workload.TypeVM {
-		return fmt.Errorf("libvirt cannot start workload type %q", ref.Type)
+		return workload.StartOutcome{}, fmt.Errorf("libvirt cannot start workload type %q", ref.Type)
 	}
-	return r.StartVM(ctx, l, ref.ID)
+	return r.startVM(ctx, l, ref.ID)
 }
 
 func (r *LibvirtRuntime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error {
@@ -131,64 +137,170 @@ func (r *LibvirtRuntime) Destroy(ctx context.Context, l *lab.Lab, ref workload.R
 }
 
 func (r *LibvirtRuntime) StartVM(ctx context.Context, l *lab.Lab, id string) error {
+	_, err := r.startVM(ctx, l, id)
+	return err
+}
+
+func (r *LibvirtRuntime) startVM(ctx context.Context, l *lab.Lab, id string) (workload.StartOutcome, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return workload.StartOutcome{}, err
 	}
 	vm, ok := labVM(l, id)
 	if !ok {
-		return fmt.Errorf("vm not found: %s", id)
+		return workload.StartOutcome{}, fmt.Errorf("vm not found: %s", id)
 	}
 	dom, err := r.conn.LookupDomainByName(l.ManagedDomainName(vm))
 	if err != nil {
 		if isNotFound(err) {
 			if err := r.attachVMNICs(ctx, l, vm); err != nil {
-				return err
+				return workload.StartOutcome{}, err
 			}
 			defined, defineErr := r.defineVM(l, vm)
 			if defineErr != nil {
 				r.detachVMNICs(ctx, l, vm)
-				return defineErr
+				return workload.StartOutcome{}, defineErr
 			}
 			dom = defined
 			defer dom.Free()
 		} else {
-			return err
+			return workload.StartOutcome{}, err
 		}
 	} else {
 		state, _, stateErr := dom.GetState()
-		if stateErr == nil && state == libvirt.DOMAIN_RUNNING {
+		if stateErr != nil {
 			_ = dom.Free()
-			return nil
+			return workload.StartOutcome{}, stateErr
+		}
+		xmlText, xmlErr := dom.GetXMLDesc(0)
+		if xmlErr != nil {
+			_ = dom.Free()
+			return workload.StartOutcome{}, fmt.Errorf("read domain XML %q: %w", id, xmlErr)
+		}
+		matches, matchErr := domainConfigMatches(l, vm, xmlText)
+		if matchErr != nil {
+			_ = dom.Free()
+			return workload.StartOutcome{}, fmt.Errorf("compare domain configuration %q: %w", id, matchErr)
+		}
+		if state == libvirt.DOMAIN_RUNNING && matches {
+			_ = dom.Free()
+			return workload.StartOutcome{}, nil
+		}
+		outcome := workload.StartOutcome{}
+		active, activeErr := dom.IsActive()
+		if activeErr != nil {
+			_ = dom.Free()
+			return workload.StartOutcome{}, activeErr
+		}
+		if active {
+			if err := dom.Destroy(); err != nil && !isNotFound(err) && !isDomainNotRunning(err) {
+				_ = dom.Free()
+				return workload.StartOutcome{}, fmt.Errorf("restart domain %q: %w", id, err)
+			}
+			r.detachVMNICs(ctx, l, vm)
+			if state == libvirt.DOMAIN_RUNNING && !matches {
+				outcome.Action = "restarted " + workload.Key(workload.Ref{Type: workload.TypeVM, ID: id}) + " for configuration change"
+			} else {
+				outcome.Action = "restarted " + workload.Key(workload.Ref{Type: workload.TypeVM, ID: id}) + " from " + domainStateName(state)
+			}
 		}
 		defined, defineErr := r.redefineInactiveVM(l, vm, dom)
 		_ = dom.Free()
 		if defineErr != nil {
-			return defineErr
+			return workload.StartOutcome{}, defineErr
 		}
 		dom = defined
 		defer dom.Free()
 		if err := r.attachVMNICs(ctx, l, vm); err != nil {
-			return err
+			return workload.StartOutcome{}, err
 		}
+		state, _, err = dom.GetState()
+		if err == nil && state == libvirt.DOMAIN_RUNNING {
+			return outcome, nil
+		}
+		if err := dom.Create(); err != nil {
+			r.detachVMNICs(ctx, l, vm)
+			return workload.StartOutcome{}, fmt.Errorf("start domain %q: %w", id, err)
+		}
+		return outcome, nil
 	}
 	state, _, err := dom.GetState()
 	if err == nil && state == libvirt.DOMAIN_RUNNING {
-		return nil
+		return workload.StartOutcome{}, nil
 	}
 	if err := dom.Create(); err != nil {
 		r.detachVMNICs(ctx, l, vm)
-		return fmt.Errorf("start domain %q: %w", id, err)
+		return workload.StartOutcome{}, fmt.Errorf("start domain %q: %w", id, err)
 	}
-	return nil
+	return workload.StartOutcome{}, nil
 }
 
-func (r *LibvirtRuntime) redefineInactiveVM(l *lab.Lab, vm lab.VM, dom *libvirt.Domain) (*libvirt.Domain, error) {
-	xmlText, err := domainXML(l, vm)
+func (r *LibvirtRuntime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, error) {
+	if l == nil {
+		return nil, nil
+	}
+	domains, err := r.conn.ListAllDomains(0)
 	if err != nil {
 		return nil, err
 	}
-	if err := dom.Undefine(); err != nil {
-		return nil, fmt.Errorf("undefine domain %q: %w", vm.ID, err)
+	desired := map[string]bool{}
+	for _, vm := range l.VMs {
+		desired[vm.ID] = true
+	}
+	var actions []string
+	var errs []error
+	for i := range domains {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		dom := &domains[i]
+		xmlText, xmlErr := dom.GetXMLDesc(0)
+		if xmlErr != nil {
+			errs = append(errs, fmt.Errorf("read domain XML for orphan cleanup: %w", xmlErr))
+			_ = dom.Free()
+			continue
+		}
+		id, orphan := orphanManagedDomainID(l, desired, xmlText)
+		if !orphan {
+			_ = dom.Free()
+			continue
+		}
+		active, activeErr := dom.IsActive()
+		if activeErr != nil {
+			errs = append(errs, fmt.Errorf("check orphan domain %s: %w", id, activeErr))
+			_ = dom.Free()
+			continue
+		}
+		if active {
+			if destroyErr := dom.Destroy(); destroyErr != nil && !isNotFound(destroyErr) && !isDomainNotRunning(destroyErr) {
+				errs = append(errs, fmt.Errorf("destroy orphan domain %s: %w", id, destroyErr))
+				_ = dom.Free()
+				continue
+			}
+		}
+		if undefineErr := dom.Undefine(); undefineErr != nil && !isNotFound(undefineErr) {
+			errs = append(errs, fmt.Errorf("undefine orphan domain %s: %w", id, undefineErr))
+			_ = dom.Free()
+			continue
+		}
+		actions = append(actions, "deleted orphan vm:"+id)
+		_ = dom.Free()
+	}
+	return actions, errors.Join(errs...)
+}
+
+func orphanManagedDomainID(l *lab.Lab, desired map[string]bool, xmlText string) (string, bool) {
+	if l == nil {
+		return "", false
+	}
+	labID, id, _, managed := managedDomainMetadata(xmlText)
+	return id, managed && labID == l.ID && !desired[id]
+}
+
+func (r *LibvirtRuntime) redefineInactiveVM(l *lab.Lab, vm lab.VM, _ *libvirt.Domain) (*libvirt.Domain, error) {
+	xmlText, err := domainXML(l, vm)
+	if err != nil {
+		return nil, err
 	}
 	defined, err := r.conn.DomainDefineXML(xmlText)
 	if err != nil {

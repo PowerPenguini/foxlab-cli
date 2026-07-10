@@ -73,6 +73,15 @@ func (r *Runtime) States(ctx context.Context, l *lab.Lab) (map[string]string, er
 		if err != nil {
 			if errdefs.IsNotFound(err) {
 				states[key] = "created"
+				if ct.Disk != "" {
+					mounted, mountErr := containerDiskMountActive(l, ct)
+					if mountErr != nil {
+						return states, fmt.Errorf("check container disk mount %s: %w", l.ManagedContainerName(ct), mountErr)
+					}
+					if mounted {
+						states[key] = "created-mounted"
+					}
+				}
 				continue
 			}
 			return states, err

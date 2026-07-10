@@ -295,6 +295,15 @@ func mountedContainerDiskHealthy(l *lab.Lab, ct lab.Container) (bool, error) {
 	return mountedContainerDiskUsable(mountPath, source), nil
 }
 
+func containerDiskMountActive(l *lab.Lab, ct lab.Container) (bool, error) {
+	mountPath, err := containerDiskMountPath(l, ct)
+	if err != nil {
+		return false, err
+	}
+	mounted, _, err := containerDiskHooks.mountSource(mountPath)
+	return mounted, err
+}
+
 func mountedContainerDiskSource(mountPath string) (string, bool) {
 	data, err := os.ReadFile(containerDiskSourceMarkerPath(mountPath))
 	if err != nil {
