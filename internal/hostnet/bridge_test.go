@@ -89,7 +89,10 @@ func TestAttachContainerDoesNotRecreateExistingContainerNIC(t *testing.T) {
 		}
 	}
 	gateway, _ := switchNATGatewayCIDR(l, l.Switches[0])
-	address := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	address, err := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"nsenter -t 1234 -n ip link show eth0",
 		"nsenter -t 1234 -n ip link set eth0 up",
@@ -295,7 +298,10 @@ func TestAttachContainerSwitchNATPlansAddressAndUplinkRules(t *testing.T) {
 
 	managed := l.ManagedSwitchBridgeName(l.Switches[0])
 	gateway, cidr := switchNATGatewayCIDR(l, l.Switches[0])
-	address := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	address, err := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	joined := strings.Join(runner.commands, "\n")
 	for _, want := range []string{
 		"ip link show " + managed,

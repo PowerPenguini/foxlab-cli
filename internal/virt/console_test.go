@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func TestConsoleReadEmptyBufferDoesNotCallStream(t *testing.T) {
+	console := &Console{
+		recv: func([]byte) (int, error) { return 0, errors.New("recv should not be called") },
+		done: make(chan struct{}),
+	}
+	if n, err := console.Read(nil); n != 0 || err != nil {
+		t.Fatalf("Read(nil) = %d, %v; want 0, nil", n, err)
+	}
+}
+
 func TestConsolePTYFromDomainXMLUsesSourcePath(t *testing.T) {
 	path, ok := consolePTYFromDomainXML(`<domain><devices><console type="pty" tty="/dev/pts/4"><source path="/dev/pts/5"/></console></devices></domain>`)
 	if !ok {

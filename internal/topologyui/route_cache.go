@@ -27,12 +27,8 @@ func renderRouteCacheStableKey(m Model, width, height int) string {
 }
 
 func writeRouteCacheSize(b *strings.Builder, width, height int) {
-	if width < minWidth {
-		width = minWidth
-	}
-	if height < minHeight {
-		height = minHeight
-	}
+	width = max(0, width)
+	height = max(0, height)
 	b.WriteString(strconv.Itoa(width))
 	b.WriteByte('x')
 	b.WriteString(strconv.Itoa(height))

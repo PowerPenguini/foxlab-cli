@@ -1,13 +1,49 @@
 package containerd
 
 import (
+	"archive/tar"
 	"bytes"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestExtractSingleTarFilePreservesDestinationWhenArchiveHasExtraEntry(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	for _, entry := range []struct {
+		name string
+		data string
+	}{{name: "first.txt", data: "replacement"}, {name: "second.txt", data: "unexpected"}} {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o644, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(entry.data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractSingleTarFile(&archive, dest); err == nil || !strings.Contains(err.Error(), "more than one file") {
+		t.Fatalf("extractSingleTarFile error = %v, want multiple-file rejection", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "original" {
+		t.Fatalf("destination = %q, want original after rejected archive", data)
+	}
+}
 
 func TestWriteAtomicHostFilePreservesDestinationOnFailure(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "dest.txt")

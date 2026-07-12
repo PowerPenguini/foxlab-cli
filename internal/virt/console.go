@@ -107,6 +107,9 @@ func (c *Console) Read(p []byte) (int, error) {
 	if c == nil {
 		return 0, io.ErrClosedPipe
 	}
+	if len(p) == 0 {
+		return 0, nil
+	}
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	for {

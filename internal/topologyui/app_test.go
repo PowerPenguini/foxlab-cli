@@ -5061,6 +5061,16 @@ func TestCommandLinkReportsUsageForInvalidEndpoint(t *testing.T) {
 	}
 }
 
+func TestCommandLinkUnsupportedArgumentErrorIsDeterministic(t *testing.T) {
+	app := App{}
+	for i := 0; i < 100; i++ {
+		app.executeCommand("link add vm:vm1:0 to=vm:vm2:0 zzz=1 aaa=2")
+		if got, want := app.State.Message, "unsupported link add argument: aaa"; got != want {
+			t.Fatalf("unsupported argument error = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestCommandReportsUnterminatedQuote(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 	app.executeCommand(`vm set vm1 name="unterminated`)

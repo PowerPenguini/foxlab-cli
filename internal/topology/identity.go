@@ -211,6 +211,21 @@ func (s *Service) rewriteNodeReferences(kind, oldID, newID string) {
 	}
 }
 
+func (s *Service) removeLayoutLinksForNode(kind, id string) {
+	links := s.Lab.Layout.Links[:0]
+	for _, link := range s.Lab.Layout.Links {
+		if layoutEndpointMatchesNode(link.From, kind, id) || layoutEndpointMatchesNode(link.To, kind, id) {
+			continue
+		}
+		links = append(links, link)
+	}
+	s.Lab.Layout.Links = links
+}
+
+func layoutEndpointMatchesNode(endpoint lab.LayoutEndpoint, kind, id string) bool {
+	return endpoint.Type == kind && endpoint.ID == id
+}
+
 func rewriteNetworkEndpoint(endpoint *lab.NetworkEndpoint, kind, oldID, newID string) {
 	if endpoint.Type == kind && endpoint.ID == oldID {
 		endpoint.ID = newID

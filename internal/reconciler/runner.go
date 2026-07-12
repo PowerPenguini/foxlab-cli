@@ -87,7 +87,7 @@ func (r Runner) watchInterval(interval time.Duration) time.Duration {
 	return 250 * time.Millisecond
 }
 
-func (r Runner) Step(ctx context.Context) (retErr error) {
+func (r Runner) Step(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -119,12 +119,6 @@ func (r Runner) Step(ctx context.Context) (retErr error) {
 		r.publishError(r.LabPath, loaded.ID, err)
 		return err
 	}
-	defer func() {
-		if err := runtime.Close(); err != nil {
-			r.logf("runtime close failed: %v", err)
-			retErr = errors.Join(retErr, err)
-		}
-	}()
 	result := (&workload.Reconciler{Runtime: runtime}).Step(ctx, loaded)
 	vncPorts := map[string]int{}
 	if vncRuntime, ok := runtime.(workload.VNCRuntime); ok {
@@ -134,6 +128,10 @@ func (r Runner) Step(ctx context.Context) (retErr error) {
 		} else {
 			vncPorts = cloneIntMap(ports)
 		}
+	}
+	if err := runtime.Close(); err != nil {
+		r.logf("runtime close failed: %v", err)
+		result.Errors = append(result.Errors, err)
 	}
 	r.publishStatus(loaded, result, vncPorts)
 	for _, action := range result.Actions {

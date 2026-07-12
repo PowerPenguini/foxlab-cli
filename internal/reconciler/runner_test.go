@@ -188,9 +188,11 @@ func TestRunnerStepReturnsRuntimeCloseError(t *testing.T) {
 	closeErr := errors.New("close failed")
 	runtime := &fakeRuntime{closeErr: closeErr}
 	logger := &stringLogger{}
+	store := daemonstatus.NewStore()
 	runner := Runner{
-		LabPath: path,
-		Logger:  logger,
+		LabPath:     path,
+		Logger:      logger,
+		StatusStore: store,
 		RuntimeFactory: func(*lab.Lab) (workload.Runtime, error) {
 			return runtime, nil
 		},
@@ -205,6 +207,10 @@ func TestRunnerStepReturnsRuntimeCloseError(t *testing.T) {
 	}
 	if got := strings.Join(logger.lines, "\n"); !strings.Contains(got, "runtime close failed: close failed") {
 		t.Fatalf("log = %q, want close failure", got)
+	}
+	snapshot := store.Get()
+	if len(snapshot.Errors) != 1 || snapshot.Errors[0] != closeErr.Error() {
+		t.Fatalf("snapshot errors = %#v, want close error", snapshot.Errors)
 	}
 }
 

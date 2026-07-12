@@ -3,8 +3,11 @@ package lab
 import (
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"strings"
 )
+
+var containerRuntimeNamePattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$`)
 
 func (l *Lab) ManagedDomainName(vm VM) string {
 	return managedName(l.ID, vm.ID)
@@ -23,7 +26,13 @@ func (l *Lab) ManagedExternalBridgeName(link ExternalLink) string {
 }
 
 func (l *Lab) ManagedContainerName(ct Container) string {
-	return managedName(l.ID, ct.ID)
+	name := managedName(l.ID, ct.ID)
+	if len(name) <= 76 && containerRuntimeNamePattern.MatchString(name) {
+		return name
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(l.ID + "\x00" + ct.ID))
+	return fmt.Sprintf("foxlab-c-%016x", h.Sum64())
 }
 
 func (l *Lab) ManagedNetworkLinkBridgeName(link NetworkLink) string {

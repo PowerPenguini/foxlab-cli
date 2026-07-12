@@ -65,28 +65,22 @@ func (s *Service) ExternalSet(ref string, args map[string]string) string {
 		if err := validateExternalConfig(s.nodeDisplayName("uplink", id), mode); err != nil {
 			return "uplink config failed: " + err.Error()
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "uplink config failed: " + err.Error()
+		}
 		snapshot := lab.Clone(s.Lab)
 		renamed := false
 		if value := args["name"]; value != "" {
 			if err := s.renameNodeID("external", id, value); err != nil {
 				return "uplink rename failed: " + err.Error()
 			}
-			if err := s.requireSavePath(); err != nil {
-				return "uplink config failed: " + err.Error()
-			}
 			renamed = id != value
 			id = value
 		}
 		if value := args["interface"]; value != "" {
-			if err := s.requireSavePath(); err != nil {
-				return "uplink config failed: " + err.Error()
-			}
 			s.Lab.ExternalLinks[i].Interface = value
 		}
 		if value := args["mode"]; value != "" {
-			if err := s.requireSavePath(); err != nil {
-				return "uplink config failed: " + err.Error()
-			}
 			s.Lab.ExternalLinks[i].Mode = value
 		}
 		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
@@ -152,6 +146,7 @@ func (s *Service) ExternalDelete(ref string) string {
 		}
 	}
 	delete(s.Lab.Layout.Nodes, id)
+	s.removeLayoutLinksForNode("external", id)
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "uplink delete failed: " + err.Error()
 	}

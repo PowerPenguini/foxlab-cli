@@ -1,6 +1,9 @@
 package topologyui
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 func (a *App) executeCommand(command string) bool {
 	if command == "" {
@@ -188,11 +191,16 @@ func (a *App) executeLinkAddCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
+		var invalid []string
 		for key := range args {
 			if key != "to" && key != "target" {
-				a.State.Message = "unsupported link add argument: " + key
-				return
+				invalid = append(invalid, key)
 			}
+		}
+		if len(invalid) > 0 {
+			sort.Strings(invalid)
+			a.State.Message = "unsupported link add argument: " + invalid[0]
+			return
 		}
 		targetValue = firstNonEmpty(args["to"], args["target"])
 	} else if len(fields) == 4 {

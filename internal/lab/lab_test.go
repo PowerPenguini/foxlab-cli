@@ -328,6 +328,24 @@ func TestValidateAcceptsContainerDataDisk(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsNegativeDiskSize(t *testing.T) {
+	l := &Lab{
+		ID: "demo",
+		Disks: []Disk{{
+			ID:     "data",
+			Path:   "disks/data.qcow2",
+			SizeGB: -1,
+			Format: "qcow2",
+			Kind:   "base",
+		}},
+	}
+	l.Normalize()
+	err := l.Validate()
+	if err == nil || !strings.Contains(err.Error(), `disk "data" sizeGB must not be negative`) {
+		t.Fatalf("expected negative disk size validation error, got %v", err)
+	}
+}
+
 func TestValidateRejectsDataDiskForVM(t *testing.T) {
 	l := &Lab{
 		ID:  "demo",

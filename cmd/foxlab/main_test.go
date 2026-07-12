@@ -1,14 +1,50 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topologyui"
+	"foxlab-cli/internal/workload"
 )
+
+type fakeFileCopyRuntime struct {
+	states      map[string]string
+	putDeadline bool
+}
+
+func (f *fakeFileCopyRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
+	return f.states, nil
+}
+
+func (f *fakeFileCopyRuntime) PutFile(ctx context.Context, _ *lab.Lab, _ workload.Ref, _, _ string) error {
+	_, f.putDeadline = ctx.Deadline()
+	return nil
+}
+
+func (f *fakeFileCopyRuntime) GetFile(ctx context.Context, _ *lab.Lab, _ workload.Ref, _, _ string) error {
+	_, f.putDeadline = ctx.Deadline()
+	return nil
+}
+
+func TestCopyWithRuntimeUsesCallerDeadlineForTransfer(t *testing.T) {
+	loaded := &lab.Lab{Containers: []lab.Container{{ID: "web", Image: "alpine"}}}
+	key := workload.Key(workload.Ref{Type: workload.TypeContainer, ID: "web"})
+	runtime := &fakeFileCopyRuntime{states: map[string]string{key: "running"}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := copyWithRuntime(ctx, loaded, runtime, "./file", "web:/tmp/file"); err != nil {
+		t.Fatalf("copyWithRuntime returned error: %v", err)
+	}
+	if !runtime.putDeadline {
+		t.Fatal("file transfer did not receive caller deadline")
+	}
+}
 
 func TestResolveLabPathAcceptsSinglePositionalLab(t *testing.T) {
 	got, err := resolveLabPath("", []string{"demo.lab"})

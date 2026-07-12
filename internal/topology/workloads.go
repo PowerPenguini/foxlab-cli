@@ -225,6 +225,7 @@ func (s *Service) VMDelete(ref string) string {
 	s.removeNetworkLinksForNode("vm", id)
 	s.detachDisksForNode("vm", id)
 	delete(s.Lab.Layout.Nodes, id)
+	s.removeLayoutLinksForNode("vm", id)
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "delete failed: " + err.Error()
 	}
@@ -408,6 +409,7 @@ func (s *Service) ContainerDelete(ref string) string {
 	s.removeNetworkLinksForNode("container", id)
 	s.detachDisksForNode("container", id)
 	delete(s.Lab.Layout.Nodes, id)
+	s.removeLayoutLinksForNode("container", id)
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "container delete failed: " + err.Error()
 	}

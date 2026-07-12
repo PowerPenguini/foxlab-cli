@@ -571,6 +571,21 @@ func TestRenderUsesViewportPan(t *testing.T) {
 	}
 }
 
+func TestRenderHonorsSmallViewportDimensions(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{1, 1}, {20, 5}, {40, 10}} {
+		out := RenderString(MockModel(), ViewState{Focus: FocusGraph}, size.width, size.height, false)
+		lines := strings.Split(out, "\n")
+		if len(lines) != size.height {
+			t.Fatalf("RenderString(%d, %d) produced %d lines", size.width, size.height, len(lines))
+		}
+		for row, line := range lines {
+			if got := runeLen(line); got != size.width {
+				t.Fatalf("RenderString(%d, %d) row %d width = %d", size.width, size.height, row, got)
+			}
+		}
+	}
+}
+
 func TestRenderDrawsPartialEdgeToOffscreenEndpoint(t *testing.T) {
 	m := Model{
 		Nodes: []Node{

@@ -30,7 +30,10 @@ const (
 	DefaultAddress   = "/run/containerd/containerd.sock"
 	DefaultNamespace = "foxlab"
 	configLabel      = "foxlab.config.sha256"
+	labLabel         = "foxlab.lab"
+	containerIDLabel = "foxlab.container.id"
 	containerDNSMode = "host-resolvconf"
+	taskExitTimeout  = 3 * time.Second
 )
 
 type Runtime struct {
@@ -123,7 +126,7 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 		if nilInterface(container) {
 			return fmt.Errorf("containerd returned nil container handle: %s", name)
 		}
-		changed, err := containerConfigChanged(ctx, container, ct, desiredDiskMount)
+		changed, err := containerConfigChanged(ctx, container, l.ID, ct, desiredDiskMount)
 		if err != nil {
 			return err
 		}
@@ -209,9 +212,9 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 		if !errdefs.IsNotFound(err) {
 			return err
 		}
-		container, err = createContainer(ctx, client, name, image, ct, diskMount)
+		container, err = createContainer(ctx, client, name, image, l.ID, ct, diskMount)
 	} else {
-		changed, changeErr := containerConfigChanged(ctx, container, ct, diskMount)
+		changed, changeErr := containerConfigChanged(ctx, container, l.ID, ct, diskMount)
 		if changeErr != nil {
 			return changeErr
 		}
@@ -219,7 +222,7 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 			if err := deleteContainer(ctx, container); err != nil {
 				return err
 			}
-			container, err = createContainer(ctx, client, name, image, ct, diskMount)
+			container, err = createContainer(ctx, client, name, image, l.ID, ct, diskMount)
 		}
 	}
 	if err != nil {
@@ -384,15 +387,49 @@ func (r *Runtime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, err
 		return nil, err
 	}
 	prefix := managedContainerPrefix(l)
-	desired := desiredContainerNames(l)
+	desired := desiredContainerIDs(l)
 	actions := []string{}
 	var errs []error
 	for _, container := range containers {
 		name := container.ID()
-		if !strings.HasPrefix(name, prefix) || desired[name] {
+		labels, labelErr := container.Labels(ctx)
+		if labelErr != nil {
+			errs = append(errs, fmt.Errorf("read container labels %s: %w", name, labelErr))
 			continue
 		}
-		id := strings.TrimPrefix(name, prefix)
+		if desiredID, isDesired := desired[name]; isDesired {
+			if owner := labels[labLabel]; owner != "" && owner != l.ID {
+				errs = append(errs, fmt.Errorf("container %s belongs to lab %q, not %q", name, owner, l.ID))
+				continue
+			}
+			if resourceID := labels[containerIDLabel]; resourceID != "" && resourceID != desiredID {
+				errs = append(errs, fmt.Errorf("container %s has workload id %q, not %q", name, resourceID, desiredID))
+				continue
+			}
+			missingLabels := map[string]string{}
+			if labels[labLabel] == "" {
+				missingLabels[labLabel] = l.ID
+			}
+			if labels[containerIDLabel] == "" {
+				missingLabels[containerIDLabel] = desiredID
+			}
+			if len(missingLabels) > 0 {
+				if _, err := container.SetLabels(ctx, missingLabels); err != nil {
+					errs = append(errs, fmt.Errorf("label managed container %s: %w", name, err))
+				}
+			}
+			continue
+		}
+		if !managedContainerOwnedByLab(labels, l) {
+			continue
+		}
+		id := labels[containerIDLabel]
+		if id == "" {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			id = strings.TrimPrefix(name, prefix)
+		}
 		ct := lab.Container{ID: id}
 		if r.Bridge != nil {
 			r.Bridge.DetachContainer(ctx, l, ct)
@@ -498,11 +535,15 @@ func containerImage(ctx context.Context, client *containerd.Client, imageRef str
 	return image, nil
 }
 
-func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, ct lab.Container, diskMount containerDiskMount) (containerd.Container, error) {
+func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, labID string, ct lab.Container, diskMount containerDiskMount) (containerd.Container, error) {
 	opts := []containerd.NewContainerOpts{
 		containerd.WithImage(image),
 		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount)...),
-		containerd.WithContainerLabels(map[string]string{configLabel: containerConfigHash(ct, diskMount)}),
+		containerd.WithContainerLabels(map[string]string{
+			configLabel:      containerConfigHash(ct, diskMount),
+			labLabel:         labID,
+			containerIDLabel: ct.ID,
+		}),
 	}
 	if diskMount.Source == "" || diskMount.Destination != "/" {
 		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
@@ -514,10 +555,28 @@ func createContainer(ctx context.Context, client *containerd.Client, name string
 	)
 }
 
-func containerConfigChanged(ctx context.Context, container containerd.Container, ct lab.Container, diskMount containerDiskMount) (bool, error) {
+func containerConfigChanged(ctx context.Context, container containerd.Container, labID string, ct lab.Container, diskMount containerDiskMount) (bool, error) {
 	labels, err := container.Labels(ctx)
 	if err != nil {
 		return false, err
+	}
+	if owner := labels[labLabel]; owner != "" && owner != labID {
+		return false, fmt.Errorf("container %s belongs to lab %q, not %q", container.ID(), owner, labID)
+	}
+	if resourceID := labels[containerIDLabel]; resourceID != "" && resourceID != ct.ID {
+		return false, fmt.Errorf("container %s has workload id %q, not %q", container.ID(), resourceID, ct.ID)
+	}
+	missingLabels := map[string]string{}
+	if labels[labLabel] == "" {
+		missingLabels[labLabel] = labID
+	}
+	if labels[containerIDLabel] == "" {
+		missingLabels[containerIDLabel] = ct.ID
+	}
+	if len(missingLabels) > 0 {
+		if _, err := container.SetLabels(ctx, missingLabels); err != nil {
+			return false, fmt.Errorf("label managed container %s: %w", container.ID(), err)
+		}
 	}
 	return labels[configLabel] != containerConfigHash(ct, diskMount), nil
 }
@@ -577,20 +636,37 @@ func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount
 
 func desiredContainerNames(l *lab.Lab) map[string]bool {
 	names := map[string]bool{}
-	if l == nil {
-		return names
-	}
-	for _, ct := range l.Containers {
-		names[l.ManagedContainerName(ct)] = true
+	for name := range desiredContainerIDs(l) {
+		names[name] = true
 	}
 	return names
+}
+
+func desiredContainerIDs(l *lab.Lab) map[string]string {
+	ids := map[string]string{}
+	if l == nil {
+		return ids
+	}
+	for _, ct := range l.Containers {
+		ids[l.ManagedContainerName(ct)] = ct.ID
+	}
+	return ids
 }
 
 func managedContainerPrefix(l *lab.Lab) string {
 	if l == nil {
 		return ""
 	}
-	return l.ManagedContainerName(lab.Container{})
+	return strings.ToLower(lab.ManagedPrefix + "-" + l.ID + "-")
+}
+
+func managedContainerOwnedByLab(labels map[string]string, l *lab.Lab) bool {
+	return l != nil && labels[labLabel] != "" && labels[labLabel] == l.ID
+}
+
+func containerExecID(kind, resourceID string, now time.Time) string {
+	sum := sha256.Sum256([]byte(resourceID))
+	return fmt.Sprintf("foxlab-%s-%s-%s", kind, hex.EncodeToString(sum[:8]), now.UTC().Format("20060102T150405.000000000"))
 }
 
 func nilInterface(value any) bool {
@@ -618,12 +694,12 @@ func deleteTask(ctx context.Context, task containerd.Task) error {
 			case <-statusC:
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(3 * time.Second):
-				_ = task.Kill(ctx, syscall.SIGKILL)
-				select {
-				case <-statusC:
-				case <-ctx.Done():
-					return ctx.Err()
+			case <-time.After(taskExitTimeout):
+				if err := task.Kill(ctx, syscall.SIGKILL); err != nil && !errdefs.IsNotFound(err) && !errdefs.IsFailedPrecondition(err) {
+					return fmt.Errorf("kill container task: %w", err)
+				}
+				if err := waitTaskExit(ctx, statusC, taskExitTimeout); err != nil {
+					return err
 				}
 			}
 		}
@@ -635,13 +711,13 @@ func deleteTask(ctx context.Context, task containerd.Task) error {
 	if !errdefs.IsFailedPrecondition(err) {
 		return err
 	}
-	_ = task.Kill(ctx, syscall.SIGKILL)
+	if err := task.Kill(ctx, syscall.SIGKILL); err != nil && !errdefs.IsNotFound(err) && !errdefs.IsFailedPrecondition(err) {
+		return fmt.Errorf("kill container task: %w", err)
+	}
 	statusC, waitErr := task.Wait(ctx)
 	if waitErr == nil {
-		select {
-		case <-statusC:
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := waitTaskExit(ctx, statusC, taskExitTimeout); err != nil {
+			return err
 		}
 	}
 	_, err = task.Delete(ctx)
@@ -649,6 +725,22 @@ func deleteTask(ctx context.Context, task containerd.Task) error {
 		return nil
 	}
 	return err
+}
+
+func waitTaskExit(ctx context.Context, statusC <-chan containerd.ExitStatus, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = taskExitTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-statusC:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("timed out waiting for container task to exit")
+	}
 }
 
 func findContainer(l *lab.Lab, id string) (lab.Container, bool) {

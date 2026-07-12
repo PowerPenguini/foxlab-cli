@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -58,7 +57,7 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	if err != nil {
 		return err
 	}
-	execID := "foxlab-shell-" + strings.ToLower(id) + "-" + time.Now().Format("20060102150405.000000000")
+	execID := containerExecID("shell", id, time.Now())
 	exitC := make(chan struct{})
 	stdin := newShellExitReader(in, exitC)
 	process, err := task.Exec(setupCtx, execID, containerShellProcess(ct, spec.Process), cio.NewCreator(cio.WithStreams(stdin, out, out), cio.WithTerminal))
@@ -88,10 +87,8 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 			return runCtx.Err()
 		case <-time.After(2 * time.Second):
 			killShellProcess(namespace, process, syscall.SIGKILL)
-			select {
-			case <-statusC:
-			case <-runCtx.Done():
-				return runCtx.Err()
+			if err := waitTaskExit(runCtx, statusC, 2*time.Second); err != nil {
+				return err
 			}
 		}
 		return nil

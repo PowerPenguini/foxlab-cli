@@ -192,6 +192,9 @@ func (l *Lab) Validate() error {
 		if disk.Path == "" {
 			problems = append(problems, fmt.Sprintf("disk %q path is required", disk.ID))
 		}
+		if disk.SizeGB < 0 {
+			problems = append(problems, fmt.Sprintf("disk %q sizeGB must not be negative", disk.ID))
+		}
 		if disk.Format != "" && disk.Format != "qcow2" && disk.Format != "raw" {
 			problems = append(problems, fmt.Sprintf("disk %q format must be qcow2 or raw", disk.ID))
 		}

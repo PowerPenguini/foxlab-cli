@@ -40,12 +40,8 @@ func renderGrid(m Model, state ViewState, width, height int) *grid {
 }
 
 func planRenderRoutes(m Model, state ViewState, width, height int) (map[string]rect, []visibleEdge) {
-	if width < minWidth {
-		width = minWidth
-	}
-	if height < minHeight {
-		height = minHeight
-	}
+	width = max(0, width)
+	height = max(0, height)
 	graph := graphBounds(width, height)
 	nodeRects := layoutNodeRectsWithPan(m, graph, state.PanX, state.PanY)
 	planner := newRoutePlanner(graph, visibleNodeRects(nodeRects, graph))
@@ -53,12 +49,8 @@ func planRenderRoutes(m Model, state ViewState, width, height int) (map[string]r
 }
 
 func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEdges []visibleEdge) *grid {
-	if width < minWidth {
-		width = minWidth
-	}
-	if height < minHeight {
-		height = minHeight
-	}
+	width = max(0, width)
+	height = max(0, height)
 	g := newGrid(width, height)
 	graph := graphBounds(width, height)
 	nodeRects := layoutNodeRectsWithPan(m, graph, state.PanX, state.PanY)

@@ -72,28 +72,22 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 		if err := s.validateSwitchConfig(s.nodeDisplayName("switch", id), mode, externals); err != nil {
 			return "switch config failed: " + err.Error()
 		}
+		if err := s.requireSavePath(); err != nil {
+			return "switch config failed: " + err.Error()
+		}
 		snapshot := lab.Clone(s.Lab)
 		renamed := false
 		if value := args["name"]; value != "" {
 			if err := s.renameNodeID("switch", id, value); err != nil {
 				return "switch rename failed: " + err.Error()
 			}
-			if err := s.requireSavePath(); err != nil {
-				return "switch config failed: " + err.Error()
-			}
 			renamed = id != value
 			id = value
 		}
 		if value := args["mode"]; value != "" {
-			if err := s.requireSavePath(); err != nil {
-				return "switch config failed: " + err.Error()
-			}
 			s.Lab.Switches[i].Mode = value
 		}
 		if value := firstNonEmpty(args["uplink"], args["external"], args["externallink"]); value != "" {
-			if err := s.requireSavePath(); err != nil {
-				return "switch config failed: " + err.Error()
-			}
 			s.Lab.Switches[i].ExternalLinks = externals
 			s.Lab.Switches[i].ExternalLink = ""
 		}
@@ -236,6 +230,7 @@ func (s *Service) SwitchDelete(ref string) string {
 		}
 	}
 	delete(s.Lab.Layout.Nodes, id)
+	s.removeLayoutLinksForNode("switch", id)
 	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
 		return "switch delete failed: " + err.Error()
 	}

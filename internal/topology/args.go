@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -22,6 +23,7 @@ func unexpectedVMCreateArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -44,6 +46,7 @@ func unexpectedVMSetArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -57,6 +60,7 @@ func unexpectedVMNICAddArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -75,6 +79,7 @@ func unexpectedVMNICConnectArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -88,6 +93,7 @@ func unexpectedContainerNICAddArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -106,6 +112,7 @@ func unexpectedContainerNICConnectArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -123,6 +130,7 @@ func unexpectedSwitchArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -138,6 +146,7 @@ func unexpectedExternalArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -185,6 +194,7 @@ func unexpectedArgs(args map[string]string, valid map[string]struct{}) []string 
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 
@@ -267,6 +277,7 @@ func unexpectedContainerArgs(args map[string]string) []string {
 			invalid = append(invalid, key)
 		}
 	}
+	sort.Strings(invalid)
 	return invalid
 }
 

@@ -25,10 +25,11 @@ install: build
 	$(INSTALL_CMD) -m 0755 bin/foxlab "$(DESTDIR)$(BINDIR)/foxlab"
 	$(INSTALL_CMD) -m 0755 bin/foxlabd "$(DESTDIR)$(BINDIR)/foxlabd"
 	$(INSTALL_CMD) -d "$(DESTDIR)$(SYSTEMD_SYSTEM_UNIT_DIR)"
+	@set -eu; \
 	tmp="$$(mktemp)"; \
+	trap 'rm -f "$$tmp"' EXIT; \
 	$(SED) "s|@BINDIR@|$(BINDIR)|g" packaging/systemd/system/foxlabd.service.in > "$$tmp"; \
-	$(INSTALL_CMD) -m 0644 "$$tmp" "$(DESTDIR)$(SYSTEMD_SYSTEM_UNIT_DIR)/foxlabd.service"; \
-	rm -f "$$tmp"
+	$(INSTALL_CMD) -m 0644 "$$tmp" "$(DESTDIR)$(SYSTEMD_SYSTEM_UNIT_DIR)/foxlabd.service"
 	@if [ -z "$(DESTDIR)" ]; then \
 		$(SYSTEMCTL_USER) disable --now foxlabd.service 2>/dev/null || true; \
 		$(SYSTEMCTL) daemon-reload; \

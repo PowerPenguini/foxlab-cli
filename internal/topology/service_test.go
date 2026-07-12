@@ -53,6 +53,70 @@ func TestServiceMutationsPersistAndRefreshLab(t *testing.T) {
 	}
 }
 
+func TestNodeDeleteRemovesRelatedLayoutLinks(t *testing.T) {
+	tests := []struct {
+		name          string
+		deletedType   string
+		deletedID     string
+		wantRemaining int
+		delete        func(*Service) string
+	}{
+		{name: "vm", deletedType: "vm", deletedID: "vm1", wantRemaining: 2, delete: func(s *Service) string { return s.VMDelete("vm1") }},
+		{name: "container", deletedType: "container", deletedID: "ct1", wantRemaining: 2, delete: func(s *Service) string { return s.ContainerDelete("ct1") }},
+		{name: "switch", deletedType: "switch", deletedID: "sw1", wantRemaining: 1, delete: func(s *Service) string { return s.SwitchDelete("sw1") }},
+		{name: "uplink", deletedType: "external", deletedID: "up1", wantRemaining: 1, delete: func(s *Service) string { return s.ExternalDelete("up1") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "demo.lab")
+			initial := &lab.Lab{
+				ID:            "demo",
+				VMs:           []lab.VM{{ID: "vm1", MemoryMB: 512, CPUs: 1}},
+				Containers:    []lab.Container{{ID: "ct1", Image: "alpine"}},
+				Switches:      []lab.Switch{{ID: "sw1", Mode: "bridge"}},
+				ExternalLinks: []lab.ExternalLink{{ID: "up1", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+				Layout: lab.Layout{
+					Nodes: map[string]lab.Position{
+						"vm1": {}, "ct1": {}, "sw1": {}, "up1": {},
+					},
+					Links: []lab.LayoutLink{
+						{From: lab.LayoutEndpoint{Type: "vm", ID: "vm1"}, To: lab.LayoutEndpoint{Type: "switch", ID: "sw1"}},
+						{From: lab.LayoutEndpoint{Type: "container", ID: "ct1"}, To: lab.LayoutEndpoint{Type: "external", ID: "up1"}},
+						{From: lab.LayoutEndpoint{Type: "switch", ID: "sw1"}, To: lab.LayoutEndpoint{Type: "external", ID: "up1"}},
+					},
+				},
+			}
+			if err := lab.SaveFile(path, initial); err != nil {
+				t.Fatalf("save initial lab: %v", err)
+			}
+			loaded, err := lab.LoadFile(path)
+			if err != nil {
+				t.Fatalf("load initial lab: %v", err)
+			}
+
+			service := NewService(loaded, path)
+			if got := tt.delete(service); strings.Contains(got, "failed:") {
+				t.Fatalf("delete failed: %s", got)
+			}
+			reloaded, err := lab.LoadFile(path)
+			if err != nil {
+				t.Fatalf("reload lab after delete: %v", err)
+			}
+			if got := len(reloaded.Layout.Links); got != tt.wantRemaining {
+				t.Fatalf("layout links after delete = %#v, want %d remaining", reloaded.Layout.Links, tt.wantRemaining)
+			}
+			for _, link := range reloaded.Layout.Links {
+				for _, endpoint := range []lab.LayoutEndpoint{link.From, link.To} {
+					if endpoint.Type == tt.deletedType && endpoint.ID == tt.deletedID {
+						t.Fatalf("stale layout endpoint after delete: %#v", endpoint)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestServiceVMNICDeleteReindexesDirectLinks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	initial := &lab.Lab{
@@ -327,6 +391,16 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 	}
 	if len(service.Lab.Layout.Nodes) != 1 {
 		t.Fatalf("empty-id create mutated layout: %#v", service.Lab.Layout.Nodes)
+	}
+}
+
+func TestUnsupportedArgumentErrorsAreDeterministic(t *testing.T) {
+	service := NewService(&lab.Lab{ID: "demo"}, "")
+	args := map[string]string{"zzz": "1", "aaa": "2", "mmm": "3"}
+	for i := 0; i < 100; i++ {
+		if got, want := service.VMCreate("vm1", args), "unsupported vm create argument: aaa"; got != want {
+			t.Fatalf("VMCreate unsupported argument error = %q, want %q", got, want)
+		}
 	}
 }
 
@@ -806,6 +880,50 @@ func TestServiceMutationsRequireSavePathBeforeMutatingLab(t *testing.T) {
 	}
 	if len(service.Lab.VMs[0].Networks) != 1 {
 		t.Fatalf("missing-path operations mutated vm nics: %#v", service.Lab.VMs[0].Networks)
+	}
+}
+
+func TestNetworkNodeRenameRequiresSavePathBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Service) string
+		want string
+	}{
+		{
+			name: "switch",
+			run:  func(s *Service) string { return s.SwitchSet("lan", map[string]string{"name": "renamed-lan"}) },
+			want: "switch config failed: missing lab path",
+		},
+		{
+			name: "uplink",
+			run:  func(s *Service) string { return s.ExternalSet("uplink", map[string]string{"name": "renamed-uplink"}) },
+			want: "uplink config failed: missing lab path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			initial := &lab.Lab{
+				ID:            "demo",
+				Switches:      []lab.Switch{{ID: "lan", Mode: "bridge", ExternalLinks: []string{"uplink"}}},
+				ExternalLinks: []lab.ExternalLink{{ID: "uplink", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+				VMs:           []lab.VM{{ID: "vm1", MemoryMB: 512, CPUs: 1, Networks: []lab.VMNetwork{{Switch: "lan"}}}},
+				Layout: lab.Layout{
+					Nodes: map[string]lab.Position{"lan": {}, "uplink": {}, "vm1": {}},
+					Links: []lab.LayoutLink{{
+						From: lab.LayoutEndpoint{Type: "switch", ID: "lan"},
+						To:   lab.LayoutEndpoint{Type: "external", ID: "uplink"},
+					}},
+				},
+			}
+			service := NewService(lab.Clone(initial), "")
+			if got := tt.run(service); got != tt.want {
+				t.Fatalf("rename = %q, want %q", got, tt.want)
+			}
+			if !reflect.DeepEqual(service.Lab, initial) {
+				t.Fatalf("missing-path rename mutated lab:\ngot  %#v\nwant %#v", service.Lab, initial)
+			}
+		})
 	}
 }
 

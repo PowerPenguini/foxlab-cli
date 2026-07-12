@@ -142,7 +142,7 @@ func (r *Runtime) execContainerTransfer(ctx context.Context, l *lab.Lab, ct lab.
 	if err != nil {
 		return err
 	}
-	execID := "foxlab-cp-" + strings.ToLower(ct.ID) + "-" + time.Now().Format("20060102150405.000000000")
+	execID := containerExecID("cp", ct.ID, time.Now())
 	if in == nil {
 		in = strings.NewReader("")
 	}
@@ -272,27 +272,18 @@ func extractSingleTarFile(reader io.Reader, hostPath string) error {
 	if info, err := os.Stat(hostPath); err == nil && info.IsDir() {
 		dest = filepath.Join(hostPath, filepath.Base(header.Name))
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode).Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(file, tr); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if _, err := tr.Next(); err != io.EOF {
-		if err == nil {
-			return errors.New("guest tar stream contained more than one file")
+	return writeAtomicHostFile(dest, os.FileMode(header.Mode).Perm(), func(file *os.File) error {
+		if _, err := io.Copy(file, tr); err != nil {
+			return err
 		}
-		return err
-	}
-	return nil
+		if _, err := tr.Next(); err != io.EOF {
+			if err == nil {
+				return errors.New("guest tar stream contained more than one file")
+			}
+			return err
+		}
+		return nil
+	})
 }
 
 func appendTransferStderr(operation string, err error, stderr string) error {

@@ -2,15 +2,34 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	containerdapi "github.com/containerd/containerd"
 	cdocontainers "github.com/containerd/containerd/containers"
+	"github.com/containerd/containerd/identifiers"
 	coci "github.com/containerd/containerd/oci"
 
 	"foxlab-cli/internal/lab"
 )
+
+func TestWaitTaskExitTimesOut(t *testing.T) {
+	err := waitTaskExit(context.Background(), make(<-chan containerdapi.ExitStatus), time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out waiting for container task to exit") {
+		t.Fatalf("waitTaskExit error = %v, want timeout", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = waitTaskExit(ctx, make(<-chan containerdapi.ExitStatus), time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitTaskExit canceled error = %v, want context canceled", err)
+	}
+}
 
 type nilCheckInterface interface {
 	value() string
@@ -150,6 +169,65 @@ func TestDesiredContainerNamesAndManagedPrefix(t *testing.T) {
 	}
 	if names["foxlab-default-ct2"] {
 		t.Fatalf("desired names = %#v, want old ct2 to be orphan", names)
+	}
+}
+
+func TestManagedContainerOwnershipLabelsSeparateOverlappingLabNames(t *testing.T) {
+	current := &lab.Lab{ID: "demo"}
+	other := &lab.Lab{ID: "demo-extra"}
+	otherName := other.ManagedContainerName(lab.Container{ID: "web"})
+	if !strings.HasPrefix(otherName, managedContainerPrefix(current)) {
+		t.Fatalf("test setup needs overlapping managed prefixes: %q and %q", managedContainerPrefix(current), otherName)
+	}
+	if managedContainerOwnedByLab(map[string]string{labLabel: other.ID}, current) {
+		t.Fatalf("container for lab %q was claimed by lab %q", other.ID, current.ID)
+	}
+	if !managedContainerOwnedByLab(map[string]string{labLabel: current.ID}, current) {
+		t.Fatalf("container ownership label for lab %q was not recognized", current.ID)
+	}
+	if managedContainerOwnedByLab(nil, current) {
+		t.Fatal("unlabelled ambiguous container was claimed by current lab")
+	}
+}
+
+func TestManagedContainerNamesSatisfyContainerdIdentifierContract(t *testing.T) {
+	tests := []struct {
+		name string
+		lab  string
+		id   string
+	}{
+		{name: "long lab", lab: strings.Repeat("lab", 30), id: "web"},
+		{name: "long container", lab: "demo", id: strings.Repeat("container", 12)},
+		{name: "repeated separators", lab: "demo__edge", id: "web--api"},
+		{name: "trailing separator", lab: "demo-", id: "web_"},
+	}
+	seen := map[string]string{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := (&lab.Lab{ID: tt.lab}).ManagedContainerName(lab.Container{ID: tt.id})
+			if err := identifiers.Validate(name); err != nil {
+				t.Fatalf("managed container name %q is invalid: %v", name, err)
+			}
+			key := tt.lab + "\x00" + tt.id
+			if previous, exists := seen[name]; exists && previous != key {
+				t.Fatalf("managed container name %q collides for %q and %q", name, previous, key)
+			}
+			seen[name] = key
+		})
+	}
+}
+
+func TestContainerExecIDSatisfiesContainerdIdentifierContract(t *testing.T) {
+	resourceID := strings.Repeat("container--", 12) + "_"
+	first := containerExecID("shell", resourceID, time.Unix(1, 2))
+	second := containerExecID("shell", resourceID, time.Unix(1, 3))
+	for _, id := range []string{first, second} {
+		if err := identifiers.Validate(id); err != nil {
+			t.Fatalf("container exec id %q is invalid: %v", id, err)
+		}
+	}
+	if first == second {
+		t.Fatalf("container exec ids are not unique across timestamps: %q", first)
 	}
 }
 

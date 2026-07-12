@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -221,7 +222,25 @@ type copyEndpoint struct {
 	Remote   bool
 }
 
+type fileCopyRuntime interface {
+	States(context.Context, *lab.Lab) (map[string]string, error)
+	PutFile(context.Context, *lab.Lab, workload.Ref, string, string) error
+	GetFile(context.Context, *lab.Lab, workload.Ref, string, string) error
+}
+
 func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runtime, err := foxruntime.New(libvirtURI, containerdAddress, loaded)
+	if err != nil {
+		return err
+	}
+	copyErr := copyWithRuntime(ctx, loaded, runtime, src, dst)
+	closeErr := runtime.Close()
+	return containerdruntime.WithAccessHint(errors.Join(copyErr, closeErr))
+}
+
+func copyWithRuntime(ctx context.Context, loaded *lab.Lab, runtime fileCopyRuntime, src, dst string) error {
 	source := parseCopyEndpoint(src)
 	target := parseCopyEndpoint(dst)
 	if source.Remote == target.Remote {
@@ -236,16 +255,9 @@ func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string
 		return err
 	}
 	ref := workload.Ref{Type: workloadType(typ), ID: id}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	runtime, err := foxruntime.New(libvirtURI, containerdAddress, loaded)
-	if err != nil {
-		return err
-	}
-	defer runtime.Close()
 	states, err := runtime.States(ctx, loaded)
 	if err != nil {
-		return containerdruntime.WithAccessHint(fmt.Errorf("runtime status unavailable: %w", err))
+		return fmt.Errorf("runtime status unavailable: %w", err)
 	}
 	key := workload.Key(ref)
 	state := strings.ToLower(strings.TrimSpace(firstNonEmpty(states[key], "missing")))
@@ -253,9 +265,9 @@ func runFileCopy(loaded *lab.Lab, libvirtURI, containerdAddress, src, dst string
 		return fmt.Errorf("%s %s is %s; run it first", ref.Type, remote.Workload, state)
 	}
 	if source.Remote {
-		return containerdruntime.WithAccessHint(runtime.GetFile(context.Background(), loaded, ref, source.Path, dst))
+		return runtime.GetFile(ctx, loaded, ref, source.Path, dst)
 	}
-	return containerdruntime.WithAccessHint(runtime.PutFile(context.Background(), loaded, ref, src, target.Path))
+	return runtime.PutFile(ctx, loaded, ref, src, target.Path)
 }
 
 func parseCopyEndpoint(value string) copyEndpoint {

@@ -63,8 +63,12 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 				return containerNICAttachTarget{}, err
 			}
 			gateway, _ := switchNATGatewayCIDR(l, sw)
+			address, err := switchNATContainerAddress(l, sw, ct, index)
+			if err != nil {
+				return containerNICAttachTarget{}, err
+			}
 			target.Mode = lab.ExternalModeNAT
-			target.Address = switchNATContainerAddress(l, sw, ct, index)
+			target.Address = address
 			target.Gateway = gateway
 			return target, nil
 		}
@@ -88,10 +92,14 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 			if err := b.ensureNATBridge(ctx, bridge, gateway, cidr, link.Interface); err != nil {
 				return containerNICAttachTarget{}, err
 			}
+			address, err := externalNATContainerAddress(l, link, ct, index)
+			if err != nil {
+				return containerNICAttachTarget{}, err
+			}
 			return containerNICAttachTarget{
 				Bridge:  bridge,
 				Mode:    lab.ExternalModeNAT,
-				Address: externalNATContainerAddress(l, link, ct, index),
+				Address: address,
 				Gateway: gateway,
 			}, nil
 		case lab.ExternalModeMacNAT:
