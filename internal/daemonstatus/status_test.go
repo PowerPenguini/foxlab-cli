@@ -53,6 +53,21 @@ func TestServeConnReturnsYAMLSnapshot(t *testing.T) {
 	}
 }
 
+func TestServeConnTimesOutIdleClient(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() {
+		serveConnWithTimeout(server, NewStore(), time.Millisecond)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idle status connection did not time out")
+	}
+}
+
 func decodeSnapshot(data []byte) (Snapshot, error) {
 	var snapshot Snapshot
 	err := yaml.Unmarshal(data, &snapshot)

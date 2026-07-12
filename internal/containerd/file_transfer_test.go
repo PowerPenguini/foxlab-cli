@@ -69,6 +69,26 @@ func TestWriteAtomicHostFilePreservesDestinationOnFailure(t *testing.T) {
 	}
 }
 
+func TestWriteAtomicHostFilePreservesExistingMode(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "dest.txt")
+	if err := os.WriteFile(dest, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomicHostFile(dest, 0o644, func(file *os.File) error {
+		_, err := file.WriteString("replacement")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("destination mode = %o, want 600", got)
+	}
+}
+
 func TestSplitGuestFilePathRequiresAbsoluteFile(t *testing.T) {
 	dir, name, err := splitGuestFilePath("/tmp/file")
 	if err != nil {

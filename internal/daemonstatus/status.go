@@ -214,7 +214,16 @@ func DefaultSocketPath() (string, error) {
 }
 
 func serveConn(conn net.Conn, store *Store) {
+	serveConnWithTimeout(conn, store, 5*time.Second)
+}
+
+func serveConnWithTimeout(conn net.Conn, store *Store, timeout time.Duration) {
 	defer conn.Close()
+	if timeout > 0 {
+		if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return
+		}
+	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil && err != io.EOF {
 		return

@@ -84,6 +84,11 @@ func (r *Runtime) GetFile(ctx context.Context, l *lab.Lab, ref workload.Ref, gue
 }
 
 func writeAtomicHostFile(dest string, mode os.FileMode, write func(*os.File) error) (retErr error) {
+	if info, err := os.Stat(dest); err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	dir := filepath.Dir(dest)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

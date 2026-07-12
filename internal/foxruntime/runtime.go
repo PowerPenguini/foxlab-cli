@@ -2,6 +2,7 @@ package foxruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -37,11 +38,20 @@ func DestroyLab(ctx context.Context, libvirtURI, containerdAddress string, l *la
 	if err != nil {
 		return err
 	}
-	defer runtime.Close()
-	if err := workload.DestroyLab(ctx, runtime, l); err != nil {
-		return err
+	return destroyLabResources(ctx, runtime, l, hostnet.NewBridge().CleanupLab)
+}
+
+func destroyLabResources(ctx context.Context, runtime workload.Runtime, l *lab.Lab, cleanup func(context.Context, *lab.Lab) error) error {
+	destroyErr := workload.DestroyLab(ctx, runtime, l)
+	var cleanupErr error
+	if cleanup != nil {
+		cleanupErr = cleanup(ctx, l)
 	}
-	return hostnet.NewBridge().CleanupLab(ctx, l)
+	var closeErr error
+	if runtime != nil {
+		closeErr = runtime.Close()
+	}
+	return errors.Join(destroyErr, cleanupErr, closeErr)
 }
 
 type failingRuntime struct {

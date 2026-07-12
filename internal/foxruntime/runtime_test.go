@@ -10,6 +10,45 @@ import (
 	"foxlab-cli/internal/workload"
 )
 
+type destroyTestRuntime struct {
+	stopErr  error
+	closeErr error
+	closed   bool
+}
+
+func (r *destroyTestRuntime) States(context.Context, *lab.Lab) (map[string]string, error) {
+	return nil, nil
+}
+func (r *destroyTestRuntime) Start(context.Context, *lab.Lab, workload.Ref) error { return nil }
+func (r *destroyTestRuntime) Stop(context.Context, *lab.Lab, workload.Ref) error  { return r.stopErr }
+func (r *destroyTestRuntime) Close() error {
+	r.closed = true
+	return r.closeErr
+}
+
+func TestDestroyLabResourcesAttemptsCleanupAndCloseAfterDestroyError(t *testing.T) {
+	destroyErr := errors.New("destroy failed")
+	cleanupErr := errors.New("cleanup failed")
+	closeErr := errors.New("close failed")
+	runtime := &destroyTestRuntime{stopErr: destroyErr, closeErr: closeErr}
+	cleanupCalled := false
+	err := destroyLabResources(context.Background(), runtime, &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", MemoryMB: 512, CPUs: 1}},
+	}, func(context.Context, *lab.Lab) error {
+		cleanupCalled = true
+		return cleanupErr
+	})
+	for _, want := range []error{destroyErr, cleanupErr, closeErr} {
+		if !errors.Is(err, want) {
+			t.Fatalf("destroyLabResources error = %v, want %v", err, want)
+		}
+	}
+	if !cleanupCalled || !runtime.closed {
+		t.Fatalf("cleanupCalled=%t closed=%t, want both true", cleanupCalled, runtime.closed)
+	}
+}
+
 func TestNewSkipsLibvirtForEmptyLab(t *testing.T) {
 	runtime, err := New("invalid:///uri", "", &lab.Lab{ID: "demo"})
 	if err != nil {
