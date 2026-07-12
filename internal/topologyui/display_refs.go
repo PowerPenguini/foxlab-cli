@@ -44,7 +44,7 @@ func displayNodeNameFromLab(l *lab.Lab, typ, id string) string {
 	case NodeExternal:
 		for _, link := range l.ExternalLinks {
 			if link.ID == id {
-				return firstNonEmpty(link.Name, link.Interface, link.ID)
+				return firstNonEmpty(link.Name, link.ID, link.Interface)
 			}
 		}
 	}
@@ -95,7 +95,7 @@ func daemonMessageReplacements(l *lab.Lab) []daemonMessageReplacement {
 		out = append(out, daemonMessageReplacement{typ: NodeSwitch, id: sw.ID, name: firstNonEmpty(sw.Name, sw.ID)})
 	}
 	for _, link := range l.ExternalLinks {
-		out = append(out, daemonMessageReplacement{typ: NodeExternal, id: link.ID, name: firstNonEmpty(link.Name, link.Interface, link.ID)})
+		out = append(out, daemonMessageReplacement{typ: NodeExternal, id: link.ID, name: firstNonEmpty(link.Name, link.ID, link.Interface)})
 	}
 	return out
 }

@@ -1776,6 +1776,19 @@ func TestRenderDiskSuccessMessageUsesSuccessNotification(t *testing.T) {
 	}
 }
 
+func TestRenderConfiguredUplinkUsesInfoNotification(t *testing.T) {
+	const width, height = 100, 30
+	message := "configured uplink:new-uplink; runtime will be recreated"
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: message}, width, height)
+	textY := height - 2
+	if got := g.Cells[textY*g.Width+1].Style; got != themeNotificationInfoBar {
+		t.Fatalf("info notification accent style = %q, want %q", got, themeNotificationInfoBar)
+	}
+	if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
+		t.Fatalf("info notification body style = %q, want %q", got, themeNotification)
+	}
+}
+
 func TestRenderLongMessageUsesMultilineNotification(t *testing.T) {
 	const width, height = 80, 24
 	message := "failed to apply lab because libvirt network default is not active"

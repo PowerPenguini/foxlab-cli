@@ -30,6 +30,7 @@ const (
 	themeMenuMutedActive        = ansiBgPanelMenuActive + ansiBrightBlack
 	themeNotification           = ansiBgPanelStatus + ansiWhite
 	themeNotificationBar        = ansiBgRed + ansiWhite + ansiBold
+	themeNotificationInfoBar    = ansiBgCyan + ansiBlack + ansiBold
 	themeNotificationSuccessBar = ansiBgGreen + ansiBlack + ansiBold
 	themePalette                = ansiBgPanelMenu + ansiWhite
 	themePaletteHeader          = ansiBgPanelMenu + ansiBrightCyan + ansiBold

@@ -58,6 +58,36 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 }
 
+func TestDomainXMLWithUUIDPreservesExistingIdentity(t *testing.T) {
+	l := &lab.Lab{ID: "demo"}
+	vm := lab.VM{ID: "victim-a", MemoryMB: 2048, CPUs: 2}
+	const uuid = "918ec8fd-ecd1-4c30-b632-fc7906efbdb0"
+
+	xmlText, err := domainXMLWithUUID(l, vm, uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(xmlText, "<uuid>"+uuid+"</uuid>") {
+		t.Fatalf("redefined domain XML does not preserve UUID:\n%s", xmlText)
+	}
+	baseXML, err := domainXML(l, vm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(baseXML, "<uuid>") {
+		t.Fatalf("new domain XML unexpectedly pins UUID:\n%s", baseXML)
+	}
+	_, _, redefinedHash, _ := managedDomainMetadata(xmlText)
+	_, _, baseHash, _ := managedDomainMetadata(baseXML)
+	if redefinedHash == "" || redefinedHash != baseHash {
+		t.Fatalf("UUID changed configuration hash: redefined=%q base=%q", redefinedHash, baseHash)
+	}
+	matches, err := domainConfigMatches(l, vm, xmlText)
+	if err != nil || !matches {
+		t.Fatalf("UUID-preserving XML config match = %t, err = %v", matches, err)
+	}
+}
+
 func TestDomainConfigMatchesFingerprintAndLegacyXML(t *testing.T) {
 	diskPath := filepath.Join(t.TempDir(), "vm.qcow2")
 	if err := writeEmptyFile(diskPath); err != nil {

@@ -297,8 +297,15 @@ func orphanManagedDomainID(l *lab.Lab, desired map[string]bool, xmlText string) 
 	return id, managed && labID == l.ID && !desired[id]
 }
 
-func (r *LibvirtRuntime) redefineInactiveVM(l *lab.Lab, vm lab.VM, _ *libvirt.Domain) (*libvirt.Domain, error) {
-	xmlText, err := domainXML(l, vm)
+func (r *LibvirtRuntime) redefineInactiveVM(l *lab.Lab, vm lab.VM, existing *libvirt.Domain) (*libvirt.Domain, error) {
+	if existing == nil {
+		return nil, fmt.Errorf("redefine domain %q: missing existing domain", vm.ID)
+	}
+	uuid, err := existing.GetUUIDString()
+	if err != nil {
+		return nil, fmt.Errorf("read domain UUID %q: %w", vm.ID, err)
+	}
+	xmlText, err := domainXMLWithUUID(l, vm, uuid)
 	if err != nil {
 		return nil, err
 	}

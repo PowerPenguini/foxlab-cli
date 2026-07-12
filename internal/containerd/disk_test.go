@@ -609,6 +609,58 @@ func TestCleanupContainerDiskMountCleansStaleMountWhenDesiredDiskDetached(t *tes
 	}
 }
 
+func TestCleanupOrphanContainerDiskMountsRemovesRenamedContainerMount(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SUDO_USER", "")
+	l := &lab.Lab{ID: "default", Containers: []lab.Container{{ID: "Kali-a"}}}
+	root, err := l.StorageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleID := "Kali"
+	mountPath := filepath.Join(root, "container-data", staleID)
+	if err := os.MkdirAll(mountPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeContainerDiskSourceMarker(mountPath, "/disks/kali.qcow2"); err != nil {
+		t.Fatal(err)
+	}
+
+	oldHooks := containerDiskHooks
+	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+		switch path {
+		case filepath.Join(mountPath, "merged"), filepath.Join(root, "container-image-rootfs", staleID):
+			return false, "", nil
+		case mountPath:
+			return true, "/dev/nbd0", nil
+		default:
+			t.Fatalf("unexpected mountSource path = %q", path)
+			return false, "", nil
+		}
+	}
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
+	defer restore()
+
+	actions, err := cleanupOrphanContainerDiskMounts(context.Background(), l, nil, "", DefaultNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actions, []string{"cleaned orphan container disk:Kali"}) {
+		t.Fatalf("actions = %#v", actions)
+	}
+	want := []string{"umount " + mountPath, "qemu-nbd --disconnect /dev/nbd0"}
+	if !reflect.DeepEqual(testCommands(t), want) {
+		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	}
+}
+
+func TestCleanupOrphanContainerDiskMountsKeepsMountAfterDeleteFailure(t *testing.T) {
+	if !skippedContainerDiskID(map[string]bool{"kali": true}, "Kali") {
+		t.Fatal("case-normalized failed orphan id did not protect its mounted disk")
+	}
+}
+
 func stubRunHostCommand(t *testing.T, fn func(name string, args ...string) error) func() {
 	t.Helper()
 	old := runHostCommand

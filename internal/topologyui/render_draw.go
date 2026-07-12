@@ -581,10 +581,17 @@ type notificationTheme struct {
 
 func notificationThemeForLine(line string) notificationTheme {
 	theme := notificationTheme{body: themeNotification, bar: themeNotificationBar}
-	if isSuccessNotification(line) {
+	if isInfoNotification(line) {
+		theme.bar = themeNotificationInfoBar
+	} else if isSuccessNotification(line) {
 		theme.bar = themeNotificationSuccessBar
 	}
 	return theme
+}
+
+func isInfoNotification(line string) bool {
+	line = strings.TrimSpace(strings.ToLower(line))
+	return strings.HasPrefix(line, "configured ")
 }
 
 func isSuccessNotification(line string) bool {

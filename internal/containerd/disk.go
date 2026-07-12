@@ -3,6 +3,7 @@ package containerd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -406,6 +407,68 @@ func cleanupContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 		return err
 	}
 	return cleanupMountedContainerDiskMount(ctx, mountPath, source)
+}
+
+func cleanupOrphanContainerDiskMounts(ctx context.Context, l *lab.Lab, skip map[string]bool, address, namespace string) ([]string, error) {
+	root, err := l.StorageRoot()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "container-data"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	desired := map[string]bool{}
+	for _, ct := range l.Containers {
+		desired[ct.ID] = true
+	}
+	var actions []string
+	var errs []error
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		id := entry.Name()
+		if !entry.IsDir() || desired[id] || skippedContainerDiskID(skip, id) {
+			continue
+		}
+		ct := lab.Container{ID: id}
+		mountPath, pathErr := containerDiskMountPath(l, ct)
+		if pathErr != nil {
+			errs = append(errs, pathErr)
+			continue
+		}
+		if _, managed := mountedContainerDiskSource(mountPath); !managed {
+			continue
+		}
+		mounted, mountErr := containerDiskMountActive(l, ct)
+		if mountErr != nil {
+			errs = append(errs, fmt.Errorf("check orphan container disk %s: %w", id, mountErr))
+			continue
+		}
+		if !mounted {
+			continue
+		}
+		if cleanupErr := cleanupContainerDiskMount(ctx, l, ct, address, namespace); cleanupErr != nil {
+			errs = append(errs, fmt.Errorf("cleanup orphan container disk %s: %w", id, cleanupErr))
+			continue
+		}
+		actions = append(actions, "cleaned orphan container disk:"+id)
+	}
+	return actions, errors.Join(errs...)
+}
+
+func skippedContainerDiskID(skip map[string]bool, id string) bool {
+	for candidate, skipped := range skip {
+		if skipped && strings.EqualFold(candidate, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanupContainerOverlayMount(ctx context.Context, l *lab.Lab, ct lab.Container, diskRoot, address, namespace string) error {

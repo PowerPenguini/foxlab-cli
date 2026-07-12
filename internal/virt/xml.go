@@ -21,6 +21,7 @@ type domainXMLData struct {
 	LabID      string
 	VMID       string
 	Name       string
+	UUID       string `json:"-"`
 	MemoryMB   int
 	CPUs       int
 	HasDisk    bool
@@ -55,10 +56,15 @@ type networkXMLData struct {
 }
 
 func domainXML(l *lab.Lab, vm lab.VM) (string, error) {
+	return domainXMLWithUUID(l, vm, "")
+}
+
+func domainXMLWithUUID(l *lab.Lab, vm lab.VM, uuid string) (string, error) {
 	data, err := desiredDomainXMLData(l, vm)
 	if err != nil {
 		return "", err
 	}
+	data.UUID = strings.TrimSpace(uuid)
 	data.ConfigHash, err = domainConfigHash(data)
 	if err != nil {
 		return "", err
@@ -518,6 +524,9 @@ var xmlTemplateFuncs = template.FuncMap{
 var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs).Parse(`<?xml version="1.0"?>
 <domain type="kvm">
   <name>{{ xmltext .Name }}</name>
+  {{- if .UUID }}
+  <uuid>{{ xmltext .UUID }}</uuid>
+  {{- end }}
   <metadata>
     <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ xmlattr .LabID }}" id="{{ xmlattr .VMID }}" kind="domain" configSHA256="{{ xmlattr .ConfigHash }}"/>
   </metadata>

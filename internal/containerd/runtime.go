@@ -390,6 +390,7 @@ func (r *Runtime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, err
 	desired := desiredContainerIDs(l)
 	actions := []string{}
 	var errs []error
+	failedOrphanIDs := map[string]bool{}
 	for _, container := range containers {
 		name := container.ID()
 		labels, labelErr := container.Labels(ctx)
@@ -436,6 +437,7 @@ func (r *Runtime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, err
 		}
 		if err := deleteContainer(ctx, container); err != nil {
 			errs = append(errs, fmt.Errorf("delete orphan container %s: %w", name, err))
+			failedOrphanIDs[id] = true
 			continue
 		}
 		if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
@@ -443,6 +445,11 @@ func (r *Runtime) CleanupOrphans(ctx context.Context, l *lab.Lab) ([]string, err
 			continue
 		}
 		actions = append(actions, "deleted orphan container:"+id)
+	}
+	diskActions, diskErr := cleanupOrphanContainerDiskMounts(ctx, l, failedOrphanIDs, r.containerdAddress(), r.containerdNamespace())
+	actions = append(actions, diskActions...)
+	if diskErr != nil {
+		errs = append(errs, diskErr)
 	}
 	return actions, errors.Join(errs...)
 }

@@ -5263,6 +5263,52 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	}
 }
 
+func TestUplinkRenamePersistsNewIDAndDisplaysIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	initial := &lab.Lab{
+		ID:            "demo",
+		Switches:      []lab.Switch{{ID: "lan", Mode: "bridge", ExternalLinks: []string{"old-uplink"}}},
+		ExternalLinks: []lab.ExternalLink{{ID: "old-uplink", Interface: "eth0", Mode: lab.ExternalModeNAT}},
+		Layout: lab.Layout{Nodes: map[string]lab.Position{
+			"old-uplink": {X: 20, Y: 4},
+		}},
+	}
+	if err := lab.SaveFile(path, initial); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+
+	app.externalSet("old-uplink", map[string]string{"name": "new-uplink"})
+
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.ExternalLinks[0].ID; got != "new-uplink" {
+		t.Fatalf("persisted uplink id = %q, want new-uplink", got)
+	}
+	if got := lab.SwitchExternalLinks(reloaded.Switches[0]); !reflect.DeepEqual(got, []string{"new-uplink"}) {
+		t.Fatalf("persisted switch uplinks = %#v, want new-uplink", got)
+	}
+	if _, ok := reloaded.Layout.Nodes["old-uplink"]; ok {
+		t.Fatalf("old layout id still present: %#v", reloaded.Layout.Nodes)
+	}
+	node, ok := nodeByKey(app.Model, NodeKey(NodeExternal, "new-uplink"))
+	if !ok {
+		t.Fatalf("renamed uplink missing from model: %#v", app.Model.Nodes)
+	}
+	if node.Label != "new-uplink" {
+		t.Fatalf("renamed uplink label = %q, want new-uplink", node.Label)
+	}
+	if app.State.Message != "configured uplink:new-uplink; runtime will be recreated" {
+		t.Fatalf("rename message = %q", app.State.Message)
+	}
+}
+
 func TestContextMenuGlobalCreateCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.lab")
 	loaded := &lab.Lab{ID: "empty"}
@@ -6105,7 +6151,7 @@ func TestConnectedExternalConnectActionDoesNotStartConnectMode(t *testing.T) {
 	if !app.State.ContextMenu {
 		t.Fatal("disabled connect action closed the context menu")
 	}
-	if app.State.Message != "uplink already connected: br0" {
+	if app.State.Message != "uplink already connected: uplink1" {
 		t.Fatalf("message = %q", app.State.Message)
 	}
 }

@@ -164,7 +164,7 @@ func ModelFromLab(l *lab.Lab) Model {
 			ID:    link.ID,
 			Type:  NodeExternal,
 			Badge: "UP",
-			Label: firstNonEmpty(link.Name, link.Interface, link.ID),
+			Label: firstNonEmpty(link.Name, link.ID, link.Interface),
 			State: firstNonEmpty(link.Mode, lab.ExternalModeDirect),
 			X:     layoutX(l, link.ID, NodeExternal, i),
 			Y:     layoutY(l, link.ID, i),
@@ -192,7 +192,7 @@ func labNodeNames(l *lab.Lab) map[string]string {
 		names[NodeKey(NodeSwitch, sw.ID)] = firstNonEmpty(sw.Name, sw.ID)
 	}
 	for _, link := range l.ExternalLinks {
-		names[NodeKey(NodeExternal, link.ID)] = firstNonEmpty(link.Name, link.Interface, link.ID)
+		names[NodeKey(NodeExternal, link.ID)] = firstNonEmpty(link.Name, link.ID, link.Interface)
 	}
 	return names
 }
