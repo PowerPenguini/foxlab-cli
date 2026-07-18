@@ -1,4 +1,4 @@
-package topologyui
+package daemoncontrol
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func TestSystemdDaemonApplyDestroysPreviousLabBeforeRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := controller.Apply(context.Background(), DaemonApplyRequest{LabPath: newPath})
+	err := controller.Apply(context.Background(), ApplyRequest{LabPath: newPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestSystemdDaemonApplyDestroysPreviousLabBeforeRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sameLabPath(configured, newPath) {
+	if !SameLabPath(configured, newPath) {
 		t.Fatalf("configured lab path = %q, want %q", configured, newPath)
 	}
 }
@@ -97,7 +97,7 @@ func TestSystemdDaemonApplyNoopsWhenOpenLabAlreadyActive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := controller.Apply(context.Background(), DaemonApplyRequest{LabPath: path}); err != nil {
+	if err := controller.Apply(context.Background(), ApplyRequest{LabPath: path}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"systemctl show foxlabd.service -p ActiveState --value"}
@@ -136,7 +136,7 @@ func TestSystemdDaemonApplyIgnoresStopWhenUnitNotLoaded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := controller.Apply(context.Background(), DaemonApplyRequest{LabPath: path}); err != nil {
+	if err := controller.Apply(context.Background(), ApplyRequest{LabPath: path}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -187,7 +187,7 @@ func TestSystemdDaemonApplyWritesSystemUnitWhenServiceDoesNotExist(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if err := controller.Apply(context.Background(), DaemonApplyRequest{LabPath: path}); err != nil {
+	if err := controller.Apply(context.Background(), ApplyRequest{LabPath: path}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{

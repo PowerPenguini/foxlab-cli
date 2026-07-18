@@ -2,33 +2,33 @@ package topology
 
 import "foxlab-cli/internal/lab"
 
-func (s *Service) SwitchCreate(name string, args map[string]string) string {
+func (s *Service) SwitchCreate(name string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "switch create needs a loaded .lab file"
+		return Failure("switch create needs a loaded .lab file")
 	}
 	name = firstNonEmpty(args["name"], name)
 	if name == "" {
-		return "usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]"
+		return Failure("usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
-		return err
+		return Failure(err)
 	}
 	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
-		return "unsupported switch create argument: " + invalid[0]
+		return Failure("unsupported switch create argument: " + invalid[0])
 	}
 	mode := firstNonEmpty(args["mode"], "bridge")
 	externals, err := s.resolveExternalRefs(switchExternalArgs(args))
 	if err != nil {
-		return "switch create failed: " + err.Error()
+		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
 	id := name
 	if err := s.validateSwitchConfig(name, mode, externals); err != nil {
-		return "switch create failed: " + err.Error()
+		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "switch create failed: " + err.Error()
+		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.Switches = append(s.Lab.Switches, lab.Switch{
 		ID:            id,
 		Mode:          mode,
@@ -38,48 +38,48 @@ func (s *Service) SwitchCreate(name string, args map[string]string) string {
 		s.Lab.Layout.Nodes = map[string]lab.Position{}
 	}
 	s.Lab.Layout.Nodes[id] = lab.Position{X: 448, Y: 80 + len(s.Lab.Switches)*96}
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "switch create failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
-	return "created switch:" + name
+	return Success("created switch:" + name)
 }
 
-func (s *Service) SwitchSet(ref string, args map[string]string) string {
+func (s *Service) SwitchSet(ref string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "switch set needs a loaded .lab file"
+		return Failure("switch set needs a loaded .lab file")
 	}
 	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
-		return "unsupported switch set argument: " + invalid[0]
+		return Failure("unsupported switch set argument: " + invalid[0])
 	}
 	id, ok := s.resolveSwitchID(ref)
 	if !ok {
-		return "switch not found: " + ref
+		return Failure("switch not found: " + ref)
 	}
 	for i := range s.Lab.Switches {
 		if s.Lab.Switches[i].ID != id {
 			continue
 		}
 		if len(args) == 0 {
-			return "configured switch:" + s.nodeDisplayName("switch", id)
+			return Info("configured switch:" + s.nodeDisplayName("switch", id))
 		}
 		mode := firstNonEmpty(args["mode"], s.Lab.Switches[i].Mode)
 		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
 		nextExternalRefs, err := s.resolveExternalRefs(switchExternalArgs(args))
 		if err != nil {
-			return "switch config failed: " + err.Error()
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
 		externals = appendSwitchExternalLinks(externals, nextExternalRefs...)
 		if err := s.validateSwitchConfig(s.nodeDisplayName("switch", id), mode, externals); err != nil {
-			return "switch config failed: " + err.Error()
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
 		if err := s.requireSavePath(); err != nil {
-			return "switch config failed: " + err.Error()
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
+		mutation := s.beginLabMutation()
 		renamed := false
 		if value := args["name"]; value != "" {
 			if err := s.renameNodeID("switch", id, value); err != nil {
-				return "switch rename failed: " + err.Error()
+				return FailureWithCause("switch rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
@@ -91,25 +91,25 @@ func (s *Service) SwitchSet(ref string, args map[string]string) string {
 			s.Lab.Switches[i].ExternalLinks = externals
 			s.Lab.Switches[i].ExternalLink = ""
 		}
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "switch config failed: " + err.Error()
+		if err := mutation.Commit(); err != nil {
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
 		message := "configured switch:" + s.nodeDisplayName("switch", id)
 		if renamed {
 			message += "; runtime will be recreated"
 		}
-		return message
+		return ChangedInfo(message)
 	}
-	return "switch not found: " + id
+	return Failure("switch not found: " + id)
 }
 
-func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) string {
+func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) Result {
 	if s.Lab == nil {
-		return "switch set needs a loaded .lab file"
+		return Failure("switch set needs a loaded .lab file")
 	}
 	id, ok := s.resolveSwitchID(ref)
 	if !ok {
-		return "switch not found: " + ref
+		return Failure("switch not found: " + ref)
 	}
 	for i := range s.Lab.Switches {
 		if s.Lab.Switches[i].ID != id {
@@ -117,23 +117,23 @@ func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) st
 		}
 		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
 		if len(externals) == 0 {
-			return "switch uplink already empty:" + id
+			return Info("switch uplink already empty:" + id)
 		}
 		removeID := firstNonEmpty(externalIDs...)
 		if removeID != "" {
 			resolved, ok := s.resolveExternalID(removeID)
 			if !ok {
-				return "uplink not found: " + removeID
+				return Failure("uplink not found: " + removeID)
 			}
 			removeID = resolved
 		}
 		if removeID != "" && !containsString(externals, removeID) {
-			return "switch uplink not attached:" + id + ":" + removeID
+			return Failure("switch uplink not attached:" + id + ":" + removeID)
 		}
 		if err := s.requireSavePath(); err != nil {
-			return "switch config failed: " + err.Error()
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
+		mutation := s.beginLabMutation()
 		if removeID == "" {
 			externals = nil
 		} else {
@@ -150,12 +150,12 @@ func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) st
 		if len(externals) == 0 && s.Lab.Switches[i].Mode == "macnat-bridge" {
 			s.Lab.Switches[i].Mode = "bridge"
 		}
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "switch config failed: " + err.Error()
+		if err := mutation.Commit(); err != nil {
+			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
-		return "disconnected uplink from switch:" + id
+		return Success("disconnected uplink from switch:" + id)
 	}
-	return "switch not found: " + id
+	return Failure("switch not found: " + id)
 }
 
 func containsString(values []string, value string) bool {
@@ -194,19 +194,19 @@ func appendSwitchExternalLinks(existing []string, ids ...string) []string {
 	return out
 }
 
-func (s *Service) SwitchDelete(ref string) string {
+func (s *Service) SwitchDelete(ref string) Result {
 	if s.Lab == nil {
-		return "switch delete needs a loaded .lab file"
+		return Failure("switch delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveSwitchID(ref)
 	if !ok {
-		return "switch not found: " + ref
+		return Failure("switch not found: " + ref)
 	}
 	name := s.nodeDisplayName("switch", id)
 	if err := s.requireSavePath(); err != nil {
-		return "switch delete failed: " + err.Error()
+		return FailureWithCause("switch delete failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	switches := s.Lab.Switches[:0]
 	for _, sw := range s.Lab.Switches {
 		if sw.ID == id {
@@ -231,8 +231,8 @@ func (s *Service) SwitchDelete(ref string) string {
 	}
 	delete(s.Lab.Layout.Nodes, id)
 	s.removeLayoutLinksForNode("switch", id)
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "switch delete failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("switch delete failed: "+err.Error(), err)
 	}
-	return "deleted switch:" + name
+	return Success("deleted switch:" + name)
 }

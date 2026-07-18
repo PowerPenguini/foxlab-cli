@@ -1,97 +1,101 @@
 package topologyui
 
-import "strings"
+import "foxlab-cli/internal/topology"
 
 func (a *App) vmCreate(id string, args map[string]string) {
-	a.State.Message = a.ensureService().VMCreate(id, args)
+	a.setOperationResult(a.ensureService().VMCreate(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) vmSet(id string, args map[string]string) {
-	a.State.Message = a.ensureService().VMSet(id, args)
+	a.setOperationResult(a.ensureService().VMSet(id, args))
 	a.syncAfterServiceMutation()
 	if _, ok := args["vnc"]; ok && a.shouldRefreshRuntimeAfterMutation() {
 		a.refreshWorkloadStates()
 	}
 }
 
-func (a *App) vmNICAdd(id string, args map[string]string) {
-	a.State.Message = a.ensureService().VMNICAdd(id, args)
+func (a *App) vmNICAdd(id string, args map[string]string) topology.Result {
+	result := a.ensureService().VMNICAdd(id, args)
+	a.setOperationResult(result)
 	a.syncAfterServiceMutation()
+	return result
 }
 
 func (a *App) vmNICConnect(id, index string, args map[string]string) {
-	a.State.Message = a.ensureService().VMNICConnect(id, index, args)
+	a.setOperationResult(a.ensureService().VMNICConnect(id, index, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) vmNICDelete(id, index string) {
-	a.State.Message = a.ensureService().VMNICDelete(id, index)
+	a.setOperationResult(a.ensureService().VMNICDelete(id, index))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) vmDelete(id string) {
-	a.State.Message = a.ensureService().VMDelete(id)
+	a.setOperationResult(a.ensureService().VMDelete(id))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) switchCreate(id string, args map[string]string) {
-	a.State.Message = a.ensureService().SwitchCreate(id, args)
+	a.setOperationResult(a.ensureService().SwitchCreate(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) switchSet(id string, args map[string]string) {
-	a.State.Message = a.ensureService().SwitchSet(id, args)
+	a.setOperationResult(a.ensureService().SwitchSet(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) switchDisconnectExternal(id, externalID string) {
-	a.State.Message = a.ensureService().SwitchDisconnectExternal(id, externalID)
+	a.setOperationResult(a.ensureService().SwitchDisconnectExternal(id, externalID))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) switchDelete(id string) {
-	a.State.Message = a.ensureService().SwitchDelete(id)
+	a.setOperationResult(a.ensureService().SwitchDelete(id))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) externalCreate(id string, args map[string]string) {
-	a.State.Message = a.ensureService().ExternalCreate(id, args)
+	a.setOperationResult(a.ensureService().ExternalCreate(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) externalSet(id string, args map[string]string) {
-	a.State.Message = a.ensureService().ExternalSet(id, args)
+	a.setOperationResult(a.ensureService().ExternalSet(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) externalDelete(id string) {
-	a.State.Message = a.ensureService().ExternalDelete(id)
+	a.setOperationResult(a.ensureService().ExternalDelete(id))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) containerCreate(id string, args map[string]string) {
-	a.State.Message = a.ensureService().ContainerCreate(id, args)
+	a.setOperationResult(a.ensureService().ContainerCreate(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) containerSet(id string, args map[string]string) {
-	a.State.Message = a.ensureService().ContainerSet(id, args)
+	a.setOperationResult(a.ensureService().ContainerSet(id, args))
 	a.syncAfterServiceMutation()
 }
 
-func (a *App) containerNICAdd(id string, args map[string]string) {
-	a.State.Message = a.ensureService().ContainerNICAdd(id, args)
+func (a *App) containerNICAdd(id string, args map[string]string) topology.Result {
+	result := a.ensureService().ContainerNICAdd(id, args)
+	a.setOperationResult(result)
 	a.syncAfterServiceMutation()
+	return result
 }
 
 func (a *App) containerNICConnect(id, index string, args map[string]string) {
-	a.State.Message = a.ensureService().ContainerNICConnect(id, index, args)
+	a.setOperationResult(a.ensureService().ContainerNICConnect(id, index, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) containerNICDelete(id, index string) {
-	a.State.Message = a.ensureService().ContainerNICDelete(id, index)
+	a.setOperationResult(a.ensureService().ContainerNICDelete(id, index))
 	a.syncAfterServiceMutation()
 }
 
@@ -105,23 +109,24 @@ func (a *App) deleteNIC(node Node, index string) {
 }
 
 func (a *App) nicConnectDirect(sourceType, sourceID, index, targetType, targetID string) {
-	a.State.Message = a.ensureService().NICConnectDirect(sourceType, sourceID, index, targetType, targetID)
+	a.setOperationResult(a.ensureService().NICConnectDirect(sourceType, sourceID, index, targetType, targetID))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) nicConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex string) {
-	a.State.Message = a.ensureService().NICConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex)
+	a.setOperationResult(a.ensureService().NICConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) nicDisconnect(sourceType, sourceID, index string) bool {
-	a.State.Message = a.ensureService().NICDisconnect(sourceType, sourceID, index)
+	result := a.ensureService().NICDisconnect(sourceType, sourceID, index)
+	a.setOperationResult(result)
 	a.syncAfterServiceMutation()
-	return strings.HasPrefix(a.State.Message, "disconnected nic")
+	return result.OK()
 }
 
 func (a *App) containerDelete(id string) {
-	a.State.Message = a.ensureService().ContainerDelete(id)
+	a.setOperationResult(a.ensureService().ContainerDelete(id))
 	a.syncAfterServiceMutation()
 }
 

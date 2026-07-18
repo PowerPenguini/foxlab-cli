@@ -6,37 +6,37 @@ import (
 	"foxlab-cli/internal/lab"
 )
 
-func (s *Service) VMCreate(name string, args map[string]string) string {
+func (s *Service) VMCreate(name string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "vm create needs a loaded .lab file"
+		return Failure("vm create needs a loaded .lab file")
 	}
 	name = firstNonEmpty(args["name"], name)
 	if name == "" {
-		return "usage: vm create <name> [cpus=N] [memory=N] [switch=NAME|uplink=NAME]"
+		return Failure("usage: vm create <name> [cpus=N] [memory=N] [switch=NAME|uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
-		return err
+		return Failure(err)
 	}
 	if invalid := unexpectedVMCreateArgs(args); len(invalid) > 0 {
-		return "unsupported vm create argument: " + invalid[0]
+		return Failure("unsupported vm create argument: " + invalid[0])
 	}
 	cpus := 2
 	if value, present, ok := positiveIntField(args, "cpus"); present {
 		if !ok {
-			return "invalid vm cpus: " + args["cpus"]
+			return Failure("invalid vm cpus: " + args["cpus"])
 		}
 		cpus = value
 	}
 	memory := 2048
 	if value, present, ok := positiveIntField(args, "memory"); present {
 		if !ok {
-			return "invalid vm memory: " + args["memory"]
+			return Failure("invalid vm memory: " + args["memory"])
 		}
 		memory = value
 	}
 	if value, present, ok := positiveIntField(args, "mem"); present {
 		if !ok {
-			return "invalid vm memory: " + args["mem"]
+			return Failure("invalid vm memory: " + args["mem"])
 		}
 		memory = value
 	}
@@ -45,7 +45,7 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 		var ok bool
 		switchRef, ok = s.resolveSwitchID(value)
 		if !ok {
-			return "create failed: switch not found: " + value
+			return Failure("create failed: switch not found: " + value)
 		}
 	}
 	externalRef := ""
@@ -53,7 +53,7 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 		var ok bool
 		externalRef, ok = s.resolveExternalID(value)
 		if !ok {
-			return "create failed: uplink not found: " + value
+			return Failure("create failed: uplink not found: " + value)
 		}
 	}
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
@@ -61,12 +61,12 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 	}
 	id := name
 	if err := s.validateVMNetworkRefs(name, switchRef, externalRef); err != nil {
-		return "create failed: " + err.Error()
+		return FailureWithCause("create failed: "+err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "create failed: " + err.Error()
+		return FailureWithCause("create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	vm := lab.VM{
 		ID:       id,
 		MemoryMB: memory,
@@ -84,55 +84,55 @@ func (s *Service) VMCreate(name string, args map[string]string) string {
 		s.Lab.Layout.Nodes = map[string]lab.Position{}
 	}
 	s.Lab.Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.Lab.VMs)*96}
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "create failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("create failed: "+err.Error(), err)
 	}
-	return "created vm:" + name
+	return Success("created vm:" + name)
 }
 
-func (s *Service) VMSet(ref string, args map[string]string) string {
+func (s *Service) VMSet(ref string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "vm set needs a loaded .lab file"
+		return Failure("vm set needs a loaded .lab file")
 	}
 	id, ok := s.resolveVMID(ref)
 	if !ok {
-		return "vm not found: " + ref
+		return Failure("vm not found: " + ref)
 	}
 	for i := range s.Lab.VMs {
 		if s.Lab.VMs[i].ID != id {
 			continue
 		}
 		if invalid := unexpectedVMSetArgs(args); len(invalid) > 0 {
-			return "unsupported vm set argument: " + invalid[0]
+			return Failure("unsupported vm set argument: " + invalid[0])
 		}
 		if len(args) == 0 {
-			return "configured " + s.workloadDisplayRef("vm", id)
+			return Info("configured " + s.workloadDisplayRef("vm", id))
 		}
 		vncEnabled := false
 		if value, ok := args["vnc"]; ok {
 			var valid bool
 			vncEnabled, valid = parseBool(value)
 			if !valid {
-				return "invalid vm vnc: " + value
+				return Failure("invalid vm vnc: " + value)
 			}
 		}
 		cpus := 0
 		if value, present, ok := positiveIntField(args, "cpus"); present {
 			if !ok {
-				return "invalid vm cpus: " + args["cpus"]
+				return Failure("invalid vm cpus: " + args["cpus"])
 			}
 			cpus = value
 		}
 		memory := 0
 		if value, present, ok := positiveIntField(args, "memory"); present {
 			if !ok {
-				return "invalid vm memory: " + args["memory"]
+				return Failure("invalid vm memory: " + args["memory"])
 			}
 			memory = value
 		}
 		if value, present, ok := positiveIntField(args, "mem"); present {
 			if !ok {
-				return "invalid vm memory: " + args["mem"]
+				return Failure("invalid vm memory: " + args["mem"])
 			}
 			memory = value
 		}
@@ -141,7 +141,7 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 			var ok bool
 			switchRef, ok = s.resolveSwitchID(value)
 			if !ok {
-				return "config failed: switch not found: " + value
+				return Failure("config failed: switch not found: " + value)
 			}
 		}
 		externalRef := ""
@@ -149,20 +149,20 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 			var ok bool
 			externalRef, ok = s.resolveExternalID(value)
 			if !ok {
-				return "config failed: uplink not found: " + value
+				return Failure("config failed: uplink not found: " + value)
 			}
 		}
 		if err := s.validateVMNetworkRefs(s.nodeDisplayName("vm", id), switchRef, externalRef); err != nil {
-			return "config failed: " + err.Error()
+			return FailureWithCause("config failed: "+err.Error(), err)
 		}
 		if err := s.requireSavePath(); err != nil {
-			return "config failed: " + err.Error()
+			return FailureWithCause("config failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
+		mutation := s.beginLabMutation()
 		renamed := false
 		if value := args["name"]; value != "" {
 			if err := s.renameNodeID("vm", id, value); err != nil {
-				return "vm rename failed: " + err.Error()
+				return FailureWithCause("vm rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
@@ -190,30 +190,30 @@ func (s *Service) VMSet(ref string, args map[string]string) string {
 			s.removeNetworkLinksForNode("vm", id)
 			s.Lab.VMs[i].Networks = []lab.VMNetwork{{ExternalLink: externalRef}}
 		}
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "config failed: " + err.Error()
+		if err := mutation.Commit(); err != nil {
+			return FailureWithCause("config failed: "+err.Error(), err)
 		}
 		message := "configured " + s.workloadDisplayRef("vm", id)
 		if renamed {
 			message += "; runtime will be recreated"
 		}
-		return message
+		return ChangedInfo(message)
 	}
-	return "vm not found: " + id
+	return Failure("vm not found: " + id)
 }
 
-func (s *Service) VMDelete(ref string) string {
+func (s *Service) VMDelete(ref string) Result {
 	if s.Lab == nil {
-		return "vm delete needs a loaded .lab file"
+		return Failure("vm delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveVMID(ref)
 	if !ok {
-		return "vm not found: " + ref
+		return Failure("vm not found: " + ref)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "delete failed: " + err.Error()
+		return FailureWithCause("delete failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	filtered := s.Lab.VMs[:0]
 	for _, vm := range s.Lab.VMs {
 		if vm.ID == id {
@@ -226,35 +226,35 @@ func (s *Service) VMDelete(ref string) string {
 	s.detachDisksForNode("vm", id)
 	delete(s.Lab.Layout.Nodes, id)
 	s.removeLayoutLinksForNode("vm", id)
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "delete failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("delete failed: "+err.Error(), err)
 	}
-	return "deleted " + s.workloadDisplayRef("vm", id)
+	return Success("deleted " + s.workloadDisplayRef("vm", id))
 }
 
-func (s *Service) ContainerCreate(name string, args map[string]string) string {
+func (s *Service) ContainerCreate(name string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "container create needs a loaded .lab file"
+		return Failure("container create needs a loaded .lab file")
 	}
 	name = firstNonEmpty(args["name"], name)
 	if name == "" {
-		return "usage: container create <name> [image=REF] [command=CMD] [switch=NAME|uplink=NAME]"
+		return Failure("usage: container create <name> [image=REF] [command=CMD] [switch=NAME|uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
-		return err
+		return Failure(err)
 	}
 	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
-		return "unsupported container create argument: " + invalid[0]
+		return Failure("unsupported container create argument: " + invalid[0])
 	}
 	if err := validateNICMACArg("container nic", args["mac"]); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	switchRef := ""
 	if value := args["switch"]; value != "" {
 		var ok bool
 		switchRef, ok = s.resolveSwitchID(value)
 		if !ok {
-			return "container create failed: switch not found: " + value
+			return Failure("container create failed: switch not found: " + value)
 		}
 	}
 	externalRef := ""
@@ -262,7 +262,7 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 		var ok bool
 		externalRef, ok = s.resolveExternalID(value)
 		if !ok {
-			return "container create failed: uplink not found: " + value
+			return Failure("container create failed: uplink not found: " + value)
 		}
 	}
 	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
@@ -270,12 +270,12 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 	}
 	id := name
 	if err := s.validateContainerNetworkRefs(name, switchRef, externalRef); err != nil {
-		return "container create failed: " + err.Error()
+		return FailureWithCause("container create failed: "+err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "container create failed: " + err.Error()
+		return FailureWithCause("container create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	ct := lab.Container{
 		ID:      id,
 		Image:   firstNonEmpty(args["image"], "?"),
@@ -294,39 +294,39 @@ func (s *Service) ContainerCreate(name string, args map[string]string) string {
 		s.Lab.Layout.Nodes = map[string]lab.Position{}
 	}
 	s.Lab.Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.Lab.Containers)*96}
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "container create failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("container create failed: "+err.Error(), err)
 	}
-	return "created container:" + name
+	return Success("created container:" + name)
 }
 
-func (s *Service) ContainerSet(ref string, args map[string]string) string {
+func (s *Service) ContainerSet(ref string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "container set needs a loaded .lab file"
+		return Failure("container set needs a loaded .lab file")
 	}
 	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
-		return "unsupported container set argument: " + invalid[0]
+		return Failure("unsupported container set argument: " + invalid[0])
 	}
 	id, ok := s.resolveContainerID(ref)
 	if !ok {
-		return "container not found: " + ref
+		return Failure("container not found: " + ref)
 	}
 	for i := range s.Lab.Containers {
 		if s.Lab.Containers[i].ID != id {
 			continue
 		}
 		if len(args) == 0 {
-			return "configured " + s.workloadDisplayRef("container", id)
+			return Info("configured " + s.workloadDisplayRef("container", id))
 		}
 		if err := validateNICMACArg("container nic", args["mac"]); err != nil {
-			return err.Error()
+			return FailureWithCause(err.Error(), err)
 		}
 		switchRef := ""
 		if value := args["switch"]; value != "" {
 			var ok bool
 			switchRef, ok = s.resolveSwitchID(value)
 			if !ok {
-				return "container config failed: switch not found: " + value
+				return Failure("container config failed: switch not found: " + value)
 			}
 		}
 		externalRef := ""
@@ -334,20 +334,20 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 			var ok bool
 			externalRef, ok = s.resolveExternalID(value)
 			if !ok {
-				return "container config failed: uplink not found: " + value
+				return Failure("container config failed: uplink not found: " + value)
 			}
 		}
 		if err := s.validateContainerNetworkRefs(s.nodeDisplayName("container", id), switchRef, externalRef); err != nil {
-			return "container config failed: " + err.Error()
+			return FailureWithCause("container config failed: "+err.Error(), err)
 		}
 		if err := s.requireSavePath(); err != nil {
-			return "container config failed: " + err.Error()
+			return FailureWithCause("container config failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
+		mutation := s.beginLabMutation()
 		renamed := false
 		if value := args["name"]; value != "" {
 			if err := s.renameNodeID("container", id, value); err != nil {
-				return "container rename failed: " + err.Error()
+				return FailureWithCause("container rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
@@ -374,30 +374,30 @@ func (s *Service) ContainerSet(ref string, args map[string]string) string {
 		} else if value := args["mac"]; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
 			s.Lab.Containers[i].Networks[0].MAC = value
 		}
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "container config failed: " + err.Error()
+		if err := mutation.Commit(); err != nil {
+			return FailureWithCause("container config failed: "+err.Error(), err)
 		}
 		message := "configured " + s.workloadDisplayRef("container", id)
 		if renamed {
 			message += "; runtime will be recreated"
 		}
-		return message
+		return ChangedInfo(message)
 	}
-	return "container not found: " + id
+	return Failure("container not found: " + id)
 }
 
-func (s *Service) ContainerDelete(ref string) string {
+func (s *Service) ContainerDelete(ref string) Result {
 	if s.Lab == nil {
-		return "container delete needs a loaded .lab file"
+		return Failure("container delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveContainerID(ref)
 	if !ok {
-		return "container not found: " + ref
+		return Failure("container not found: " + ref)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "container delete failed: " + err.Error()
+		return FailureWithCause("container delete failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	containers := s.Lab.Containers[:0]
 	for _, ct := range s.Lab.Containers {
 		if ct.ID == id {
@@ -410,8 +410,8 @@ func (s *Service) ContainerDelete(ref string) string {
 	s.detachDisksForNode("container", id)
 	delete(s.Lab.Layout.Nodes, id)
 	s.removeLayoutLinksForNode("container", id)
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "container delete failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("container delete failed: "+err.Error(), err)
 	}
-	return "deleted " + s.workloadDisplayRef("container", id)
+	return Success("deleted " + s.workloadDisplayRef("container", id))
 }

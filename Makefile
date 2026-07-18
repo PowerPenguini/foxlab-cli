@@ -33,7 +33,8 @@ install: build
 	@if [ -z "$(DESTDIR)" ]; then \
 		$(SYSTEMCTL_USER) disable --now foxlabd.service 2>/dev/null || true; \
 		$(SYSTEMCTL) daemon-reload; \
-		$(SYSTEMCTL) enable --now foxlabd.service; \
+		$(SYSTEMCTL) enable foxlabd.service; \
+		$(SYSTEMCTL) restart foxlabd.service; \
 	fi
 
 uninstall:

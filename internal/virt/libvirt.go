@@ -321,7 +321,7 @@ func (r *LibvirtRuntime) defineVM(l *lab.Lab, vm lab.VM) (*libvirt.Domain, error
 		if nic.Switch == "" {
 			continue
 		}
-		_, ok := findSwitch(l, nic.Switch)
+		_, ok := lab.FindSwitch(l, nic.Switch)
 		if !ok {
 			return nil, fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 		}

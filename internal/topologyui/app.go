@@ -23,6 +23,37 @@ type WorkloadRuntime interface {
 	Close() error
 }
 
+type appRuntimeState struct {
+	mu sync.Mutex
+}
+
+type appInputState struct {
+	pendingKeys []string
+	mouse       mouseInteractionState
+}
+
+type mouseInteractionState struct {
+	downNodeID   string
+	downNodeType string
+	downX        int
+	downY        int
+	dragStartX   int
+	dragStartY   int
+	dragMoved    bool
+	panActive    bool
+	panDownX     int
+	panDownY     int
+	panStartX    int
+	panStartY    int
+}
+
+type appNotificationState struct {
+	message         string
+	setAt           time.Time
+	messageRevision uint64
+	nextRevision    uint64
+}
+
 type App struct {
 	Model                 Model
 	State                 ViewState
@@ -56,27 +87,14 @@ type App struct {
 	StatusRefreshInterval time.Duration
 	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 	DaemonController      DaemonController
-	runtimeMu             sync.Mutex
-	pendingKeys           []string
-	mouseDownNodeID       string
-	mouseDownNodeType     string
-	mouseDownX            int
-	mouseDownY            int
-	mouseDragStartX       int
-	mouseDragStartY       int
-	mouseDragMoved        bool
-	mousePanActive        bool
-	mousePanDownX         int
-	mousePanDownY         int
-	mousePanStartX        int
-	mousePanStartY        int
-	messageLifetimeValue  string
-	messageLifetimeSetAt  time.Time
+	runtimeState          appRuntimeState
+	inputState            appInputState
+	notificationState     appNotificationState
 }
 
 const runtimeStatusTimeout = 5 * time.Second
 const daemonApplyTimeout = 90 * time.Second
-const notificationMessageTTL = 20 * time.Second
+const notificationMessageTTL = 10 * time.Second
 
 func (a *App) Run() error {
 	if a.In == nil {
@@ -247,32 +265,44 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 }
 
 func (a *App) updateMessageLifetime(now time.Time) bool {
-	if a.State.Message != a.messageLifetimeValue {
-		a.messageLifetimeValue = a.State.Message
+	notification, ok := notificationFromState(a.State)
+	revision := uint64(0)
+	if ok {
+		revision = notification.Revision
+	}
+	if a.State.Message != a.notificationState.message || revision != a.notificationState.messageRevision {
+		a.notificationState.message = a.State.Message
+		a.notificationState.messageRevision = revision
 		if a.State.Message == "" {
-			a.messageLifetimeSetAt = time.Time{}
+			a.notificationState.setAt = time.Time{}
 		} else {
-			a.messageLifetimeSetAt = now
+			a.notificationState.setAt = now
 		}
 		return false
 	}
-	if a.State.Message == "" || a.messageLifetimeSetAt.IsZero() {
+	if a.State.Message == "" || a.notificationState.setAt.IsZero() {
 		return false
 	}
-	if now.Sub(a.messageLifetimeSetAt) < notificationMessageTTL {
+	if now.Sub(a.notificationState.setAt) < notificationMessageTTL {
 		return false
 	}
-	a.State.Message = ""
-	a.messageLifetimeValue = ""
-	a.messageLifetimeSetAt = time.Time{}
+	a.dismissNotification()
 	return true
+}
+
+func (a *App) dismissNotification() {
+	a.State.Message = ""
+	a.State.Notification = Notification{}
+	a.notificationState.message = ""
+	a.notificationState.setAt = time.Time{}
+	a.notificationState.messageRevision = 0
 }
 
 func (a *App) animationActive() bool {
 	if a.State.StatusRefreshing {
 		return true
 	}
-	if animatedStateFromMessage(a.State.Message) {
+	if notification, ok := notificationFromState(a.State); ok && (notification.Busy || animatedStateFromMessage(notification.Text)) {
 		return true
 	}
 	for _, node := range a.Model.Nodes {
@@ -326,14 +356,14 @@ func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdat
 			return
 		}
 		defer closeRuntime()
-		a.runtimeMu.Lock()
+		a.runtimeState.mu.Lock()
 		states, err := runtime.States(statusCtx, snapshot)
 		if err != nil {
 			update := statusUpdate{lab: l, message: "runtime status failed: " + err.Error()}
 			if ports, portErr := runtimeVNCPorts(statusCtx, runtime, snapshot); portErr == nil {
 				update.vncPorts = cloneRuntimePortMap(ports)
 			}
-			a.runtimeMu.Unlock()
+			a.runtimeState.mu.Unlock()
 			sendStatusUpdate(ctx, updates, update)
 			return
 		}
@@ -348,7 +378,7 @@ func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdat
 			update.applyStatus = status
 			update.applyStatusReceived = true
 		}
-		a.runtimeMu.Unlock()
+		a.runtimeState.mu.Unlock()
 		sendStatusUpdate(ctx, updates, update)
 	}()
 }
@@ -412,7 +442,7 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 		a.RouteCacheHeight == height &&
 		a.RouteCachePanX == a.State.PanX &&
 		a.RouteCachePanY == a.State.PanY
-	reusePanningRoutes := a.mousePanActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
+	reusePanningRoutes := a.inputState.mouse.panActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
 	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
 		_, routes := planRenderRoutes(a.Model, renderState, width, height)
 		a.RouteCacheKey = key
@@ -568,8 +598,8 @@ func (a *App) refreshWorkloadStates() bool {
 		return true
 	}
 	defer closeRuntime()
-	a.runtimeMu.Lock()
-	defer a.runtimeMu.Unlock()
+	a.runtimeState.mu.Lock()
+	defer a.runtimeState.mu.Unlock()
 	states, err := runtime.States(ctx, a.Lab)
 	if err != nil {
 		a.State.Message = "runtime status failed: " + err.Error()
@@ -602,8 +632,8 @@ func (a *App) refreshDiskOperationStates() bool {
 		return false
 	}
 	defer closeRuntime()
-	a.runtimeMu.Lock()
-	defer a.runtimeMu.Unlock()
+	a.runtimeState.mu.Lock()
+	defer a.runtimeState.mu.Unlock()
 	states, err := runtime.States(ctx, a.Lab)
 	if err != nil {
 		a.State.Message = "runtime status failed: " + err.Error()

@@ -25,7 +25,7 @@ func (b *Bridge) ensureNATSwitchBridge(ctx context.Context, l *lab.Lab, sw lab.S
 		return b.ensureNATBridge(ctx, bridge, gateway, cidr, "")
 	}
 	for _, linkID := range linkIDs {
-		link, ok := findExternalLink(l, linkID)
+		link, ok := lab.FindExternalLink(l, linkID)
 		if !ok {
 			return fmt.Errorf("switch %q references missing external link %q", sw.ID, linkID)
 		}

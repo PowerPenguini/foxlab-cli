@@ -9,7 +9,7 @@ import (
 
 func (b *Bridge) vmNICBridge(ctx context.Context, l *lab.Lab, vm lab.VM, index int, nic lab.VMNetwork) (string, error) {
 	if nic.Switch != "" {
-		sw, ok := findSwitch(l, nic.Switch)
+		sw, ok := lab.FindSwitch(l, nic.Switch)
 		if !ok {
 			return "", fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 		}
@@ -18,7 +18,7 @@ func (b *Bridge) vmNICBridge(ctx context.Context, l *lab.Lab, vm lab.VM, index i
 		}
 		return l.ManagedSwitchBridgeName(sw), nil
 	}
-	if link, ok := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index}); ok {
+	if link, ok := lab.FindNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index}); ok {
 		bridge := l.ManagedNetworkLinkBridgeName(link)
 		if err := b.ensureBridge(ctx, bridge); err != nil {
 			return "", err
@@ -26,7 +26,7 @@ func (b *Bridge) vmNICBridge(ctx context.Context, l *lab.Lab, vm lab.VM, index i
 		return bridge, nil
 	}
 	if nic.ExternalLink != "" {
-		link, ok := findExternalLink(l, nic.ExternalLink)
+		link, ok := lab.FindExternalLink(l, nic.ExternalLink)
 		if !ok {
 			return "", fmt.Errorf("vm %q references missing external link %q", vm.ID, nic.ExternalLink)
 		}
@@ -53,7 +53,7 @@ func (b *Bridge) vmNICBridge(ctx context.Context, l *lab.Lab, vm lab.VM, index i
 
 func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct lab.Container, index int, nic lab.ContainerNetwork) (containerNICAttachTarget, error) {
 	if nic.Switch != "" {
-		sw, ok := findSwitch(l, nic.Switch)
+		sw, ok := lab.FindSwitch(l, nic.Switch)
 		if !ok {
 			return containerNICAttachTarget{}, fmt.Errorf("container %q references missing switch %q", ct.ID, nic.Switch)
 		}
@@ -81,7 +81,7 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 		return target, nil
 	}
 	if nic.ExternalLink != "" {
-		link, ok := findExternalLink(l, nic.ExternalLink)
+		link, ok := lab.FindExternalLink(l, nic.ExternalLink)
 		if !ok {
 			return containerNICAttachTarget{}, fmt.Errorf("container %q references missing external link %q", ct.ID, nic.ExternalLink)
 		}
@@ -114,7 +114,7 @@ func (b *Bridge) containerNICAttachTarget(ctx context.Context, l *lab.Lab, ct la
 		}
 		return containerNICAttachTarget{Interface: link.Interface, Mode: lab.ExternalModeDirect}, nil
 	}
-	if link, ok := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "container", ID: ct.ID, NIC: index}); ok {
+	if link, ok := lab.FindNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "container", ID: ct.ID, NIC: index}); ok {
 		bridge := l.ManagedNetworkLinkBridgeName(link)
 		if err := b.ensureBridge(ctx, bridge); err != nil {
 			return containerNICAttachTarget{}, err

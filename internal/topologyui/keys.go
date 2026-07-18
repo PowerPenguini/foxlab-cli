@@ -15,9 +15,9 @@ const (
 )
 
 func readAppKey(a *App) (string, error) {
-	if len(a.pendingKeys) > 0 {
-		key := a.pendingKeys[0]
-		a.pendingKeys = a.pendingKeys[1:]
+	if len(a.inputState.pendingKeys) > 0 {
+		key := a.inputState.pendingKeys[0]
+		a.inputState.pendingKeys = a.inputState.pendingKeys[1:]
 		return key, nil
 	}
 	if ok, err := waitReadable(int(a.In.Fd()), spinnerInterval); err != nil || !ok {
@@ -28,7 +28,7 @@ func readAppKey(a *App) (string, error) {
 		return "", err
 	}
 	if len(keys) > 1 {
-		a.pendingKeys = append(a.pendingKeys, keys[1:]...)
+		a.inputState.pendingKeys = append(a.inputState.pendingKeys, keys[1:]...)
 	}
 	return keys[0], nil
 }
