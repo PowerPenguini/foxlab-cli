@@ -9,7 +9,14 @@ import (
 	"strings"
 )
 
-var runDiskCommand = func(name string, args ...string) error {
+type DiskCommandRunner interface {
+	Run(name string, args ...string) error
+	Output(name string, args ...string) ([]byte, error)
+}
+
+type execDiskCommandRunner struct{}
+
+func (execDiskCommandRunner) Run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		text := strings.TrimSpace(string(out))
@@ -21,7 +28,7 @@ var runDiskCommand = func(name string, args ...string) error {
 	return nil
 }
 
-var runDiskCommandOutput = func(name string, args ...string) ([]byte, error) {
+func (execDiskCommandRunner) Output(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -32,6 +39,25 @@ var runDiskCommandOutput = func(name string, args ...string) ([]byte, error) {
 		return out, fmt.Errorf("%w: %s", err, text)
 	}
 	return out, nil
+}
+
+type DiskCommandFuncs struct {
+	RunFunc    func(name string, args ...string) error
+	OutputFunc func(name string, args ...string) ([]byte, error)
+}
+
+func (f DiskCommandFuncs) Run(name string, args ...string) error {
+	if f.RunFunc == nil {
+		return execDiskCommandRunner{}.Run(name, args...)
+	}
+	return f.RunFunc(name, args...)
+}
+
+func (f DiskCommandFuncs) Output(name string, args ...string) ([]byte, error) {
+	if f.OutputFunc == nil {
+		return execDiskCommandRunner{}.Output(name, args...)
+	}
+	return f.OutputFunc(name, args...)
 }
 
 func ensureDiskDirectoryWritable(dir string) error {

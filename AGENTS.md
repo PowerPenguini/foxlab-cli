@@ -16,6 +16,7 @@
 - `internal/virt` owns libvirt XML, console, VNC, and VM-facing integration.
 - `internal/containerd` owns containerd runtime integration, shell, disk layer mounting, and container lifecycle behavior.
 - `internal/workload` owns runtime-neutral workload reconciliation interfaces.
+- `internal/daemoncontrol` owns systemd-facing daemon apply and unit-management behavior.
 - `internal/hostnet` owns host bridge/network helpers.
 - `internal/tui` owns low-level terminal canvas primitives.
 
@@ -63,6 +64,7 @@
 - `internal/virt`: libvirt XML, console, VNC, and VM runtime integration.
 - `internal/containerd`: containerd runtime, shell, disk preparation, mount cleanup, and container lifecycle integration.
 - `internal/workload`: shared workload runtime contracts and reconciliation.
+- `internal/daemoncontrol`: systemd service status, apply, drop-in, and unit management.
 - `internal/hostnet`: host networking helpers.
 - `internal/tui`: low-level canvas/rendering primitives.
 - `internal/tui/graph`: minimal graph model consumed by rendering code.

@@ -64,6 +64,12 @@ func (a *App) handleMouseKey(key string) bool {
 	if event.button != 0 {
 		return false
 	}
+	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.ViewHeight); ok && xyInRect(event.x, event.y, notification) {
+		a.clearMouseDrag()
+		a.clearMousePan()
+		a.dismissNotification()
+		return false
+	}
 	a.clearMouseDrag()
 	a.clearMousePan()
 	if a.State.PaletteOpen {
@@ -123,46 +129,46 @@ func (a *App) recordMouseNodePress(index int, event mouseEvent) {
 		return
 	}
 	node := a.Model.Nodes[index]
-	a.mouseDownNodeID = node.ID
-	a.mouseDownNodeType = node.Type
-	a.mouseDownX = event.x
-	a.mouseDownY = event.y
-	a.mouseDragStartX = node.X
-	a.mouseDragStartY = node.Y
-	a.mouseDragMoved = false
+	a.inputState.mouse.downNodeID = node.ID
+	a.inputState.mouse.downNodeType = node.Type
+	a.inputState.mouse.downX = event.x
+	a.inputState.mouse.downY = event.y
+	a.inputState.mouse.dragStartX = node.X
+	a.inputState.mouse.dragStartY = node.Y
+	a.inputState.mouse.dragMoved = false
 }
 
 func (a *App) clearMouseDrag() {
-	a.mouseDownNodeID = ""
-	a.mouseDownNodeType = ""
-	a.mouseDownX = 0
-	a.mouseDownY = 0
-	a.mouseDragStartX = 0
-	a.mouseDragStartY = 0
-	a.mouseDragMoved = false
+	a.inputState.mouse.downNodeID = ""
+	a.inputState.mouse.downNodeType = ""
+	a.inputState.mouse.downX = 0
+	a.inputState.mouse.downY = 0
+	a.inputState.mouse.dragStartX = 0
+	a.inputState.mouse.dragStartY = 0
+	a.inputState.mouse.dragMoved = false
 }
 
 func (a *App) recordMousePanPress(event mouseEvent) {
-	a.mousePanActive = true
-	a.mousePanDownX = event.x
-	a.mousePanDownY = event.y
-	a.mousePanStartX = a.State.PanX
-	a.mousePanStartY = a.State.PanY
+	a.inputState.mouse.panActive = true
+	a.inputState.mouse.panDownX = event.x
+	a.inputState.mouse.panDownY = event.y
+	a.inputState.mouse.panStartX = a.State.PanX
+	a.inputState.mouse.panStartY = a.State.PanY
 }
 
 func (a *App) clearMousePan() {
-	a.mousePanActive = false
-	a.mousePanDownX = 0
-	a.mousePanDownY = 0
-	a.mousePanStartX = 0
-	a.mousePanStartY = 0
+	a.inputState.mouse.panActive = false
+	a.inputState.mouse.panDownX = 0
+	a.inputState.mouse.panDownY = 0
+	a.inputState.mouse.panStartX = 0
+	a.inputState.mouse.panStartY = 0
 }
 
 func (a *App) handleMouseDrag(event mouseEvent) {
 	if event.button != 0 {
 		return
 	}
-	if a.mousePanActive {
+	if a.inputState.mouse.panActive {
 		a.handleMousePanDrag(event)
 		return
 	}
@@ -171,22 +177,22 @@ func (a *App) handleMouseDrag(event mouseEvent) {
 		a.clearMouseDrag()
 		return
 	}
-	if !a.State.MoveMode || a.State.MoveNodeID != a.mouseDownNodeID || a.State.MoveNodeType != a.mouseDownNodeType {
+	if !a.State.MoveMode || a.State.MoveNodeID != a.inputState.mouse.downNodeID || a.State.MoveNodeType != a.inputState.mouse.downNodeType {
 		a.State.MoveMode = true
-		a.State.MoveNodeID = a.mouseDownNodeID
-		a.State.MoveNodeType = a.mouseDownNodeType
-		a.State.MoveStartX = a.mouseDragStartX
-		a.State.MoveStartY = a.mouseDragStartY
+		a.State.MoveNodeID = a.inputState.mouse.downNodeID
+		a.State.MoveNodeType = a.inputState.mouse.downNodeType
+		a.State.MoveStartX = a.inputState.mouse.dragStartX
+		a.State.MoveStartY = a.inputState.mouse.dragStartY
 	}
-	dx := event.x - a.mouseDownX
-	dy := event.y - a.mouseDownY
+	dx := event.x - a.inputState.mouse.downX
+	dy := event.y - a.inputState.mouse.downY
 	maxX, maxY := a.moveBounds()
-	nextX := clamp(a.mouseDragStartX+dx, 0, maxX)
-	nextY := clamp(a.mouseDragStartY+dy, 0, maxY)
+	nextX := clamp(a.inputState.mouse.dragStartX+dx, 0, maxX)
+	nextY := clamp(a.inputState.mouse.dragStartY+dy, 0, maxY)
 	if a.Model.Nodes[index].X != nextX || a.Model.Nodes[index].Y != nextY {
 		a.Model.Nodes[index].X = nextX
 		a.Model.Nodes[index].Y = nextY
-		a.mouseDragMoved = true
+		a.inputState.mouse.dragMoved = true
 	}
 	a.State.Focus = FocusGraph
 	a.State.Selected = index
@@ -196,9 +202,9 @@ func (a *App) handleMouseDrag(event mouseEvent) {
 }
 
 func (a *App) handleMousePanDrag(event mouseEvent) {
-	dx := event.x - a.mousePanDownX
-	dy := event.y - a.mousePanDownY
-	nextX, nextY := clampPanForModel(a.Model, a.graphBounds(), a.mousePanStartX+dx, a.mousePanStartY+dy)
+	dx := event.x - a.inputState.mouse.panDownX
+	dy := event.y - a.inputState.mouse.panDownY
+	nextX, nextY := clampPanForModel(a.Model, a.graphBounds(), a.inputState.mouse.panStartX+dx, a.inputState.mouse.panStartY+dy)
 	a.State.PanX = nextX
 	a.State.PanY = nextY
 	a.State.Focus = FocusGraph
@@ -211,14 +217,14 @@ func (a *App) handleMouseRelease(event mouseEvent) {
 	if event.button != 0 {
 		return
 	}
-	if a.mousePanActive {
+	if a.inputState.mouse.panActive {
 		a.clearMousePan()
 		return
 	}
-	if a.mouseDownNodeID == "" {
+	if a.inputState.mouse.downNodeID == "" {
 		return
 	}
-	moved := a.mouseDragMoved
+	moved := a.inputState.mouse.dragMoved
 	a.clearMouseDrag()
 	if moved && a.State.MoveMode {
 		a.saveActiveMove()
@@ -226,11 +232,11 @@ func (a *App) handleMouseRelease(event mouseEvent) {
 }
 
 func (a *App) mouseDragNodeIndex() (int, bool) {
-	if a.mouseDownNodeID == "" {
+	if a.inputState.mouse.downNodeID == "" {
 		return 0, false
 	}
 	for i, node := range a.Model.Nodes {
-		if node.ID == a.mouseDownNodeID && node.Type == a.mouseDownNodeType {
+		if node.ID == a.inputState.mouse.downNodeID && node.Type == a.inputState.mouse.downNodeType {
 			return i, true
 		}
 	}
@@ -271,6 +277,9 @@ func (a *App) prepareMouseClickFeedback(key string) bool {
 }
 
 func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
+	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.ViewHeight); ok && xyInRect(event.x, event.y, notification) {
+		return notification, true
+	}
 	if a.State.PaletteOpen {
 		return a.paletteFeedbackRect(event)
 	}

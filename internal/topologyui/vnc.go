@@ -124,8 +124,8 @@ func (a *App) refreshVNCWorkloadStatus(node Node) error {
 	defer closeRuntime()
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	a.runtimeMu.Lock()
-	defer a.runtimeMu.Unlock()
+	a.runtimeState.mu.Lock()
+	defer a.runtimeState.mu.Unlock()
 	var statesErr error
 	if states, err := runtime.States(ctx, a.Lab); err == nil {
 		a.WorkloadStates = cloneRuntimeStateMap(states)

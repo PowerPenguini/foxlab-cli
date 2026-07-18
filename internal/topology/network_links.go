@@ -7,134 +7,134 @@ import (
 	"foxlab-cli/internal/lab"
 )
 
-func (s *Service) NICConnectDirect(sourceType, sourceID, indexValue, targetType, targetID string) string {
+func (s *Service) NICConnectDirect(sourceType, sourceID, indexValue, targetType, targetID string) Result {
 	if s.Lab == nil {
-		return "nic connect needs a loaded .lab file"
+		return Failure("nic connect needs a loaded .lab file")
 	}
 	if !validDirectEndpointType(sourceType) || !validDirectEndpointType(targetType) {
-		return "direct link target must be vm or container"
+		return Failure("direct link target must be vm or container")
 	}
 	sourceRef := sourceID
 	targetRef := targetID
 	var ok bool
 	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
 	if !ok {
-		return sourceType + " not found: " + sourceRef
+		return Failure(sourceType + " not found: " + sourceRef)
 	}
 	targetID, ok = s.resolveWorkloadID(targetType, targetRef)
 	if !ok {
-		return targetType + " not found: " + targetRef
+		return Failure(targetType + " not found: " + targetRef)
 	}
 	sourceIndex, ok := nicIndexArg(indexValue)
 	if !ok {
-		return "usage: nic connect <source> <index> <target>"
+		return Failure("usage: nic connect <source> <index> <target>")
 	}
 	source := lab.NetworkEndpoint{Type: sourceType, ID: sourceID, NIC: sourceIndex}
 	if err := s.ensureDirectEndpointAvailable(source); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	targetIndex, err := s.firstAvailableDirectNIC(targetType, targetID, source)
 	if err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	target := lab.NetworkEndpoint{Type: targetType, ID: targetID, NIC: targetIndex}
 	if err := s.requireSavePath(); err != nil {
-		return "nic connect failed: " + err.Error()
+		return FailureWithCause("nic connect failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.NetworkLinks = append(s.Lab.NetworkLinks, lab.NetworkLink{From: source, To: target})
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "nic connect failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("nic connect failed: "+err.Error(), err)
 	}
-	return "connected direct " + sourceType + ":" + sourceID + " nic" + indexValue + " to " + targetType + ":" + targetID + " nic" + strconv.Itoa(targetIndex)
+	return Success("connected direct " + sourceType + ":" + sourceID + " nic" + indexValue + " to " + targetType + ":" + targetID + " nic" + strconv.Itoa(targetIndex))
 }
 
-func (s *Service) NICConnectDirectTo(sourceType, sourceID, sourceIndexValue, targetType, targetID, targetIndexValue string) string {
+func (s *Service) NICConnectDirectTo(sourceType, sourceID, sourceIndexValue, targetType, targetID, targetIndexValue string) Result {
 	if s.Lab == nil {
-		return "nic connect needs a loaded .lab file"
+		return Failure("nic connect needs a loaded .lab file")
 	}
 	if !validDirectEndpointType(sourceType) || !validDirectEndpointType(targetType) {
-		return "direct link target must be vm or container"
+		return Failure("direct link target must be vm or container")
 	}
 	sourceRef := sourceID
 	targetRef := targetID
 	var ok bool
 	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
 	if !ok {
-		return sourceType + " not found: " + sourceRef
+		return Failure(sourceType + " not found: " + sourceRef)
 	}
 	targetID, ok = s.resolveWorkloadID(targetType, targetRef)
 	if !ok {
-		return targetType + " not found: " + targetRef
+		return Failure(targetType + " not found: " + targetRef)
 	}
 	sourceIndex, ok := nicIndexArg(sourceIndexValue)
 	if !ok {
-		return "usage: nic connect <source> <index> <target> <target-index>"
+		return Failure("usage: nic connect <source> <index> <target> <target-index>")
 	}
 	targetIndex, ok := nicIndexArg(targetIndexValue)
 	if !ok {
-		return "usage: nic connect <source> <index> <target> <target-index>"
+		return Failure("usage: nic connect <source> <index> <target> <target-index>")
 	}
 	source := lab.NetworkEndpoint{Type: sourceType, ID: sourceID, NIC: sourceIndex}
 	target := lab.NetworkEndpoint{Type: targetType, ID: targetID, NIC: targetIndex}
-	if sameNetworkEndpoint(source, target) {
-		return "nic connect target must differ from source"
+	if lab.SameNetworkEndpoint(source, target) {
+		return Failure("nic connect target must differ from source")
 	}
 	if err := s.ensureNICEndpointExists(source); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.ensureNICEndpointExists(target); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "nic connect failed: " + err.Error()
+		return FailureWithCause("nic connect failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	if err := s.disconnectNICEndpoint(source); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.disconnectNICEndpoint(target); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	s.Lab.NetworkLinks = append(s.Lab.NetworkLinks, lab.NetworkLink{From: source, To: target})
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "nic connect failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("nic connect failed: "+err.Error(), err)
 	}
-	return "connected direct " + sourceType + ":" + sourceID + " nic" + sourceIndexValue + " to " + targetType + ":" + targetID + " nic" + targetIndexValue
+	return Success("connected direct " + sourceType + ":" + sourceID + " nic" + sourceIndexValue + " to " + targetType + ":" + targetID + " nic" + targetIndexValue)
 }
 
-func (s *Service) NICDisconnect(sourceType, sourceID, indexValue string) string {
+func (s *Service) NICDisconnect(sourceType, sourceID, indexValue string) Result {
 	if s.Lab == nil {
-		return "nic disconnect needs a loaded .lab file"
+		return Failure("nic disconnect needs a loaded .lab file")
 	}
 	if !validDirectEndpointType(sourceType) {
-		return "direct link target must be vm or container"
+		return Failure("direct link target must be vm or container")
 	}
 	sourceRef := sourceID
 	var ok bool
 	sourceID, ok = s.resolveWorkloadID(sourceType, sourceRef)
 	if !ok {
-		return sourceType + " not found: " + sourceRef
+		return Failure(sourceType + " not found: " + sourceRef)
 	}
 	index, ok := nicIndexArg(indexValue)
 	if !ok {
-		return "usage: nic disconnect <source> <index>"
+		return Failure("usage: nic disconnect <source> <index>")
 	}
 	endpoint := lab.NetworkEndpoint{Type: sourceType, ID: sourceID, NIC: index}
 	if err := s.ensureNICEndpointExists(endpoint); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "nic disconnect failed: " + err.Error()
+		return FailureWithCause("nic disconnect failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	if err := s.disconnectNICEndpoint(endpoint); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "nic disconnect failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("nic disconnect failed: "+err.Error(), err)
 	}
-	return "disconnected nic from " + sourceType + ":" + sourceID + " nic" + indexValue
+	return Success("disconnected nic from " + sourceType + ":" + sourceID + " nic" + indexValue)
 }
 
 func validDirectEndpointType(typ string) bool {
@@ -225,7 +225,7 @@ func (s *Service) firstAvailableDirectNIC(typ, id string, source lab.NetworkEndp
 		}
 		for i, nic := range vm.Networks {
 			endpoint := lab.NetworkEndpoint{Type: typ, ID: id, NIC: i}
-			if sameNetworkEndpoint(endpoint, source) {
+			if lab.SameNetworkEndpoint(endpoint, source) {
 				continue
 			}
 			if nic.Switch == "" && nic.ExternalLink == "" && !s.networkEndpointLinked(endpoint) {
@@ -240,7 +240,7 @@ func (s *Service) firstAvailableDirectNIC(typ, id string, source lab.NetworkEndp
 		}
 		for i, nic := range ct.Networks {
 			endpoint := lab.NetworkEndpoint{Type: typ, ID: id, NIC: i}
-			if sameNetworkEndpoint(endpoint, source) {
+			if lab.SameNetworkEndpoint(endpoint, source) {
 				continue
 			}
 			if nic.Switch == "" && nic.ExternalLink == "" && !s.networkEndpointLinked(endpoint) {
@@ -255,7 +255,7 @@ func (s *Service) firstAvailableDirectNIC(typ, id string, source lab.NetworkEndp
 
 func (s *Service) networkEndpointLinked(endpoint lab.NetworkEndpoint) bool {
 	for _, link := range s.Lab.NetworkLinks {
-		if sameNetworkEndpoint(link.From, endpoint) || sameNetworkEndpoint(link.To, endpoint) {
+		if lab.SameNetworkEndpoint(link.From, endpoint) || lab.SameNetworkEndpoint(link.To, endpoint) {
 			return true
 		}
 	}
@@ -265,7 +265,7 @@ func (s *Service) networkEndpointLinked(endpoint lab.NetworkEndpoint) bool {
 func (s *Service) removeNetworkLinksForEndpoint(endpoint lab.NetworkEndpoint) {
 	links := s.Lab.NetworkLinks[:0]
 	for _, link := range s.Lab.NetworkLinks {
-		if sameNetworkEndpoint(link.From, endpoint) || sameNetworkEndpoint(link.To, endpoint) {
+		if lab.SameNetworkEndpoint(link.From, endpoint) || lab.SameNetworkEndpoint(link.To, endpoint) {
 			continue
 		}
 		links = append(links, link)
@@ -310,8 +310,4 @@ func reindexEndpointAfterNICDelete(endpoint lab.NetworkEndpoint, typ, id string,
 		endpoint.NIC--
 	}
 	return true, endpoint
-}
-
-func sameNetworkEndpoint(a, b lab.NetworkEndpoint) bool {
-	return a.Type == b.Type && a.ID == b.ID && a.NIC == b.NIC
 }

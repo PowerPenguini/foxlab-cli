@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,62 +12,62 @@ import (
 
 const defaultDiskSizeGB = 10
 
-func (s *Service) DiskCreate(id string, args map[string]string) string {
+func (s *Service) DiskCreate(id string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "disk create needs a loaded .lab file"
+		return Failure("disk create needs a loaded .lab file")
 	}
 	if id == "" {
-		return "usage: disk create <id> [size=N] [format=qcow2|raw]"
+		return Failure("usage: disk create <id> [size=N] [format=qcow2|raw]")
 	}
 	if !lab.ValidID(id) {
-		return "invalid disk id: " + id
+		return Failure("invalid disk id: " + id)
 	}
 	if _, ok := s.diskByID(id); ok {
-		return "disk already exists: " + id
+		return Failure("disk already exists: " + id)
 	}
 	if invalid := unexpectedDiskCreateArgs(args); len(invalid) > 0 {
-		return "unsupported disk create argument: " + invalid[0]
+		return Failure("unsupported disk create argument: " + invalid[0])
 	}
 	targetType, targetID, attach, ok := parseDiskCreateTarget(args)
 	if !ok {
-		return "usage: disk create <id> [size=N] [format=qcow2|raw] [to=vm:<id>|container:<id>]"
+		return Failure("usage: disk create <id> [size=N] [format=qcow2|raw] [to=vm:<id>|container:<id>]")
 	}
 	if attach {
 		var err error
 		targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 		if err != nil {
-			return err.Error()
+			return FailureWithCause(err.Error(), err)
 		}
 	}
 	format := strings.ToLower(firstNonEmpty(args["format"], "qcow2"))
 	if format != "qcow2" && format != "raw" {
-		return "unsupported disk format: " + format
+		return Failure("unsupported disk format: " + format)
 	}
 	sizeGB, ok := diskSizeGB(args["size"], defaultDiskSizeGB)
 	if !ok {
-		return "invalid disk size: " + args["size"]
+		return Failure("invalid disk size: " + args["size"])
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
 	path, err := s.Lab.DiskStoragePath(id, format)
 	if err != nil {
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
 	if err := ensureDiskDirectoryWritable(filepath.Dir(path)); err != nil {
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
 	if err := reserveDiskPath(path); err != nil {
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
-	if err := runDiskCommand("qemu-img", "create", "-f", format, path, strconv.Itoa(sizeGB)+"G"); err != nil {
+	if err := s.diskCommands().Run("qemu-img", "create", "-f", format, path, strconv.Itoa(sizeGB)+"G"); err != nil {
 		_ = os.Remove(path)
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	disk := lab.Disk{
 		ID:     id,
 		Path:   path,
@@ -81,36 +82,35 @@ func (s *Service) DiskCreate(id string, args map[string]string) string {
 		s.setWorkloadDisk(targetType, targetID, s.Lab.ResolvePath(path))
 	}
 	s.Lab.Disks = append(s.Lab.Disks, disk)
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
+	if err := mutation.Commit(); err != nil {
 		_ = os.Remove(path)
-		return "disk create failed: " + err.Error()
+		return FailureWithCause("disk create failed: "+err.Error(), err)
 	}
 	if attach {
-		return "attached disk:" + id + " to " + s.workloadDisplayRef(targetType, targetID)
+		return Success("attached disk:" + id + " to " + s.workloadDisplayRef(targetType, targetID))
 	}
-	return "created disk:" + id
+	return Success("created disk:" + id)
 }
 
-func (s *Service) DiskAttach(id string, args map[string]string) string {
+func (s *Service) DiskAttach(id string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "disk attach needs a loaded .lab file"
+		return Failure("disk attach needs a loaded .lab file")
 	}
 	disk, ok := s.diskByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	if invalid := unexpectedDiskAttachArgs(args); len(invalid) > 0 {
-		return "unsupported disk attach argument: " + invalid[0]
+		return Failure("unsupported disk attach argument: " + invalid[0])
 	}
 	targetType, targetID, ok := parseDiskTarget(firstNonEmpty(args["to"], args["target"]))
 	if !ok {
-		return "usage: disk attach <id> to=vm:<id>|container:<id>"
+		return Failure("usage: disk attach <id> to=vm:<id>|container:<id>")
 	}
 	var err error
 	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 	if err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if targetType == "container" {
 		if diskKind(disk) == "layer" {
@@ -122,7 +122,7 @@ func (s *Service) DiskAttach(id string, args map[string]string) string {
 		return s.activateContainerBaseDisk(disk, targetID)
 	}
 	if diskKind(disk) == "data" {
-		return "container data disk cannot attach to vm: " + id
+		return Failure("container data disk cannot attach to vm: " + id)
 	}
 	if diskKind(disk) == "layer" {
 		return s.activateDiskLayer(id, disk, targetType, targetID)
@@ -130,52 +130,52 @@ func (s *Service) DiskAttach(id string, args map[string]string) string {
 	return s.activateBaseDisk(disk, targetType, targetID)
 }
 
-func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID string) string {
+func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID string) Result {
 	if s.Lab == nil {
-		return "disk layer create needs a loaded .lab file"
+		return Failure("disk layer create needs a loaded .lab file")
 	}
 	base, ok := s.diskByID(baseID)
 	if !ok {
-		return "disk not found: " + baseID
+		return Failure("disk not found: " + baseID)
 	}
 	if diskKind(base) != "base" {
-		return "disk is not a base: " + baseID
+		return Failure("disk is not a base: " + baseID)
 	}
 	layerID = strings.TrimSpace(layerID)
 	if !lab.ValidID(layerID) {
-		return "invalid disk id: " + layerID
+		return Failure("invalid disk id: " + layerID)
 	}
 	if _, exists := s.diskByID(layerID); exists {
-		return "disk already exists: " + layerID
+		return Failure("disk already exists: " + layerID)
 	}
 	var err error
 	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 	if err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	layerPath, err := s.layerStoragePath(layerID)
 	if err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := os.MkdirAll(filepath.Dir(layerPath), 0o755); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := reserveDiskPath(layerPath); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	basePath := s.Lab.ResolvePath(base.Path)
 	baseFormat := diskFormat(base)
-	if err := runDiskCommand("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
+	if err := s.diskCommands().Run("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
 		_ = os.Remove(layerPath)
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	layer := lab.Disk{
 		ID:           layerID,
 		Path:         layerPath,
@@ -189,55 +189,54 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 	s.detachActiveDisk(targetType, targetID)
 	s.Lab.Disks = append(s.Lab.Disks, layer)
 	s.setWorkloadDisk(targetType, targetID, layerPath)
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
+	if err := mutation.Commit(); err != nil {
 		_ = os.Remove(layerPath)
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
-	return "attached disk:" + layerID + " to " + s.workloadDisplayRef(targetType, targetID)
+	return Success("attached disk:" + layerID + " to " + s.workloadDisplayRef(targetType, targetID))
 }
 
-func (s *Service) DiskLayerCreate(baseID, layerID string) string {
+func (s *Service) DiskLayerCreate(baseID, layerID string) Result {
 	if s.Lab == nil {
-		return "disk layer create needs a loaded .lab file"
+		return Failure("disk layer create needs a loaded .lab file")
 	}
 	base, ok := s.diskByID(baseID)
 	if !ok {
-		return "disk not found: " + baseID
+		return Failure("disk not found: " + baseID)
 	}
 	if diskKind(base) != "base" {
-		return "disk is not a base: " + baseID
+		return Failure("disk is not a base: " + baseID)
 	}
 	layerID = strings.TrimSpace(layerID)
 	if !lab.ValidID(layerID) {
-		return "invalid disk id: " + layerID
+		return Failure("invalid disk id: " + layerID)
 	}
 	if _, exists := s.diskByID(layerID); exists {
-		return "disk already exists: " + layerID
+		return Failure("disk already exists: " + layerID)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	layerPath, err := s.layerStoragePath(layerID)
 	if err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := os.MkdirAll(filepath.Dir(layerPath), 0o755); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := ensureDiskDirectoryWritable(filepath.Dir(layerPath)); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := reserveDiskPath(layerPath); err != nil {
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	basePath := s.Lab.ResolvePath(base.Path)
 	baseFormat := diskFormat(base)
-	if err := runDiskCommand("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
+	if err := s.diskCommands().Run("qemu-img", "create", "-f", "qcow2", "-F", baseFormat, "-b", basePath, layerPath); err != nil {
 		_ = os.Remove(layerPath)
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	layer := lab.Disk{
 		ID:        layerID,
 		Path:      layerPath,
@@ -247,24 +246,23 @@ func (s *Service) DiskLayerCreate(baseID, layerID string) string {
 		MountPath: base.MountPath,
 	}
 	s.Lab.Disks = append(s.Lab.Disks, layer)
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
+	if err := mutation.Commit(); err != nil {
 		_ = os.Remove(layerPath)
-		return "disk layer create failed: " + err.Error()
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
-	return "created disk layer:" + layerID
+	return Success("created disk layer:" + layerID)
 }
 
-func (s *Service) DiskDetach(target string, args map[string]string) string {
+func (s *Service) DiskDetach(target string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "disk detach needs a loaded .lab file"
+		return Failure("disk detach needs a loaded .lab file")
 	}
 	if invalid := unexpectedDiskDetachArgs(args); len(invalid) > 0 {
-		return "unsupported disk detach argument: " + invalid[0]
+		return Failure("unsupported disk detach argument: " + invalid[0])
 	}
 	targetType := strings.ToLower(strings.TrimSpace(args["type"]))
 	if targetType != "" && targetType != "vm" && targetType != "container" {
-		return "disk target must be vm or container"
+		return Failure("disk target must be vm or container")
 	}
 	targetID := target
 	if parsedType, parsedID, ok := parseDiskTarget(firstNonEmpty(args["from"], args["target"], target)); ok {
@@ -274,98 +272,97 @@ func (s *Service) DiskDetach(target string, args map[string]string) string {
 		var err error
 		targetType, err = s.inferWorkloadType(targetID)
 		if err != nil {
-			return err.Error()
+			return FailureWithCause(err.Error(), err)
 		}
 	}
 	var err error
 	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 	if err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	diskIndex := s.attachedDiskIndex(targetType, targetID, args["disk"])
 	if diskIndex < 0 {
-		return "attached disk not found: " + s.workloadDisplayRef(targetType, targetID)
+		return FailureWithCode(ResultCodeDiskNotAttached, "attached disk not found: "+s.workloadDisplayRef(targetType, targetID))
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk detach failed: " + err.Error()
+		return FailureWithCause("disk detach failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.Disks[diskIndex].AttachedType = ""
 	s.Lab.Disks[diskIndex].AttachedTo = ""
 	s.setWorkloadDisk(targetType, targetID, "")
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "disk detach failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("disk detach failed: "+err.Error(), err)
 	}
-	return "detached disk from " + s.workloadDisplayRef(targetType, targetID)
+	return Success("detached disk from " + s.workloadDisplayRef(targetType, targetID))
 }
 
-func (s *Service) DiskMerge(id string) string {
+func (s *Service) DiskMerge(id string) Result {
 	if s.Lab == nil {
-		return "disk merge needs a loaded .lab file"
+		return Failure("disk merge needs a loaded .lab file")
 	}
 	index, disk, ok := s.diskIndexByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	if diskKind(disk) != "layer" {
-		return "disk is not a layer: " + id
+		return Failure("disk is not a layer: " + id)
 	}
 	if err := s.requireDiskOffline(disk); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if _, ok := s.diskByID(disk.Base); !ok {
-		return "disk base not found: " + disk.Base
+		return Failure("disk base not found: " + disk.Base)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk merge failed: " + err.Error()
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
 	candidate := lab.Clone(s.Lab)
 	applyDiskMerge(candidate, index, disk)
 	candidate.Normalize()
 	if err := candidate.Validate(); err != nil {
-		return "disk merge failed: " + err.Error()
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
 	layerPath := s.Lab.ResolvePath(disk.Path)
-	if err := runDiskCommand("qemu-img", "commit", layerPath); err != nil {
-		return "disk merge failed: " + err.Error()
+	if err := s.diskCommands().Run("qemu-img", "commit", layerPath); err != nil {
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
 	layerBackup, err := moveFileAside(layerPath)
 	if err != nil {
-		return "disk merge failed: " + err.Error()
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	applyDiskMerge(s.Lab, index, disk)
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
+	if err := mutation.Commit(); err != nil {
 		restoreMovedFile(layerBackup, layerPath)
-		return "disk merge failed: " + err.Error()
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
 	if err := removeMovedFile(layerBackup); err != nil {
-		return "disk merge failed: " + err.Error()
+		return FailureWithCause("disk merge failed: "+err.Error(), err)
 	}
-	return "merged disk layer:" + id
+	return Success("merged disk layer:" + id)
 }
 
-func (s *Service) DiskResize(id string, args map[string]string) string {
+func (s *Service) DiskResize(id string, args map[string]string) Result {
 	if s.Lab == nil {
-		return "disk resize needs a loaded .lab file"
+		return Failure("disk resize needs a loaded .lab file")
 	}
 	index, disk, ok := s.diskIndexByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	if invalid := unexpectedDiskResizeArgs(args); len(invalid) > 0 {
-		return "unsupported disk resize argument: " + invalid[0]
+		return Failure("unsupported disk resize argument: " + invalid[0])
 	}
 	sizeGB, present, ok := positiveIntField(args, "size")
 	if !present || !ok {
-		return "usage: disk resize <id> size=N [force=true]"
+		return Failure("usage: disk resize <id> size=N [force=true]")
 	}
 	if err := s.requireDiskOffline(disk); err != nil {
-		return err.Error()
+		return FailureWithCause(err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk resize failed: " + err.Error()
+		return FailureWithCause("disk resize failed: "+err.Error(), err)
 	}
 	oldSizeGB := disk.SizeGB
 	force := false
@@ -373,12 +370,12 @@ func (s *Service) DiskResize(id string, args map[string]string) string {
 		var valid bool
 		force, valid = parseBool(value)
 		if !valid {
-			return "invalid disk resize force: " + value
+			return Failure("invalid disk resize force: " + value)
 		}
 	}
 	shrinking := oldSizeGB > 0 && sizeGB < oldSizeGB
 	if shrinking && !force {
-		return "disk shrink is destructive; shrink the guest filesystem first, then rerun with force=true"
+		return Failure("disk shrink is destructive; shrink the guest filesystem first, then rerun with force=true")
 	}
 	resizeArgs := []string{"resize"}
 	if shrinking {
@@ -386,21 +383,20 @@ func (s *Service) DiskResize(id string, args map[string]string) string {
 	}
 	diskPath := s.Lab.ResolvePath(disk.Path)
 	resizeArgs = append(resizeArgs, diskPath, strconv.Itoa(sizeGB)+"G")
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.Disks[index].SizeGB = sizeGB
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
-		return "disk resize failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("disk resize failed: "+err.Error(), err)
 	}
-	if err := runDiskCommand("qemu-img", resizeArgs...); err != nil {
+	if err := s.diskCommands().Run("qemu-img", resizeArgs...); err != nil {
 		commandErr := err
-		s.Lab = snapshot
+		mutation.Rollback()
 		if rollbackErr := s.SaveAndRefresh(); rollbackErr != nil {
-			return "disk resize failed: " + commandErr.Error() + "; metadata rollback failed: " + rollbackErr.Error()
+			return FailureWithCause("disk resize failed: "+commandErr.Error()+"; metadata rollback failed: "+rollbackErr.Error(), errors.Join(commandErr, rollbackErr))
 		}
-		return "disk resize failed: " + commandErr.Error()
+		return FailureWithCause("disk resize failed: "+commandErr.Error(), commandErr)
 	}
-	return "resized disk:" + id
+	return Success("resized disk:" + id)
 }
 
 type DiskInfo struct {
@@ -409,45 +405,45 @@ type DiskInfo struct {
 	QemuInfo string
 }
 
-func (s *Service) DiskInfo(id string) (DiskInfo, string) {
+func (s *Service) DiskInfo(id string) (DiskInfo, Result) {
 	if s.Lab == nil {
-		return DiskInfo{}, "disk info needs a loaded .lab file"
+		return DiskInfo{}, FailureWithCode(ResultCodeDiskInfoInvalid, "disk info needs a loaded .lab file")
 	}
 	disk, ok := s.diskByID(id)
 	if !ok {
-		return DiskInfo{}, "disk not found: " + id
+		return DiskInfo{}, FailureWithCode(ResultCodeDiskInfoInvalid, "disk not found: "+id)
 	}
 	info := DiskInfo{
 		Disk: disk,
 		Path: s.Lab.ResolvePath(disk.Path),
 	}
-	out, err := runDiskCommandOutput("qemu-img", "info", "--output=json", info.Path)
+	out, err := s.diskCommands().Output("qemu-img", "info", "--output=json", info.Path)
 	if err != nil {
-		return info, "disk info failed: " + err.Error()
+		return info, FailureWithCause("disk info failed: "+err.Error(), err)
 	}
 	info.QemuInfo = strings.TrimSpace(string(out))
-	return info, "disk info:" + id
+	return info, Info("disk info:" + id)
 }
 
-func (s *Service) DiskRename(id, newID string) string {
+func (s *Service) DiskRename(id, newID string) Result {
 	if s.Lab == nil {
-		return "disk rename needs a loaded .lab file"
+		return Failure("disk rename needs a loaded .lab file")
 	}
 	index, disk, ok := s.diskIndexByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	newID = strings.TrimSpace(newID)
 	if !lab.ValidID(newID) {
-		return "invalid disk id: " + newID
+		return Failure("invalid disk id: " + newID)
 	}
 	if _, exists := s.diskByID(newID); exists {
-		return "disk already exists: " + newID
+		return Failure("disk already exists: " + newID)
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk rename failed: " + err.Error()
+		return FailureWithCause("disk rename failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.Disks[index].ID = newID
 	if diskKind(disk) == "base" {
 		for i := range s.Lab.Disks {
@@ -456,10 +452,10 @@ func (s *Service) DiskRename(id, newID string) string {
 			}
 		}
 	}
-	if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-		return "disk rename failed: " + err.Error()
+	if err := mutation.Commit(); err != nil {
+		return FailureWithCause("disk rename failed: "+err.Error(), err)
 	}
-	return "renamed disk:" + id + " to " + newID
+	return Success("renamed disk:" + id + " to " + newID)
 }
 
 func applyDiskMerge(l *lab.Lab, index int, disk lab.Disk) {
@@ -469,43 +465,42 @@ func applyDiskMerge(l *lab.Lab, index int, disk lab.Disk) {
 	l.Disks = append(l.Disks[:index], l.Disks[index+1:]...)
 }
 
-func (s *Service) DiskDelete(id string) string {
+func (s *Service) DiskDelete(id string) Result {
 	if s.Lab == nil {
-		return "disk delete needs a loaded .lab file"
+		return Failure("disk delete needs a loaded .lab file")
 	}
 	index, disk, ok := s.diskIndexByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	if disk.AttachedTo != "" {
-		return "disk is attached: " + id
+		return Failure("disk is attached: " + id)
 	}
 	if diskKind(disk) == "base" {
 		for _, other := range s.Lab.Disks {
 			if other.Base == id {
-				return "delete disk layers first: " + id
+				return Failure("delete disk layers first: " + id)
 			}
 		}
 	}
 	if err := s.requireSavePath(); err != nil {
-		return "disk delete failed: " + err.Error()
+		return FailureWithCause("disk delete failed: "+err.Error(), err)
 	}
 	diskPath := s.Lab.ResolvePath(disk.Path)
 	diskBackup, err := moveFileAside(diskPath)
 	if err != nil {
-		return "disk delete failed: " + err.Error()
+		return FailureWithCause("disk delete failed: "+err.Error(), err)
 	}
-	snapshot := lab.Clone(s.Lab)
+	mutation := s.beginLabMutation()
 	s.Lab.Disks = append(s.Lab.Disks[:index], s.Lab.Disks[index+1:]...)
-	if err := s.SaveAndRefresh(); err != nil {
-		s.Lab = snapshot
+	if err := mutation.Commit(); err != nil {
 		restoreMovedFile(diskBackup, diskPath)
-		return "disk delete failed: " + err.Error()
+		return FailureWithCause("disk delete failed: "+err.Error(), err)
 	}
 	if err := removeMovedFile(diskBackup); err != nil {
-		return "disk delete failed: " + err.Error()
+		return FailureWithCause("disk delete failed: "+err.Error(), err)
 	}
-	return "deleted disk:" + id
+	return Success("deleted disk:" + id)
 }
 
 func moveFileAside(path string) (string, error) {
@@ -553,16 +548,16 @@ func removeMovedFile(backup string) error {
 	return nil
 }
 
-func (s *Service) DiskLayerDelete(id string) string {
+func (s *Service) DiskLayerDelete(id string) Result {
 	if s.Lab == nil {
-		return "disk layer delete needs a loaded .lab file"
+		return Failure("disk layer delete needs a loaded .lab file")
 	}
 	_, disk, ok := s.diskIndexByID(id)
 	if !ok {
-		return "disk not found: " + id
+		return Failure("disk not found: " + id)
 	}
 	if diskKind(disk) != "layer" {
-		return "disk is not a layer: " + id
+		return Failure("disk is not a layer: " + id)
 	}
 	return s.DiskDelete(id)
 }

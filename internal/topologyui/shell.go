@@ -66,8 +66,8 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 	defer closeRuntime()
 	stateCtx, stateCancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer stateCancel()
-	a.runtimeMu.Lock()
-	defer a.runtimeMu.Unlock()
+	a.runtimeState.mu.Lock()
+	defer a.runtimeState.mu.Unlock()
 	if states, err := runtime.States(stateCtx, a.Lab); err == nil {
 		key := NodeKey(node.Type, node.ID)
 		if normalizeRuntimeState(states[key]) == "running" {

@@ -7,7 +7,8 @@
 ## Ownership
 
 - `libvirt.go` owns libvirt connection/runtime behavior, VM state discovery, VNC port lookup, domain define/start/stop/undefine, and bridge attach/detach calls.
-- `xml.go` owns domain/network XML generation, managed XML checks, disk/image resolution, NAT ranges, direct-link bridges, and VNC XML parsing.
+- `xml.go` owns desired domain/network XML data construction and host-resource resolution.
+- `xml_compare.go` owns live XML parsing and desired/live comparison; `xml_templates.go` owns XML escaping and templates.
 - `console.go` owns VM console session setup.
 - `*_test.go` files should cover XML output, VNC parsing, console behavior, and libvirt-facing edge cases that can be tested without a live daemon.
 

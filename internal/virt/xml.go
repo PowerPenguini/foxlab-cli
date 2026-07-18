@@ -7,12 +7,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
-	"text/template"
 
 	"foxlab-cli/internal/lab"
 )
@@ -100,14 +97,14 @@ func desiredDomainXMLData(l *lab.Lab, vm lab.VM) (domainXMLData, error) {
 		case linked && (nic.Switch != "" || nic.ExternalLink != ""):
 			return domainXMLData{}, fmt.Errorf("vm %q network nic %d has both direct link and endpoint", vm.ID, index)
 		case linked:
-			link, _ := findNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index})
+			link, _ := lab.FindNetworkLinkForEndpoint(l, lab.NetworkEndpoint{Type: "vm", ID: vm.ID, NIC: index})
 			data.Networks = append(data.Networks, domainNetworkXMLData{
 				Kind:       "bridge",
 				SourceName: l.ManagedNetworkLinkBridgeName(link),
 				MAC:        nic.MAC,
 			})
 		case nic.Switch != "":
-			sw, ok := findSwitch(l, nic.Switch)
+			sw, ok := lab.FindSwitch(l, nic.Switch)
 			if !ok {
 				return domainXMLData{}, fmt.Errorf("vm %q references missing switch %q", vm.ID, nic.Switch)
 			}
@@ -121,7 +118,7 @@ func desiredDomainXMLData(l *lab.Lab, vm lab.VM) (domainXMLData, error) {
 				MAC:        mac,
 			})
 		case nic.ExternalLink != "":
-			link, ok := findExternalLink(l, nic.ExternalLink)
+			link, ok := lab.FindExternalLink(l, nic.ExternalLink)
 			if !ok {
 				return domainXMLData{}, fmt.Errorf("vm %q references missing external link %q", vm.ID, nic.ExternalLink)
 			}
@@ -158,167 +155,6 @@ func domainConfigHash(data domainXMLData) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-type comparableDomain struct {
-	MemoryKiB int64
-	CPUs      int
-	Disk      comparableDisk
-	ISO       comparableDisk
-	VNC       bool
-	Networks  []comparableNetwork
-}
-
-type comparableDisk struct {
-	Present bool
-	Path    string
-	Format  string
-}
-
-type comparableNetwork struct {
-	Kind   string
-	Source string
-	MAC    string
-}
-
-type parsedDomainXML struct {
-	Metadata struct {
-		Resource struct {
-			Lab        string `xml:"lab,attr"`
-			ID         string `xml:"id,attr"`
-			Kind       string `xml:"kind,attr"`
-			ConfigHash string `xml:"configSHA256,attr"`
-		} `xml:"resource"`
-	} `xml:"metadata"`
-	Memory struct {
-		Value int64  `xml:",chardata"`
-		Unit  string `xml:"unit,attr"`
-	} `xml:"memory"`
-	VCPU    int `xml:"vcpu"`
-	Devices struct {
-		Disks []struct {
-			Device string `xml:"device,attr"`
-			Driver struct {
-				Type string `xml:"type,attr"`
-			} `xml:"driver"`
-			Source struct {
-				File string `xml:"file,attr"`
-			} `xml:"source"`
-			Target struct {
-				Dev string `xml:"dev,attr"`
-			} `xml:"target"`
-		} `xml:"disk"`
-		Interfaces []struct {
-			Type   string `xml:"type,attr"`
-			Source struct {
-				Bridge string `xml:"bridge,attr"`
-				Dev    string `xml:"dev,attr"`
-			} `xml:"source"`
-			MAC struct {
-				Address string `xml:"address,attr"`
-			} `xml:"mac"`
-		} `xml:"interface"`
-		Graphics []struct {
-			Type string `xml:"type,attr"`
-		} `xml:"graphics"`
-	} `xml:"devices"`
-}
-
-func domainConfigMatches(l *lab.Lab, vm lab.VM, liveXML string) (bool, error) {
-	desiredData, err := desiredDomainXMLData(l, vm)
-	if err != nil {
-		return false, err
-	}
-	desiredHash, err := domainConfigHash(desiredData)
-	if err != nil {
-		return false, err
-	}
-	parsed, err := parseDomainXML(liveXML)
-	if err != nil {
-		return false, err
-	}
-	if parsed.Metadata.Resource.ConfigHash != "" && parsed.Metadata.Resource.ConfigHash != desiredHash {
-		return false, nil
-	}
-	return reflect.DeepEqual(comparableDomainFromLive(parsed, desiredData), comparableDomainFromDesired(desiredData)), nil
-}
-
-func managedDomainMetadata(liveXML string) (labID, id, configHash string, ok bool) {
-	parsed, err := parseDomainXML(liveXML)
-	if err != nil {
-		return "", "", "", false
-	}
-	resource := parsed.Metadata.Resource
-	if resource.Kind != "domain" || resource.Lab == "" || resource.ID == "" {
-		return "", "", "", false
-	}
-	return resource.Lab, resource.ID, resource.ConfigHash, true
-}
-
-func parseDomainXML(value string) (parsedDomainXML, error) {
-	var parsed parsedDomainXML
-	if err := xml.Unmarshal([]byte(value), &parsed); err != nil {
-		return parsedDomainXML{}, fmt.Errorf("decode domain XML: %w", err)
-	}
-	return parsed, nil
-}
-
-func comparableDomainFromDesired(data domainXMLData) comparableDomain {
-	out := comparableDomain{MemoryKiB: int64(data.MemoryMB) * 1024, CPUs: data.CPUs, VNC: data.HasVNC}
-	if data.HasDisk {
-		out.Disk = comparableDisk{Present: true, Path: filepath.Clean(data.DiskPath), Format: data.DiskType}
-	}
-	if data.HasISO {
-		out.ISO = comparableDisk{Present: true, Path: filepath.Clean(data.ISO), Format: "raw"}
-	}
-	for _, network := range data.Networks {
-		out.Networks = append(out.Networks, comparableNetwork{Kind: network.Kind, Source: network.SourceName, MAC: strings.ToLower(network.MAC)})
-	}
-	return out
-}
-
-func comparableDomainFromLive(parsed parsedDomainXML, desired domainXMLData) comparableDomain {
-	out := comparableDomain{MemoryKiB: memoryToKiB(parsed.Memory.Value, parsed.Memory.Unit), CPUs: parsed.VCPU}
-	for _, graphics := range parsed.Devices.Graphics {
-		if graphics.Type == "vnc" {
-			out.VNC = true
-			break
-		}
-	}
-	for _, disk := range parsed.Devices.Disks {
-		value := comparableDisk{Present: true, Path: filepath.Clean(disk.Source.File), Format: disk.Driver.Type}
-		switch disk.Target.Dev {
-		case "vda":
-			out.Disk = value
-		case "sda":
-			out.ISO = value
-		}
-	}
-	for index, network := range parsed.Devices.Interfaces {
-		source := network.Source.Dev
-		if network.Type == "bridge" {
-			source = network.Source.Bridge
-		}
-		mac := strings.ToLower(network.MAC.Address)
-		if index < len(desired.Networks) && desired.Networks[index].MAC == "" {
-			mac = ""
-		}
-		out.Networks = append(out.Networks, comparableNetwork{Kind: network.Type, Source: source, MAC: mac})
-	}
-	return out
-}
-
-func memoryToKiB(value int64, unit string) int64 {
-	switch strings.ToLower(strings.TrimSpace(unit)) {
-	case "b", "byte", "bytes":
-		return value / 1024
-	case "mb", "mib":
-		return value * 1024
-	case "gb", "gib":
-		return value * 1024 * 1024
-	default:
-		return value
-	}
-}
-
 func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 	name := l.ManagedNetworkName(sw)
 	data := networkXMLData{
@@ -336,7 +172,7 @@ func networkXML(l *lab.Lab, sw lab.Switch) (string, error) {
 		data.DHCPEnd = end
 	}
 	if externalID := firstSwitchExternalLink(sw); externalID != "" && !switchUsesMacNAT(l, sw) {
-		link, ok := findExternalLink(l, externalID)
+		link, ok := lab.FindExternalLink(l, externalID)
 		if !ok {
 			return "", fmt.Errorf("switch %q references missing external link %q", sw.ID, externalID)
 		}
@@ -383,29 +219,11 @@ func parseVNCPort(xmlText string) int {
 	return 0
 }
 
-func findSwitch(l *lab.Lab, id string) (lab.Switch, bool) {
-	for _, sw := range l.Switches {
-		if sw.ID == id {
-			return sw, true
-		}
-	}
-	return lab.Switch{}, false
-}
-
-func findExternalLink(l *lab.Lab, id string) (lab.ExternalLink, bool) {
-	for _, link := range l.ExternalLinks {
-		if link.ID == id {
-			return link, true
-		}
-	}
-	return lab.ExternalLink{}, false
-}
-
 func switchUsesMacNAT(l *lab.Lab, sw lab.Switch) bool {
 	if sw.Mode == "macnat-bridge" {
 		return true
 	}
-	link, ok := findExternalLink(l, firstSwitchExternalLink(sw))
+	link, ok := lab.FindExternalLink(l, firstSwitchExternalLink(sw))
 	return ok && link.Mode == lab.ExternalModeMacNAT
 }
 
@@ -435,22 +253,6 @@ func vmNICHasNetworkLink(l *lab.Lab, id string, index int) bool {
 		}
 	}
 	return false
-}
-
-func findNetworkLinkForEndpoint(l *lab.Lab, endpoint lab.NetworkEndpoint) (lab.NetworkLink, bool) {
-	if l == nil {
-		return lab.NetworkLink{}, false
-	}
-	for _, link := range l.NetworkLinks {
-		if sameNetworkEndpoint(link.From, endpoint) || sameNetworkEndpoint(link.To, endpoint) {
-			return link, true
-		}
-	}
-	return lab.NetworkLink{}, false
-}
-
-func sameNetworkEndpoint(a, b lab.NetworkEndpoint) bool {
-	return a.Type == b.Type && a.ID == b.ID && a.NIC == b.NIC
 }
 
 func detectImageFormat(path string) string {
@@ -489,140 +291,3 @@ func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
-func xmlText(value string) string {
-	var buf bytes.Buffer
-	_ = xml.EscapeText(&buf, []byte(value))
-	return buf.String()
-}
-
-func xmlAttr(value string) string {
-	return xmlAttrEscaper.Replace(value)
-}
-
-var xmlAttrEscaper = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	`"`, "&quot;",
-	"'", "&apos;",
-)
-
-func natIPv4Range(labID, switchID string) (address, start, end string) {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(labID + "/" + switchID))
-	octet := 16 + int(h.Sum32()%200)
-	prefix := fmt.Sprintf("172.31.%d", octet)
-	return prefix + ".1", prefix + ".100", prefix + ".254"
-}
-
-var xmlTemplateFuncs = template.FuncMap{
-	"xmltext": xmlText,
-	"xmlattr": xmlAttr,
-}
-
-var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs).Parse(`<?xml version="1.0"?>
-<domain type="kvm">
-  <name>{{ xmltext .Name }}</name>
-  {{- if .UUID }}
-  <uuid>{{ xmltext .UUID }}</uuid>
-  {{- end }}
-  <metadata>
-    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ xmlattr .LabID }}" id="{{ xmlattr .VMID }}" kind="domain" configSHA256="{{ xmlattr .ConfigHash }}"/>
-  </metadata>
-  <memory unit="MiB">{{ .MemoryMB }}</memory>
-  <currentMemory unit="MiB">{{ .MemoryMB }}</currentMemory>
-  <vcpu>{{ .CPUs }}</vcpu>
-  <os>
-    <type arch="x86_64" machine="q35">hvm</type>
-    {{- if .HasISO }}
-    <boot dev="cdrom"/>
-    {{- else if .HasDisk }}
-    <boot dev="hd"/>
-    {{- end }}
-  </os>
-  <features>
-    <acpi/>
-    <apic/>
-    <vmport state="off"/>
-  </features>
-  <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
-    {{- if .HasDisk }}
-    <disk type="file" device="disk">
-      <driver name="qemu" type="{{ xmlattr .DiskType }}"/>
-      <source file="{{ xmlattr .DiskPath }}"/>
-      <target dev="vda" bus="virtio"/>
-    </disk>
-    {{- end }}
-    {{- if .HasISO }}
-    <disk type="file" device="cdrom">
-      <driver name="qemu" type="raw"/>
-      <source file="{{ xmlattr .ISO }}"/>
-      <target dev="sda" bus="sata"/>
-      <readonly/>
-    </disk>
-    {{- end }}
-    {{- range .Networks }}
-    <interface type="{{ xmlattr .Kind }}">
-      {{- if eq .Kind "bridge" }}
-      <source bridge="{{ xmlattr .SourceName }}"/>
-      {{- else if eq .Kind "direct" }}
-      <source dev="{{ xmlattr .SourceName }}" mode="bridge"/>
-      {{- end }}
-      {{- if .MAC }}
-      <mac address="{{ xmlattr .MAC }}"/>
-      {{- end }}
-      <model type="virtio"/>
-    </interface>
-    {{- end }}
-    {{- if .HasVNC }}
-    <graphics type="vnc" port="-1" autoport="yes" listen="127.0.0.1"/>
-    <video>
-      <model type="virtio" heads="1" primary="yes"/>
-    </video>
-    {{- end }}
-    <serial type="pty">
-      <target type="isa-serial" port="0"/>
-    </serial>
-    <console type="pty">
-      <target type="serial" port="0"/>
-    </console>
-    <channel type="unix">
-      <target type="virtio" name="org.qemu.guest_agent.0"/>
-    </channel>
-  </devices>
-  <on_poweroff>destroy</on_poweroff>
-  <on_reboot>restart</on_reboot>
-  <on_crash>destroy</on_crash>
-</domain>`))
-
-var networkTemplate = template.Must(template.New("network").Funcs(xmlTemplateFuncs).Parse(`<?xml version="1.0"?>
-<network>
-  <name>{{ xmltext .Name }}</name>
-  <metadata>
-    <foxlab:resource xmlns:foxlab="https://foxlab.local/metadata" lab="{{ xmlattr .LabID }}" id="{{ xmlattr .ID }}" kind="network"/>
-  </metadata>
-  {{- if .HostBridge }}
-  <forward mode="bridge"/>
-  <bridge name="{{ xmlattr .HostBridge }}"/>
-  {{- else if .UplinkInterface }}
-  <forward mode="bridge">
-    <interface dev="{{ xmlattr .UplinkInterface }}"/>
-  </forward>
-  {{- else if .NAT }}
-  {{- if .NATInterface }}
-  <forward mode="nat" dev="{{ xmlattr .NATInterface }}"/>
-  {{- else }}
-  <forward mode="nat"/>
-  {{- end }}
-  <bridge name="{{ xmlattr .Bridge }}" stp="on" delay="0"/>
-  <ip address="{{ xmlattr .NATAddress }}" netmask="{{ xmlattr .NATNetmask }}">
-    <dhcp>
-      <range start="{{ xmlattr .DHCPStart }}" end="{{ xmlattr .DHCPEnd }}"/>
-    </dhcp>
-  </ip>
-  {{- else }}
-  <bridge name="{{ xmlattr .Bridge }}" stp="on" delay="0"/>
-  {{- end }}
-</network>`))

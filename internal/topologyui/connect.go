@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 )
 
 func (a *App) startConnectNICIndex(node Node, index string) {
@@ -202,16 +203,17 @@ func (a *App) connectSelectedTargetNIC(target Node, item string) {
 	targetIndex := ""
 	if strings.TrimSpace(item) == "New NIC" {
 		targetIndex = strconv.Itoa(a.nicCount(target.Type, target.ID))
+		result := topology.Failure("target must be vm or container")
 		switch target.Type {
 		case NodeVM:
-			a.vmNICAdd(target.ID, nil)
+			result = a.vmNICAdd(target.ID, nil)
 		case NodeContainer:
-			a.containerNICAdd(target.ID, nil)
+			result = a.containerNICAdd(target.ID, nil)
 		default:
 			a.State.Message = "target must be vm or container"
 			return
 		}
-		if !strings.HasPrefix(a.State.Message, "added nic to ") {
+		if !result.OK() {
 			return
 		}
 		if !a.hasNICIndex(target, targetIndex) {

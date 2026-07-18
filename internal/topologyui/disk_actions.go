@@ -110,7 +110,7 @@ func (a *App) createNamedLayerForNode(node Node, entry diskMenuEntry, value stri
 		a.State.Message = "disk attach needs vm or container"
 		return
 	}
-	a.State.Message = a.ensureService().DiskLayerCreateAndAttach(entry.diskID, layerID, targetType, targetID)
+	a.setOperationResult(a.ensureService().DiskLayerCreateAndAttach(entry.diskID, layerID, targetType, targetID))
 	a.syncAfterServiceMutation()
 }
 
@@ -121,13 +121,14 @@ func (a *App) detachDiskFromNode(node Node) {
 		return
 	}
 	args := map[string]string{"from": target}
-	a.State.Message = a.ensureService().DiskDetach(node.ID, args)
-	if strings.HasPrefix(a.State.Message, "attached disk not found:") {
+	result := a.ensureService().DiskDetach(node.ID, args)
+	a.setOperationResult(result)
+	if result.Code == topology.ResultCodeDiskNotAttached {
 		switch node.Type {
 		case NodeVM:
-			a.State.Message = a.ensureService().VMSet(node.ID, map[string]string{"disk": ""})
+			a.setOperationResult(a.ensureService().VMSet(node.ID, map[string]string{"disk": ""}))
 		case NodeContainer:
-			a.State.Message = a.ensureService().ContainerSet(node.ID, map[string]string{"disk": ""})
+			a.setOperationResult(a.ensureService().ContainerSet(node.ID, map[string]string{"disk": ""}))
 		}
 	}
 	a.syncAfterServiceMutation()
@@ -142,18 +143,18 @@ func (a *App) deleteDiskMenuEntry(node Node, entry diskMenuEntry) {
 	if entry.action == diskMenuActionNone {
 		target := diskTargetForNode(node)
 		if target != "" {
-			msg := a.ensureService().DiskDetach(node.ID, map[string]string{"from": target})
-			if strings.HasPrefix(msg, "disk detach failed:") {
-				a.State.Message = msg
+			result := a.ensureService().DiskDetach(node.ID, map[string]string{"from": target})
+			if !result.OK() && result.Code != topology.ResultCodeDiskNotAttached {
+				a.setOperationResult(result)
 				a.syncAfterServiceMutation()
 				return
 			}
 		}
 	}
 	if kind == "layer" {
-		a.State.Message = a.ensureService().DiskLayerDelete(entry.diskID)
+		a.setOperationResult(a.ensureService().DiskLayerDelete(entry.diskID))
 	} else {
-		a.State.Message = a.ensureService().DiskDelete(entry.diskID)
+		a.setOperationResult(a.ensureService().DiskDelete(entry.diskID))
 	}
 	a.syncAfterServiceMutation()
 }
@@ -466,17 +467,17 @@ func (a *App) nextLayerIDForDisk(diskID string) string {
 }
 
 func (a *App) diskCreate(id string, args map[string]string) {
-	a.State.Message = a.ensureService().DiskCreate(id, args)
+	a.setOperationResult(a.ensureService().DiskCreate(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskAttach(id string, args map[string]string) {
-	a.State.Message = a.ensureService().DiskAttach(id, args)
+	a.setOperationResult(a.ensureService().DiskAttach(id, args))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskDetach(id string, args map[string]string) {
-	a.State.Message = a.ensureService().DiskDetach(id, args)
+	a.setOperationResult(a.ensureService().DiskDetach(id, args))
 	a.syncAfterServiceMutation()
 }
 
@@ -486,7 +487,7 @@ func (a *App) diskMerge(id string) {
 	if a.diskAttached(id) && !a.refreshDiskOperationStates() {
 		return
 	}
-	a.State.Message = service.DiskMerge(id)
+	a.setOperationResult(service.DiskMerge(id))
 	service.StatesConfirmed = false
 	a.syncAfterServiceMutation()
 }
@@ -497,7 +498,7 @@ func (a *App) diskResize(id string, args map[string]string) {
 	if a.diskAttached(id) && !a.refreshDiskOperationStates() {
 		return
 	}
-	a.State.Message = service.DiskResize(id, args)
+	a.setOperationResult(service.DiskResize(id, args))
 	service.StatesConfirmed = false
 	a.syncAfterServiceMutation()
 }
@@ -515,9 +516,9 @@ func (a *App) diskAttached(id string) bool {
 }
 
 func (a *App) diskInfo(id string) {
-	info, msg := a.ensureService().DiskInfo(id)
-	a.State.Message = msg
-	if strings.HasPrefix(msg, "disk not found:") || strings.HasPrefix(msg, "disk info needs") {
+	info, result := a.ensureService().DiskInfo(id)
+	a.setOperationResult(result)
+	if result.Code == topology.ResultCodeDiskInfoInvalid {
 		a.State.Console = nil
 		return
 	}
@@ -525,22 +526,22 @@ func (a *App) diskInfo(id string) {
 }
 
 func (a *App) diskRename(id, newID string) {
-	a.State.Message = a.ensureService().DiskRename(id, newID)
+	a.setOperationResult(a.ensureService().DiskRename(id, newID))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskDelete(id string) {
-	a.State.Message = a.ensureService().DiskDelete(id)
+	a.setOperationResult(a.ensureService().DiskDelete(id))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskLayerDelete(id string) {
-	a.State.Message = a.ensureService().DiskLayerDelete(id)
+	a.setOperationResult(a.ensureService().DiskLayerDelete(id))
 	a.syncAfterServiceMutation()
 }
 
 func (a *App) diskLayerCreate(baseID, layerID string) {
-	a.State.Message = a.ensureService().DiskLayerCreate(baseID, layerID)
+	a.setOperationResult(a.ensureService().DiskLayerCreate(baseID, layerID))
 	a.syncAfterServiceMutation()
 }
 

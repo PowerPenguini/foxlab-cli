@@ -557,19 +557,23 @@ func drawContextPlaceholder(g *grid, x, y int, item, rowStyle string) {
 }
 
 func drawConsole(g *grid, state ViewState, width, height int) {
+	notification, ok := notificationFromState(state)
+	if !ok {
+		return
+	}
 	line := consoleLine(state)
 	if line == "" || width <= 0 || height <= 0 {
 		return
 	}
-	drawNotification(g, notificationDisplayLine(line), notificationThemeForLine(line), width, height)
+	drawNotification(g, notificationDisplayLine(line), notificationThemeFor(notification, line), width, height)
 }
 
 func consoleLine(state ViewState) string {
-	if state.Message != "" {
-		if animatedStateFromMessage(state.Message) {
-			return spinner(state.AnimationFrame) + " " + state.Message
+	if notification, ok := notificationFromState(state); ok {
+		if notification.Busy || animatedStateFromMessage(notification.Text) {
+			return spinner(state.AnimationFrame) + " " + notification.Text
 		}
-		return state.Message
+		return notification.Text
 	}
 	return ""
 }
@@ -580,8 +584,19 @@ type notificationTheme struct {
 }
 
 func notificationThemeForLine(line string) notificationTheme {
+	return notificationThemeFor(Notification{}, line)
+}
+
+func notificationThemeFor(notification Notification, line string) notificationTheme {
 	theme := notificationTheme{body: themeNotification, bar: themeNotificationBar}
-	if isInfoNotification(line) {
+	if notification.Revision != 0 {
+		switch notification.Level {
+		case NotificationInfo:
+			theme.bar = themeNotificationInfoBar
+		case NotificationSuccess:
+			theme.bar = themeNotificationSuccessBar
+		}
+	} else if isInfoNotification(line) {
 		theme.bar = themeNotificationInfoBar
 	} else if isSuccessNotification(line) {
 		theme.bar = themeNotificationSuccessBar
@@ -678,8 +693,32 @@ func capitalizeMessage(line string) string {
 }
 
 func drawNotification(g *grid, line string, theme notificationTheme, width, height int) {
-	if width <= 3 || height <= 0 {
+	layout, ok := notificationLayoutFor(line, width, height)
+	if !ok {
 		return
+	}
+	for row := 0; row < layout.bounds.H; row++ {
+		y := layout.bounds.Y + row
+		g.Set(layout.bounds.X, y, ' ', theme.bar)
+		fillRow(g, layout.bounds.X+1, y, layout.bodyW, theme.body)
+	}
+	for i, line := range layout.lines {
+		y := layout.bounds.Y + i + layout.paddingY
+		g.Text(layout.bounds.X+1+layout.horizontalPadding, y, fit(line, layout.bodyW-layout.horizontalPadding*2), theme.body)
+	}
+}
+
+type notificationLayout struct {
+	bounds            rect
+	lines             []string
+	bodyW             int
+	paddingY          int
+	horizontalPadding int
+}
+
+func notificationLayoutFor(line string, width, height int) (notificationLayout, bool) {
+	if width <= 3 || height <= 0 {
+		return notificationLayout{}, false
 	}
 	const horizontalPadding = 2
 	const verticalPadding = 1
@@ -687,7 +726,7 @@ func drawNotification(g *grid, line string, theme notificationTheme, width, heig
 	maxW := min(width-2, max(24, width/2))
 	textW := maxW - 1 - horizontalPadding*2
 	if textW <= 0 {
-		return
+		return notificationLayout{}, false
 	}
 	x := 1
 	bottomY := height - 1
@@ -699,7 +738,7 @@ func drawNotification(g *grid, line string, theme notificationTheme, width, heig
 	maxLines := min(maxNotificationLines, availableRows-paddingY*2)
 	lines := notificationLines(line, textW, maxLines)
 	if len(lines) == 0 {
-		return
+		return notificationLayout{}, false
 	}
 	longest := 0
 	for _, line := range lines {
@@ -711,16 +750,22 @@ func drawNotification(g *grid, line string, theme notificationTheme, width, heig
 	if startY < 0 {
 		startY = 0
 	}
-	for row := 0; row < boxH; row++ {
-		y := startY + row
-		g.Set(x, y, ' ', theme.bar)
-		fillRow(g, x+1, y, bodyW, theme.body)
+	return notificationLayout{
+		bounds:            rect{X: x, Y: startY, W: bodyW + 1, H: boxH},
+		lines:             lines,
+		bodyW:             bodyW,
+		paddingY:          paddingY,
+		horizontalPadding: horizontalPadding,
+	}, true
+}
+
+func notificationBoundsForState(state ViewState, width, height int) (rect, bool) {
+	line := consoleLine(state)
+	if line == "" {
+		return rect{}, false
 	}
-	for i, line := range lines {
-		y := startY + i
-		y += paddingY
-		g.Text(x+1+horizontalPadding, y, fit(line, bodyW-horizontalPadding*2), theme.body)
-	}
+	layout, ok := notificationLayoutFor(notificationDisplayLine(line), width, height)
+	return layout.bounds, ok
 }
 
 func notificationLines(text string, width, maxLines int) []string {

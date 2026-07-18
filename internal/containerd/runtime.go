@@ -32,7 +32,7 @@ const (
 	configLabel      = "foxlab.config.sha256"
 	labLabel         = "foxlab.lab"
 	containerIDLabel = "foxlab.container.id"
-	containerDNSMode = "host-resolvconf"
+	containerDNSMode = "managed-host-public-v1"
 	taskExitTimeout  = 3 * time.Second
 )
 
@@ -107,6 +107,10 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 	if !ok {
 		return fmt.Errorf("container not found: %s", ref.ID)
 	}
+	resolvconfPath, err := syncContainerResolvconf(l, ct)
+	if err != nil {
+		return err
+	}
 	client, ctx, closeClient, err := r.client(ctx)
 	if err != nil {
 		return err
@@ -121,67 +125,12 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 			return err
 		}
 	}
-	container, loadErr := client.LoadContainer(ctx, name)
-	if loadErr == nil {
-		if nilInterface(container) {
-			return fmt.Errorf("containerd returned nil container handle: %s", name)
-		}
-		changed, err := containerConfigChanged(ctx, container, l.ID, ct, desiredDiskMount)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			task, err := container.Task(ctx, nil)
-			if err == nil {
-				if nilInterface(task) {
-					return fmt.Errorf("containerd returned nil task handle: %s", name)
-				}
-				recreateForUnhealthyDisk := false
-				status, statusErr := task.Status(ctx)
-				if statusErr == nil && status.Status == containerd.Running {
-					diskHealthy := true
-					if ct.Disk != "" {
-						var healthErr error
-						diskHealthy, healthErr = mountedContainerDiskHealthy(l, ct)
-						if healthErr != nil {
-							return fmt.Errorf("check mounted container disk for %s: %w", name, healthErr)
-						}
-					}
-					if diskHealthy {
-						if r.Bridge != nil {
-							if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
-								return err
-							}
-						}
-						return nil
-					}
-					if err := deleteContainer(ctx, container); err != nil {
-						return fmt.Errorf("delete container with unhealthy disk mount %s: %w", name, err)
-					}
-					if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
-						return fmt.Errorf("cleanup unhealthy container disk mount %s: %w", name, err)
-					}
-					recreateForUnhealthyDisk = true
-				}
-				if !recreateForUnhealthyDisk {
-					if err := deleteTask(ctx, task); err != nil {
-						return fmt.Errorf("delete stale task for %s: %w", name, err)
-					}
-				}
-			} else if !errdefs.IsNotFound(err) {
-				return err
-			}
-		}
-		if changed {
-			if err := deleteContainer(ctx, container); err != nil {
-				return err
-			}
-			if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
-				return err
-			}
-		}
-	} else if !errdefs.IsNotFound(loadErr) {
-		return loadErr
+	alreadyRunning, err := r.inspectExistingContainer(ctx, client, l, ct, name, desiredDiskMount)
+	if err != nil {
+		return err
+	}
+	if alreadyRunning {
+		return nil
 	}
 	imageRef, err := containerImageRef(ct.Image)
 	if err != nil {
@@ -207,30 +156,132 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 			}
 		}
 	}()
-	container, err = client.LoadContainer(ctx, name)
-	if err != nil {
-		if !errdefs.IsNotFound(err) {
-			return err
-		}
-		container, err = createContainer(ctx, client, name, image, l.ID, ct, diskMount)
-	} else {
-		changed, changeErr := containerConfigChanged(ctx, container, l.ID, ct, diskMount)
-		if changeErr != nil {
-			return changeErr
-		}
-		if changed {
-			if err := deleteContainer(ctx, container); err != nil {
-				return err
-			}
-			container, err = createContainer(ctx, client, name, image, l.ID, ct, diskMount)
-		}
-	}
+	container, created, err := ensureContainerForStart(ctx, client, name, image, l.ID, ct, diskMount, resolvconfPath)
 	if err != nil {
 		return err
 	}
-	if nilInterface(container) {
-		return fmt.Errorf("containerd returned nil container handle: %s", name)
+	if err := startContainerTaskWithRollback(ctx, container, created, name, func() error {
+		return r.ensureContainerTaskRunning(ctx, l, ct, name, container)
+	}); err != nil {
+		return err
 	}
+	startComplete = true
+	return nil
+}
+
+func (r *Runtime) inspectExistingContainer(ctx context.Context, client *containerd.Client, l *lab.Lab, ct lab.Container, name string, desiredDiskMount containerDiskMount) (bool, error) {
+	container, err := client.LoadContainer(ctx, name)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if nilInterface(container) {
+		return false, fmt.Errorf("containerd returned nil container handle: %s", name)
+	}
+	changed, err := containerConfigChanged(ctx, container, l.ID, ct, desiredDiskMount)
+	if err != nil {
+		return false, err
+	}
+	if changed {
+		if err := deleteContainer(ctx, container); err != nil {
+			return false, err
+		}
+		if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if nilInterface(task) {
+		return false, fmt.Errorf("containerd returned nil task handle: %s", name)
+	}
+	status, statusErr := task.Status(ctx)
+	if statusErr == nil && status.Status == containerd.Running {
+		diskHealthy := true
+		if ct.Disk != "" {
+			diskHealthy, err = mountedContainerDiskHealthy(l, ct)
+			if err != nil {
+				return false, fmt.Errorf("check mounted container disk for %s: %w", name, err)
+			}
+		}
+		if diskHealthy {
+			if r.Bridge != nil {
+				if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
+					return false, err
+				}
+			}
+			return true, nil
+		}
+		if err := deleteContainer(ctx, container); err != nil {
+			return false, fmt.Errorf("delete container with unhealthy disk mount %s: %w", name, err)
+		}
+		if err := cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace()); err != nil {
+			return false, fmt.Errorf("cleanup unhealthy container disk mount %s: %w", name, err)
+		}
+		return false, nil
+	}
+	if err := deleteTask(ctx, task); err != nil {
+		return false, fmt.Errorf("delete stale task for %s: %w", name, err)
+	}
+	return false, nil
+}
+
+func ensureContainerForStart(ctx context.Context, client *containerd.Client, name string, image containerd.Image, labID string, ct lab.Container, diskMount containerDiskMount, resolvconfPath string) (containerd.Container, bool, error) {
+	created := false
+	container, err := client.LoadContainer(ctx, name)
+	if err != nil {
+		if !errdefs.IsNotFound(err) {
+			return nil, false, err
+		}
+		container, err = createContainer(ctx, client, name, image, labID, ct, diskMount, resolvconfPath)
+		created = err == nil
+	} else {
+		changed, changeErr := containerConfigChanged(ctx, container, labID, ct, diskMount)
+		if changeErr != nil {
+			return nil, false, changeErr
+		}
+		if changed {
+			if err := deleteContainer(ctx, container); err != nil {
+				return nil, false, err
+			}
+			container, err = createContainer(ctx, client, name, image, labID, ct, diskMount, resolvconfPath)
+			created = err == nil
+		}
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if nilInterface(container) {
+		return nil, false, fmt.Errorf("containerd returned nil container handle: %s", name)
+	}
+	return container, created, nil
+}
+
+func startContainerTaskWithRollback(ctx context.Context, container containerd.Container, created bool, name string, startTask func() error) error {
+	if startTask == nil {
+		return fmt.Errorf("missing container task start for %s", name)
+	}
+	if err := startTask(); err != nil {
+		if !created || nilInterface(container) {
+			return err
+		}
+		if cleanupErr := deleteContainer(ctx, container); cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("delete container after failed start %s: %w", name, cleanupErr))
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *Runtime) ensureContainerTaskRunning(ctx context.Context, l *lab.Lab, ct lab.Container, name string, container containerd.Container) error {
 	task, err := container.Task(ctx, nil)
 	if err == nil {
 		if nilInterface(task) {
@@ -239,11 +290,8 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 		status, statusErr := task.Status(ctx)
 		if statusErr == nil && status.Status == containerd.Running {
 			if r.Bridge != nil {
-				if err := r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid())); err != nil {
-					return err
-				}
+				return r.Bridge.AttachContainer(ctx, l, ct, int(task.Pid()))
 			}
-			startComplete = true
 			return nil
 		}
 		if err := deleteTask(ctx, task); err != nil {
@@ -273,7 +321,6 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 			return err
 		}
 	}
-	startComplete = true
 	return nil
 }
 
@@ -484,7 +531,7 @@ func (r *Runtime) containerdAddress() string {
 	return r.Address
 }
 
-func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount containerDiskMount) []oci.SpecOpts {
+func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount containerDiskMount, resolvconfPath string) []oci.SpecOpts {
 	opts := []oci.SpecOpts{}
 	if diskMount.Source != "" && diskMount.Destination == "/" {
 		opts = append(opts, oci.WithRootFSPath(diskMount.Source))
@@ -498,7 +545,12 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 	if len(env) > 0 {
 		opts = append(opts, oci.WithEnv(env))
 	}
-	opts = append(opts, oci.WithHostResolvconf)
+	opts = append(opts, oci.WithMounts([]specs.Mount{{
+		Type:        "bind",
+		Source:      resolvconfPath,
+		Destination: "/etc/resolv.conf",
+		Options:     []string{"rbind", "ro"},
+	}}))
 	if diskMount.Source != "" && diskMount.Destination != "/" {
 		opts = append(opts, oci.WithMounts([]specs.Mount{{
 			Type:        "bind",
@@ -542,10 +594,10 @@ func containerImage(ctx context.Context, client *containerd.Client, imageRef str
 	return image, nil
 }
 
-func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, labID string, ct lab.Container, diskMount containerDiskMount) (containerd.Container, error) {
+func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, labID string, ct lab.Container, diskMount containerDiskMount, resolvconfPath string) (containerd.Container, error) {
 	opts := []containerd.NewContainerOpts{
 		containerd.WithImage(image),
-		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount)...),
+		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount, resolvconfPath)...),
 		containerd.WithContainerLabels(map[string]string{
 			configLabel:      containerConfigHash(ct, diskMount),
 			labLabel:         labID,

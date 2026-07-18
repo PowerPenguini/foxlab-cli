@@ -12,13 +12,22 @@ type Service struct {
 	Path            string
 	States          map[string]string
 	StatesConfirmed bool
+	DiskCommands    DiskCommandRunner
 }
 
 func NewService(loadedLab *lab.Lab, path string) *Service {
 	return &Service{
-		Lab:  loadedLab,
-		Path: path,
+		Lab:          loadedLab,
+		Path:         path,
+		DiskCommands: execDiskCommandRunner{},
 	}
+}
+
+func (s *Service) diskCommands() DiskCommandRunner {
+	if s.DiskCommands == nil {
+		s.DiskCommands = execDiskCommandRunner{}
+	}
+	return s.DiskCommands
 }
 
 func (s *Service) SaveAndRefresh() error {
@@ -38,16 +47,6 @@ func (s *Service) SaveAndRefresh() error {
 		return err
 	}
 	s.Lab = loaded
-	return nil
-}
-
-func (s *Service) saveAndRefreshWithRollback(snapshot *lab.Lab) error {
-	if err := s.SaveAndRefresh(); err != nil {
-		if snapshot != nil {
-			s.Lab = snapshot
-		}
-		return err
-	}
 	return nil
 }
 
@@ -202,62 +201,58 @@ func (s *Service) SwitchForExternal(id string) string {
 	return ""
 }
 
-func (s *Service) VMDesiredState(ref, state string) string {
+func (s *Service) VMDesiredState(ref, state string) Result {
 	if s.Lab == nil {
-		return "vm state needs a loaded .lab file"
+		return Failure("vm state needs a loaded .lab file")
 	}
 	id, ok := s.resolveVMID(ref)
 	if !ok {
-		return "vm not found: " + ref
+		return Failure("vm not found: " + ref)
 	}
 	state = lab.DesiredState(state)
 	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {
-		return "unsupported vm desired state: " + state
+		return Failure("unsupported vm desired state: " + state)
 	}
 	for i := range s.Lab.VMs {
 		if s.Lab.VMs[i].ID != id {
 			continue
 		}
-		if err := s.requireSavePath(); err != nil {
-			return "desired state failed: " + err.Error()
+		if err := s.mutateLab(func(current *lab.Lab) error {
+			current.VMs[i].DesiredState = state
+			return nil
+		}); err != nil {
+			return FailureWithCause("desired state failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
-		s.Lab.VMs[i].DesiredState = state
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "desired state failed: " + err.Error()
-		}
-		return "desired " + s.workloadDisplayRef("vm", id) + " " + state
+		return Success("desired " + s.workloadDisplayRef("vm", id) + " " + state)
 	}
-	return "vm not found: " + id
+	return Failure("vm not found: " + id)
 }
 
-func (s *Service) ContainerDesiredState(ref, state string) string {
+func (s *Service) ContainerDesiredState(ref, state string) Result {
 	if s.Lab == nil {
-		return "container state needs a loaded .lab file"
+		return Failure("container state needs a loaded .lab file")
 	}
 	id, ok := s.resolveContainerID(ref)
 	if !ok {
-		return "container not found: " + ref
+		return Failure("container not found: " + ref)
 	}
 	state = lab.DesiredState(state)
 	if state != lab.DesiredStateRunning && state != lab.DesiredStateStopped {
-		return "unsupported container desired state: " + state
+		return Failure("unsupported container desired state: " + state)
 	}
 	for i := range s.Lab.Containers {
 		if s.Lab.Containers[i].ID != id {
 			continue
 		}
-		if err := s.requireSavePath(); err != nil {
-			return "desired state failed: " + err.Error()
+		if err := s.mutateLab(func(current *lab.Lab) error {
+			current.Containers[i].DesiredState = state
+			return nil
+		}); err != nil {
+			return FailureWithCause("desired state failed: "+err.Error(), err)
 		}
-		snapshot := lab.Clone(s.Lab)
-		s.Lab.Containers[i].DesiredState = state
-		if err := s.saveAndRefreshWithRollback(snapshot); err != nil {
-			return "desired state failed: " + err.Error()
-		}
-		return "desired " + s.workloadDisplayRef("container", id) + " " + state
+		return Success("desired " + s.workloadDisplayRef("container", id) + " " + state)
 	}
-	return "container not found: " + id
+	return Failure("container not found: " + id)
 }
 
 func (s *Service) nodeCount() int {

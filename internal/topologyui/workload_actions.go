@@ -1,9 +1,8 @@
 package topologyui
 
 import (
-	"strings"
-
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/workload"
 )
 
@@ -29,17 +28,17 @@ func (a *App) setWorkloadDesiredState(typ, id, state string) {
 	if value, ok := service.ResolveWorkloadID(typ, id); ok {
 		resolvedID = value
 	}
+	result := topology.Failure("desired state is available for vm and container nodes")
 	switch typ {
 	case NodeContainer:
-		a.State.Message = service.ContainerDesiredState(resolvedID, state)
+		result = service.ContainerDesiredState(resolvedID, state)
 	case NodeVM:
-		a.State.Message = service.VMDesiredState(resolvedID, state)
-	default:
-		a.State.Message = "desired state is available for vm and container nodes"
+		result = service.VMDesiredState(resolvedID, state)
 	}
-	message := a.State.Message
+	a.setOperationResult(result)
+	message := result.Message
 	a.syncFromService()
-	if strings.HasPrefix(message, "desired ") {
+	if result.OK() {
 		a.setPendingWorkloadStart(typ, resolvedID, state)
 		a.ensureAppliedAfterDesiredState(message)
 	}

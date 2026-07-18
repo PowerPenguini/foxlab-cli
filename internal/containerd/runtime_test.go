@@ -10,7 +10,9 @@ import (
 	"time"
 
 	containerdapi "github.com/containerd/containerd"
+	"github.com/containerd/containerd/cio"
 	cdocontainers "github.com/containerd/containerd/containers"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/identifiers"
 	coci "github.com/containerd/containerd/oci"
 
@@ -28,6 +30,64 @@ func TestWaitTaskExitTimesOut(t *testing.T) {
 	err = waitTaskExit(ctx, make(<-chan containerdapi.ExitStatus), time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitTaskExit canceled error = %v, want context canceled", err)
+	}
+}
+
+type startRollbackContainer struct {
+	containerdapi.Container
+	taskErr     error
+	deleteErr   error
+	deleteCalls int
+}
+
+func (c *startRollbackContainer) Task(context.Context, cio.Attach) (containerdapi.Task, error) {
+	return nil, c.taskErr
+}
+
+func (c *startRollbackContainer) Delete(context.Context, ...containerdapi.DeleteOpts) error {
+	c.deleteCalls++
+	return c.deleteErr
+}
+
+func TestStartContainerTaskRollsBackOnlyNewContainer(t *testing.T) {
+	startErr := errors.New("task start failed")
+
+	t.Run("new container", func(t *testing.T) {
+		container := &startRollbackContainer{taskErr: errdefs.ErrNotFound}
+		err := startContainerTaskWithRollback(context.Background(), container, true, "demo", func() error {
+			return startErr
+		})
+		if !errors.Is(err, startErr) {
+			t.Fatalf("error = %v, want task start failure", err)
+		}
+		if container.deleteCalls != 1 {
+			t.Fatalf("delete calls = %d, want 1", container.deleteCalls)
+		}
+	})
+
+	t.Run("reused container", func(t *testing.T) {
+		container := &startRollbackContainer{taskErr: errdefs.ErrNotFound}
+		err := startContainerTaskWithRollback(context.Background(), container, false, "demo", func() error {
+			return startErr
+		})
+		if !errors.Is(err, startErr) {
+			t.Fatalf("error = %v, want task start failure", err)
+		}
+		if container.deleteCalls != 0 {
+			t.Fatalf("delete calls = %d, want 0", container.deleteCalls)
+		}
+	})
+}
+
+func TestStartContainerTaskJoinsRollbackFailure(t *testing.T) {
+	startErr := errors.New("task start failed")
+	deleteErr := errors.New("container delete failed")
+	container := &startRollbackContainer{taskErr: errdefs.ErrNotFound, deleteErr: deleteErr}
+	err := startContainerTaskWithRollback(context.Background(), container, true, "demo", func() error {
+		return startErr
+	})
+	if !errors.Is(err, startErr) || !errors.Is(err, deleteErr) {
+		t.Fatalf("error = %v, want start and rollback failures", err)
 	}
 }
 
@@ -270,7 +330,7 @@ func TestContainerProcessArgsDefaultKeepsContainerRunning(t *testing.T) {
 
 func TestContainerSpecOptsUsesContainerDiskAsRootFS(t *testing.T) {
 	diskMount := containerDiskMount{Source: "/host/rootfs/merged", Destination: "/"}
-	opts := containerSpecOpts(nil, lab.Container{}, diskMount)
+	opts := containerSpecOpts(nil, lab.Container{}, diskMount, "/run/foxlab/resolv/demo.conf")
 	if len(opts) != 4 {
 		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, resolv.conf, and rootfs path", len(opts))
 	}
@@ -289,8 +349,9 @@ func TestContainerSpecOptsUsesContainerDiskAsRootFS(t *testing.T) {
 	}
 }
 
-func TestContainerSpecOptsMountsHostResolvconf(t *testing.T) {
-	opts := containerSpecOpts(nil, lab.Container{}, containerDiskMount{})
+func TestContainerSpecOptsMountsManagedResolvconf(t *testing.T) {
+	resolvconfPath := "/run/foxlab/resolv/demo.conf"
+	opts := containerSpecOpts(nil, lab.Container{}, containerDiskMount{}, resolvconfPath)
 	if len(opts) != 3 {
 		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, and resolv.conf", len(opts))
 	}
@@ -302,8 +363,8 @@ func TestContainerSpecOptsMountsHostResolvconf(t *testing.T) {
 		t.Fatalf("spec mounts = %#v, want one resolv.conf mount", spec.Mounts)
 	}
 	mount := spec.Mounts[0]
-	if mount.Type != "bind" || mount.Source != "/etc/resolv.conf" || mount.Destination != "/etc/resolv.conf" {
-		t.Fatalf("spec mount = %#v, want host resolv.conf bind mount", mount)
+	if mount.Type != "bind" || mount.Source != resolvconfPath || mount.Destination != "/etc/resolv.conf" {
+		t.Fatalf("spec mount = %#v, want managed resolv.conf bind mount", mount)
 	}
 	if !reflect.DeepEqual(mount.Options, []string{"rbind", "ro"}) {
 		t.Fatalf("spec mount options = %#v", mount.Options)

@@ -11,6 +11,7 @@ type ViewState struct {
 	PanX                   int
 	PanY                   int
 	Message                string
+	Notification           Notification
 	ContextMenu            bool
 	ContextGroup           string
 	ContextInSubmenu       bool
