@@ -82,6 +82,57 @@ func TestMountContainerDiskDoesNotFormatOtherMountErrors(t *testing.T) {
 	}
 }
 
+func TestGrowMountedContainerDiskFilesystemExpandsExt4(t *testing.T) {
+	oldHooks := containerDiskHooks
+	containerDiskHooks.filesystemType = func(path string) (string, error) {
+		if path != "/rootfs" {
+			t.Fatalf("filesystem type path = %q, want /rootfs", path)
+		}
+		return "ext4", nil
+	}
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
+	defer restore()
+
+	if err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"resize2fs /dev/nbd0"}
+	if !reflect.DeepEqual(testCommands(t), want) {
+		t.Fatalf("commands = %#v, want %#v", testCommands(t), want)
+	}
+}
+
+func TestGrowMountedContainerDiskFilesystemSkipsNonExtFilesystem(t *testing.T) {
+	oldHooks := containerDiskHooks
+	containerDiskHooks.filesystemType = func(string) (string, error) { return "xfs", nil }
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
+	defer restore()
+
+	if err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
+		t.Fatal(err)
+	}
+	if got := testCommands(t); len(got) != 0 {
+		t.Fatalf("commands = %#v, want none", got)
+	}
+}
+
+func TestGrowMountedContainerDiskFilesystemReportsResizeFailure(t *testing.T) {
+	oldHooks := containerDiskHooks
+	containerDiskHooks.filesystemType = func(string) (string, error) { return "ext4", nil }
+	t.Cleanup(func() { containerDiskHooks = oldHooks })
+	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+		return fmt.Errorf("resize failed")
+	})
+	defer restore()
+
+	err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs")
+	if err == nil || !strings.Contains(err.Error(), "grow container disk filesystem: resize failed") {
+		t.Fatalf("grow error = %v", err)
+	}
+}
+
 func TestRequireContainerDiskToolsDoesNotRequireUnusedQemuImg(t *testing.T) {
 	oldLookPath := lookPath
 	lookPath = func(file string) (string, error) {
@@ -110,6 +161,22 @@ func TestRequireContainerDiskToolsReportsMissingUsedTool(t *testing.T) {
 	err := requireContainerDiskTools()
 	if err == nil || !strings.Contains(err.Error(), "requires qemu-nbd") {
 		t.Fatalf("requireContainerDiskTools() = %v, want qemu-nbd error", err)
+	}
+}
+
+func TestRequireContainerDiskToolsReportsMissingResize2FS(t *testing.T) {
+	oldLookPath := lookPath
+	lookPath = func(file string) (string, error) {
+		if file == "resize2fs" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + file, nil
+	}
+	t.Cleanup(func() { lookPath = oldLookPath })
+
+	err := requireContainerDiskTools()
+	if err == nil || !strings.Contains(err.Error(), "requires resize2fs") {
+		t.Fatalf("requireContainerDiskTools() = %v, want resize2fs error", err)
 	}
 }
 

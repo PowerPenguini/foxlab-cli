@@ -95,6 +95,9 @@ func (g *Canvas) String(ansi bool) string {
 		current = ""
 		for x := 0; x < g.Width; x++ {
 			c := g.Cells[y*g.Width+x]
+			if c.Ch == 0 {
+				continue
+			}
 			if ansi && c.Style != current {
 				if current != "" {
 					b.WriteString(ANSIReset)

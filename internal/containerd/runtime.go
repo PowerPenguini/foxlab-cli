@@ -597,21 +597,30 @@ func containerImage(ctx context.Context, client *containerd.Client, imageRef str
 func createContainer(ctx context.Context, client *containerd.Client, name string, image containerd.Image, labID string, ct lab.Container, diskMount containerDiskMount, resolvconfPath string) (containerd.Container, error) {
 	opts := []containerd.NewContainerOpts{
 		containerd.WithImage(image),
+	}
+	if containerUsesManagedSnapshot(diskMount) {
+		// WithImageConfig resolves the image user and supplemental groups while
+		// WithNewSpec is evaluated. The snapshot metadata must already exist so
+		// containerd can resolve those values against an absolute rootfs.
+		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
+	}
+	opts = append(opts,
 		containerd.WithNewSpec(containerSpecOpts(image, ct, diskMount, resolvconfPath)...),
 		containerd.WithContainerLabels(map[string]string{
 			configLabel:      containerConfigHash(ct, diskMount),
 			labLabel:         labID,
 			containerIDLabel: ct.ID,
 		}),
-	}
-	if diskMount.Source == "" || diskMount.Destination != "/" {
-		opts = append(opts, containerd.WithNewSnapshot(name+"-rootfs", image))
-	}
+	)
 	return client.NewContainer(
 		ctx,
 		name,
 		opts...,
 	)
+}
+
+func containerUsesManagedSnapshot(diskMount containerDiskMount) bool {
+	return diskMount.Source == "" || diskMount.Destination != "/"
 }
 
 func containerConfigChanged(ctx context.Context, container containerd.Container, labID string, ct lab.Container, diskMount containerDiskMount) (bool, error) {
@@ -827,15 +836,32 @@ func containerShellArgs(ct lab.Container) []string {
 }
 
 func containerShellEnv(ct lab.Container, base []string) []string {
-	env := append([]string(nil), base...)
+	env := setContainerEnv(base, "TERM", "xterm-256color")
 	shell := firstContainerShell(ct)
-	if !envHasKey(env, "TERM") {
-		env = append(env, "TERM=xterm-256color")
-	}
 	if !envHasKey(env, "SHELL") {
 		env = append(env, "SHELL="+shell)
 	}
 	return env
+}
+
+func setContainerEnv(env []string, key, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	replaced := false
+	for _, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && name == key {
+			if !replaced {
+				out = append(out, key+"="+value)
+				replaced = true
+			}
+			continue
+		}
+		out = append(out, entry)
+	}
+	if !replaced {
+		out = append(out, key+"="+value)
+	}
+	return out
 }
 
 func envHasKey(env []string, key string) bool {

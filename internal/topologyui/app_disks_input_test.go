@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"foxlab-cli/internal/daemonstatus"
 	"foxlab-cli/internal/lab"
@@ -929,6 +932,21 @@ func TestInteractiveRunCleanupExitsAltScreen(t *testing.T) {
 	cleanup := ansiShow + ansiReset + ansiExitAltScreen
 	if !strings.HasSuffix(got, cleanup) {
 		t.Fatalf("interactive output does not end with cleanup %q:\n%q", cleanup, got)
+	}
+}
+
+func TestInteractiveRunTreatsTerminalEOFAsCleanExit(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	cleaned := false
+	start := func(*App) (func(), error) {
+		return func() { cleaned = true }, nil
+	}
+	read := func(*App) (string, error) { return "", io.EOF }
+	if err := app.runInteractive(start, read, func(*App) (int, int) { return 80, 20 }); err != nil {
+		t.Fatalf("terminal EOF = %v", err)
+	}
+	if !cleaned {
+		t.Fatal("terminal EOF skipped cleanup")
 	}
 }
 
@@ -2228,11 +2246,58 @@ func TestReadAppKeyQueuesPastedText(t *testing.T) {
 		}
 	}
 	got, err := readAppKey(&app)
-	if err != nil {
-		t.Fatalf("readAppKey after queue err=%v", err)
+	if !errors.Is(err, io.EOF) || got != "" {
+		t.Fatalf("readAppKey after queue = %q err=%v, want EOF", got, err)
 	}
-	if got != "" {
-		t.Fatalf("readAppKey after queue = %q, want empty", got)
+}
+
+func TestWaitReadableRejectsClosedDescriptor(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := int(r.Fd())
+	_ = r.Close()
+	_ = w.Close()
+	if ok, err := waitReadable(fd, time.Millisecond); ok || !errors.Is(err, unix.EBADF) {
+		t.Fatalf("closed descriptor readable=%v err=%v", ok, err)
+	}
+}
+
+func TestReadAppKeyMapsQueuedTextUsingCurrentUIState(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(":hjkl ")); err != nil {
+		_ = w.Close()
+		_ = r.Close()
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	defer r.Close()
+
+	app := App{In: r}
+	got, err := readAppKey(&app)
+	if err != nil || got != "char::" {
+		t.Fatalf("palette opener key=%q err=%v", got, err)
+	}
+	app.State.PaletteOpen = true
+	for _, want := range []string{"char:h", "char:j", "char:k", "char:l", "char: "} {
+		got, err = readAppKey(&app)
+		if err != nil || got != want {
+			t.Fatalf("queued palette key=%q err=%v, want %q", got, err, want)
+		}
+	}
+}
+
+func TestDecodeEscapeFollowedByTextKeepsBothEvents(t *testing.T) {
+	events := decodeKeyEvents("\x1bh", true)
+	if len(events) != 2 || events[0].key != "escape" || events[1].key != "char:h" {
+		t.Fatalf("escape plus text events = %#v", events)
+	}
+	if got := append(append([]byte(nil), events[0].raw...), events[1].raw...); !bytes.Equal(got, []byte("\x1bh")) {
+		t.Fatalf("escape plus text raw = %q", got)
 	}
 }
 

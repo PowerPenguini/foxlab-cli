@@ -40,6 +40,9 @@ func (a *App) executeCommand(command string) bool {
 		a.executeDiskCommand(fields)
 	case "shell":
 		a.executeShellCommand(fields)
+	case "tabnext", "tabprev", "tabclose", "tabrestart":
+		a.ensureTabs()
+		a.executeTabCommand(fields)
 	case "switch", "sw":
 		a.executeSwitchCommand(fields)
 	case "uplink", "up", "external", "ext":

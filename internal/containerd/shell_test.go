@@ -85,12 +85,23 @@ func TestContainerShellProcessKeepsImageEnvironment(t *testing.T) {
 		t.Fatalf("args = %#v", process.Args)
 	}
 	got := strings.Join(process.Env, "\n")
-	for _, want := range []string{"PATH=/image/bin", "HOME=/home/kali", "TERM=xterm-kitty", "SHELL=/usr/bin/bash"} {
+	for _, want := range []string{"PATH=/image/bin", "HOME=/home/kali", "TERM=xterm-256color", "SHELL=/usr/bin/bash"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("env missing %q in %#v", want, process.Env)
 		}
 	}
+	if strings.Contains(got, "TERM=xterm-kitty") {
+		t.Fatalf("shell inherited incompatible TERM: %#v", process.Env)
+	}
 	if strings.Contains(got, "USER=root") || strings.Contains(got, "LOGNAME=root") {
 		t.Fatalf("env forced root identity: %#v", process.Env)
+	}
+}
+
+func TestShellProcessReceivesInitialConsoleSize(t *testing.T) {
+	process := containerShellProcess(lab.Container{}, nil)
+	setShellProcessSize(process, ShellSize{Columns: 132, Rows: 40})
+	if process.ConsoleSize == nil || process.ConsoleSize.Width != 132 || process.ConsoleSize.Height != 40 {
+		t.Fatalf("console size = %#v", process.ConsoleSize)
 	}
 }

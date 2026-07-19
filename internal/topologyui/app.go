@@ -2,6 +2,8 @@ package topologyui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,8 +30,16 @@ type appRuntimeState struct {
 }
 
 type appInputState struct {
-	pendingKeys []string
-	mouse       mouseInteractionState
+	pendingKeys   []string
+	pendingRaw    [][]byte
+	currentRaw    []byte
+	readBuffer    []byte
+	readDeadline  time.Time
+	pasteActive   bool
+	pasteToUI     bool
+	hostMouseMany bool
+	hostAppKeypad bool
+	mouse         mouseInteractionState
 }
 
 type mouseInteractionState struct {
@@ -87,6 +97,7 @@ type App struct {
 	StatusRefreshInterval time.Duration
 	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 	DaemonController      DaemonController
+	tabs                  *tabManager
 	runtimeState          appRuntimeState
 	inputState            appInputState
 	notificationState     appNotificationState
@@ -108,6 +119,7 @@ func (a *App) Run() error {
 	a.ensureService()
 	a.refreshWorkloadStates()
 	a.refreshApplyLabState()
+	a.ensureTabs()
 	return a.runInteractive(startAppTerminalSession, readAppKey, appTerminalSize)
 }
 
@@ -153,6 +165,11 @@ type keyReadFunc func(*App) (string, error)
 type terminalSizeFunc func(*App) (int, int)
 
 func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size terminalSizeFunc) error {
+	a.ensureTabs()
+	if err := a.tabs.openWakePipe(); err != nil {
+		return fmt.Errorf("terminal update wake pipe: %w", err)
+	}
+	defer a.tabs.closeWakePipe()
 	cleanup, err := start(a)
 	if err != nil {
 		return err
@@ -160,6 +177,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() {
+		a.closeTabs()
 		if cleanup != nil {
 			cleanup()
 		}
@@ -173,10 +191,14 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	statusUpdates := make(chan statusUpdate, 1)
 	for {
 		now := time.Now()
+		if a.drainTabUpdates() {
+			dirty = true
+		}
 		if a.drainStatusUpdates(statusUpdates, &statusRefreshActive) {
 			dirty = true
 		}
 		a.State.StatusRefreshing = statusRefreshActive
+		a.syncHostTerminalModes()
 		if a.updateMessageLifetime(now) {
 			dirty = true
 		}
@@ -209,9 +231,17 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		key, err := read(a)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
 			return err
 		}
 		if key == "" {
+			continue
+		}
+		wasRunningShell := a.tabs.activeRunningShell()
+		if a.handleTabInput(key, a.inputState.currentRaw) {
+			dirty = a.tabInputNeedsImmediateRender(key, wasRunningShell)
 			continue
 		}
 		if strings.HasPrefix(key, "mouse:") && a.prepareMouseClickFeedback(key) {
@@ -432,9 +462,15 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 }
 
 func (a *App) render(w io.Writer, width, height int, ansi bool) error {
+	a.ensureTabs()
+	if a.tabs.activeKind() != tabKindLab {
+		_, err := io.WriteString(w, a.renderShellTabs(width, height).String(ansi))
+		return err
+	}
+	contentHeight := max(0, height-tabBarHeight)
 	renderState := a.diskExplorerRenderState()
-	key := renderRouteCacheKey(a.Model, width, height, a.State.PanX, a.State.PanY)
-	stableKey := renderRouteCacheStableKey(a.Model, width, height)
+	key := renderRouteCacheKey(a.Model, width, contentHeight, a.State.PanX, a.State.PanY)
+	stableKey := renderRouteCacheStableKey(a.Model, width, contentHeight)
 	reuseMovingRoutes := a.State.MoveMode &&
 		a.RouteCacheKey != "" &&
 		len(a.RouteCacheRoutes) > 0 &&
@@ -444,7 +480,7 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 		a.RouteCachePanY == a.State.PanY
 	reusePanningRoutes := a.inputState.mouse.panActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
 	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
-		_, routes := planRenderRoutes(a.Model, renderState, width, height)
+		_, routes := planRenderRoutes(a.Model, renderState, width, contentHeight)
 		a.RouteCacheKey = key
 		a.RouteCacheStableKey = stableKey
 		a.RouteCacheWidth = width
@@ -457,7 +493,12 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	if key != a.RouteCacheKey && reusePanningRoutes {
 		routes = translateVisibleEdges(routes, a.State.PanX-a.RouteCachePanX, a.State.PanY-a.RouteCachePanY)
 	}
-	_, err := io.WriteString(w, renderGridWithRoutes(a.Model, renderState, width, height, routes).String(ansi))
+	content := renderGridWithRoutes(a.Model, renderState, width, contentHeight, routes)
+	g := newGrid(width, height)
+	copyCanvas(g, content, 0, tabBarHeight)
+	a.drawTabBar(g)
+	applyTerminalBackground(g)
+	_, err := io.WriteString(w, g.String(ansi))
 	return err
 }
 
@@ -877,5 +918,16 @@ func (a *App) recallCommand(delta int) {
 }
 
 func OneFrame(w io.Writer, m Model, width, height int) error {
-	return Render(w, m, ViewState{Focus: FocusGraph}, width, height, false)
+	return OneFrameForLab(w, m, nil, width, height)
+}
+
+func OneFrameForLab(w io.Writer, m Model, loadedLab *lab.Lab, width, height int) error {
+	app := App{
+		Model:      m,
+		Lab:        loadedLab,
+		State:      ViewState{Focus: FocusGraph},
+		ViewWidth:  width,
+		ViewHeight: height,
+	}
+	return app.render(w, width, height, false)
 }

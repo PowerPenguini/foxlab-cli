@@ -73,7 +73,7 @@ func main() {
 		os.Exit(1)
 	}
 	if *noRaw {
-		if err := topologyui.OneFrame(os.Stdout, model, *width, *height); err != nil {
+		if err := topologyui.OneFrameForLab(os.Stdout, model, loadedLab, *width, *height); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

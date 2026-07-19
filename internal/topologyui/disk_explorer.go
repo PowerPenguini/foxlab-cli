@@ -277,7 +277,7 @@ func (a *App) selectDiskExplorerID(id string) {
 }
 
 func (a *App) ensureDiskExplorerSelectionVisible() {
-	layout, ok := diskExplorerLayout(a.ViewWidth, a.ViewHeight)
+	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok {
 		return
 	}
@@ -331,7 +331,7 @@ func diskExplorerVisibleRows(layout rect) int {
 }
 
 func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
-	layout, ok := diskExplorerLayout(a.ViewWidth, a.ViewHeight)
+	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
 		a.closeDiskExplorer()
 		return false
@@ -350,7 +350,7 @@ func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
 }
 
 func (a *App) diskExplorerFeedbackRect(event mouseEvent) (rect, bool) {
-	layout, ok := diskExplorerLayout(a.ViewWidth, a.ViewHeight)
+	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
 		return rect{}, false
 	}

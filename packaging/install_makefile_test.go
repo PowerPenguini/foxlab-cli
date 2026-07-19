@@ -36,6 +36,14 @@ func TestStagedMakeInstallDoesNotControlDaemon(t *testing.T) {
 	}
 }
 
+func TestMakeInstallUsesDownloadableGoProxyByDefault(t *testing.T) {
+	log := runMakeInstall(t, t.TempDir())
+	const want = "go GOPROXY=https://proxy.golang.org,direct build"
+	if !strings.Contains(log, want) {
+		t.Fatalf("make install did not use the downloadable default Go proxy %q:\n%s", want, log)
+	}
+}
+
 func runMakeInstall(t *testing.T, destDir string) string {
 	t.Helper()
 	repoRoot, err := filepath.Abs("..")
@@ -46,7 +54,12 @@ func runMakeInstall(t *testing.T, destDir string) string {
 	logPath := filepath.Join(dir, "commands.log")
 	tool := func(name string) string {
 		path := filepath.Join(dir, name)
-		script := "#!/bin/sh\nprintf '%s %s\\n' '" + name + "' \"$*\" >> \"$FOXLAB_INSTALL_LOG\"\n"
+		script := "#!/bin/sh\n"
+		if name == "go" {
+			script += "printf '%s GOPROXY=%s %s\\n' 'go' \"$GOPROXY\" \"$*\" >> \"$FOXLAB_INSTALL_LOG\"\n"
+		} else {
+			script += "printf '%s %s\\n' '" + name + "' \"$*\" >> \"$FOXLAB_INSTALL_LOG\"\n"
+		}
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +76,13 @@ func runMakeInstall(t *testing.T, destDir string) string {
 		"DESTDIR="+destDir,
 	)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "FOXLAB_INSTALL_LOG="+logPath)
+	cmd.Env = make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GOPROXY=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "FOXLAB_INSTALL_LOG="+logPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("make install failed: %v\n%s", err, output)
 	}

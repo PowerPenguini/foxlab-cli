@@ -40,6 +40,10 @@ func (a *App) RunShell(typ, id string) error {
 }
 
 func (a *App) queueShell(node Node) {
+	if a.tabs != nil {
+		a.openShellTab(node)
+		return
+	}
 	if err := a.ensureShellWorkloadRunning(node); err != nil {
 		a.State.Message = "shell failed: " + err.Error()
 		return

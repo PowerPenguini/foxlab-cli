@@ -1,6 +1,6 @@
 GO ?= go
 GOCACHE ?= /tmp/foxlab-cli-go-cache
-GOPROXY ?= off
+GOPROXY ?= https://proxy.golang.org,direct
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 SYSTEMD_SYSTEM_UNIT_DIR ?= $(PREFIX)/lib/systemd/system

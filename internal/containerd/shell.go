@@ -17,6 +17,19 @@ import (
 )
 
 func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Reader, out io.Writer) error {
+	return r.execShell(ctx, l, id, in, out, nil)
+}
+
+type ShellSize struct {
+	Columns int
+	Rows    int
+}
+
+func (r *Runtime) ExecShellWithResize(ctx context.Context, l *lab.Lab, id string, in io.Reader, out io.Writer, resize <-chan ShellSize) error {
+	return r.execShell(ctx, l, id, in, out, resize)
+}
+
+func (r *Runtime) execShell(ctx context.Context, l *lab.Lab, id string, in io.Reader, out io.Writer, resize <-chan ShellSize) error {
 	ct, ok := findContainer(l, id)
 	if !ok {
 		return fmt.Errorf("container not found: %s", id)
@@ -60,7 +73,17 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 	execID := containerExecID("shell", id, time.Now())
 	exitC := make(chan struct{})
 	stdin := newShellExitReader(in, exitC)
-	process, err := task.Exec(setupCtx, execID, containerShellProcess(ct, spec.Process), cio.NewCreator(cio.WithStreams(stdin, out, out), cio.WithTerminal))
+	processSpec := containerShellProcess(ct, spec.Process)
+	select {
+	case size, ok := <-resize:
+		if ok {
+			setShellProcessSize(processSpec, size)
+		} else {
+			resize = nil
+		}
+	default:
+	}
+	process, err := task.Exec(setupCtx, execID, processSpec, cio.NewCreator(cio.WithStreams(stdin, out, out), cio.WithTerminal))
 	if err != nil {
 		return err
 	}
@@ -78,25 +101,44 @@ func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Re
 		return err
 	}
 	var status containerd.ExitStatus
-	select {
-	case <-exitC:
-		killShellProcess(namespace, process, syscall.SIGTERM)
+	for {
 		select {
-		case <-statusC:
-		case <-runCtx.Done():
-			return runCtx.Err()
-		case <-time.After(2 * time.Second):
-			killShellProcess(namespace, process, syscall.SIGKILL)
-			if err := waitTaskExit(runCtx, statusC, 2*time.Second); err != nil {
-				return err
+		case size, ok := <-resize:
+			if !ok {
+				resize = nil
+				continue
 			}
+			if size.Columns > 0 && size.Rows > 0 {
+				resizeCtx, cancelResize := context.WithTimeout(runCtx, 2*time.Second)
+				_ = process.Resize(resizeCtx, uint32(size.Columns), uint32(size.Rows))
+				cancelResize()
+			}
+		case <-exitC:
+			killShellProcess(namespace, process, syscall.SIGTERM)
+			select {
+			case <-statusC:
+			case <-runCtx.Done():
+				return runCtx.Err()
+			case <-time.After(2 * time.Second):
+				killShellProcess(namespace, process, syscall.SIGKILL)
+				if err := waitTaskExit(runCtx, statusC, 2*time.Second); err != nil {
+					return err
+				}
+			}
+			return nil
+		case nextStatus, ok := <-statusC:
+			if !ok {
+				return fmt.Errorf("container shell exit channel closed without a status")
+			}
+			status = nextStatus
+			goto exited
+		case <-runCtx.Done():
+			deleteShellProcess(namespace, process)
+			return runCtx.Err()
 		}
-		return nil
-	case status = <-statusC:
-	case <-runCtx.Done():
-		deleteShellProcess(namespace, process)
-		return runCtx.Err()
 	}
+
+exited:
 	code, _, err := status.Result()
 	if err != nil {
 		return err
@@ -161,4 +203,11 @@ func containerShellProcess(ct lab.Container, base *specs.Process) *specs.Process
 	process.Args = containerShellArgs(ct)
 	process.Env = containerShellEnv(ct, process.Env)
 	return &process
+}
+
+func setShellProcessSize(process *specs.Process, size ShellSize) {
+	if process == nil || size.Columns <= 0 || size.Rows <= 0 {
+		return
+	}
+	process.ConsoleSize = &specs.Box{Width: uint(size.Columns), Height: uint(size.Rows)}
 }

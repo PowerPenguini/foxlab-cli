@@ -40,17 +40,19 @@ const containerDiskSourceMarker = ".foxlab-disk-source"
 const containerImageSourceMarker = ".foxlab-image-source"
 
 var containerDiskHooks = struct {
-	requireTools  func() error
-	mountSource   func(string) (bool, string, error)
-	rootWritable  func(string) bool
-	sourceHealthy func(string) bool
-	freeNBD       func() (string, error)
+	requireTools   func() error
+	mountSource    func(string) (bool, string, error)
+	filesystemType func(string) (string, error)
+	rootWritable   func(string) bool
+	sourceHealthy  func(string) bool
+	freeNBD        func() (string, error)
 }{
-	requireTools:  requireContainerDiskTools,
-	mountSource:   mountSource,
-	rootWritable:  containerRootFSWritable,
-	sourceHealthy: containerDiskSourceHealthy,
-	freeNBD:       freeNBDDevice,
+	requireTools:   requireContainerDiskTools,
+	mountSource:    mountSource,
+	filesystemType: mountedFilesystemType,
+	rootWritable:   containerRootFSWritable,
+	sourceHealthy:  containerDiskSourceHealthy,
+	freeNBD:        freeNBDDevice,
 }
 
 func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container, imageRef, address, namespace string) (containerDiskMount, error) {
@@ -80,6 +82,9 @@ func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 						return containerDiskMount{}, fmt.Errorf("reset stale container disk mount: %w", err)
 					}
 				} else {
+					if err := growMountedContainerDiskFilesystem(ctx, source, mountPath); err != nil {
+						return containerDiskMount{}, err
+					}
 					return prepareContainerOverlayMount(ctx, l, ct, imageRef, address, namespace, mountPath)
 				}
 			} else {
@@ -109,6 +114,10 @@ func prepareContainerDiskMount(ctx context.Context, l *lab.Lab, ct lab.Container
 		return containerDiskMount{}, fmt.Errorf("mount container disk: %w", err)
 	}
 	cleanupDiskOnFailure = true
+	if err := growMountedContainerDiskFilesystem(ctx, device, mountPath); err != nil {
+		_ = cleanupMountedContainerDiskMount(ctx, mountPath, device)
+		return containerDiskMount{}, err
+	}
 	if err := writeContainerDiskSourceMarker(mountPath, diskPath); err != nil {
 		_ = cleanupMountedContainerDiskMount(ctx, mountPath, device)
 		return containerDiskMount{}, fmt.Errorf("record container disk source: %w", err)
@@ -245,6 +254,20 @@ func mountContainerDisk(ctx context.Context, device, mountPath string) error {
 func formatContainerDisk(ctx context.Context, device string) error {
 	if err := runHostCommand(ctx, "mkfs.ext4", "-F", device); err != nil {
 		return fmt.Errorf("format empty container disk after mount failed: %w", err)
+	}
+	return nil
+}
+
+func growMountedContainerDiskFilesystem(ctx context.Context, device, mountPath string) error {
+	fsType, err := containerDiskHooks.filesystemType(mountPath)
+	if err != nil {
+		return fmt.Errorf("detect container disk filesystem: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(fsType)) {
+	case "ext2", "ext3", "ext4":
+		if err := runHostCommand(ctx, "resize2fs", device); err != nil {
+			return fmt.Errorf("grow container disk filesystem: %w", err)
+		}
 	}
 	return nil
 }
@@ -515,7 +538,7 @@ func ctrGlobalArgs(address, namespace string) []string {
 }
 
 func requireContainerDiskTools() error {
-	for _, name := range []string{"qemu-nbd", "modprobe", "mount", "umount", "mkfs.ext4", "blkid", "ctr"} {
+	for _, name := range []string{"qemu-nbd", "modprobe", "mount", "umount", "mkfs.ext4", "resize2fs", "blkid", "ctr"} {
 		if _, err := lookPath(name); err != nil {
 			return fmt.Errorf("container disk mount requires %s", name)
 		}
@@ -579,6 +602,23 @@ func mountSource(target string) (bool, string, error) {
 		}
 	}
 	return false, "", scanner.Err()
+}
+
+func mountedFilesystemType(target string) (string, error) {
+	f, err := os.Open("/proc/mounts")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	target = filepath.Clean(target)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 3 && filepath.Clean(fields[1]) == target {
+			return fields[2], nil
+		}
+	}
+	return "", scanner.Err()
 }
 
 func nbdBaseDevice(source string) string {

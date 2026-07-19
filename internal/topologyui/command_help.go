@@ -6,8 +6,10 @@ func helpLines(topic string) []string {
 	switch strings.ToLower(strings.TrimSpace(topic)) {
 	case "", "general", "all":
 		return []string{
-			"palette/menu: : opens actions; Space opens node menu; Escape closes",
+			"palette/menu: : opens actions from Lab; Alt+: opens them over a shell; Escape closes",
 			"navigation: arrows or hjkl move selection; mouse click selects nodes and buttons",
+			"tabs: gt/gT or Alt+1..9 switches cards; click a tab or its x to focus/close",
+			"shell: Ctrl-] returns to Lab; Shift+PageUp/PageDown scrolls session history",
 			"editing: choose Configuration fields and type inline",
 			"links: use NIC menu and connect mode to create direct links",
 			"disks: open Disks from the palette for global disk management",
@@ -45,6 +47,14 @@ func helpLines(topic string) []string {
 			"link target: click a switch/uplink/workload, then choose or create target NIC",
 			"link delete: click X on a NIC row",
 		}
+	case "tab", "tabs", "shell", "console":
+		return []string{
+			"tabs: Lab is pinned; each VM console or container shell has one reusable card",
+			"switch: gt/gT from Lab or an ended session; Alt+1..9 works globally",
+			"running shell: Alt+: opens FoxLab actions; Ctrl-] returns to Lab; click x to close it",
+			"ended shell: r restarts, x closes; scrollback remains available",
+			"commands: tabnext, tabprev, tabclose [index|label], tabrestart [index|label]",
+		}
 	case "switch", "switches":
 		return []string{
 			"switch: Configuration edits name and mode",
@@ -58,7 +68,7 @@ func helpLines(topic string) []string {
 	default:
 		return []string{
 			"unknown help topic: " + topic,
-			"topics: add, vm, container, disk, link, switch, uplink",
+			"topics: add, vm, container, disk, link, switch, uplink, tabs",
 		}
 	}
 }

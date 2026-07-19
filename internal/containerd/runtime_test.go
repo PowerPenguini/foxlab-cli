@@ -206,6 +206,26 @@ func TestDesiredContainerDiskMountMatchesOverlayRootShape(t *testing.T) {
 	}
 }
 
+func TestContainerUsesManagedSnapshotOnlyWithoutRootDiskMount(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount containerDiskMount
+		want  bool
+	}{
+		{name: "no disk", want: true},
+		{name: "non-root bind mount", mount: containerDiskMount{Source: "/host/data", Destination: "/data"}, want: true},
+		{name: "disk-backed rootfs", mount: containerDiskMount{Source: "/host/rootfs/merged", Destination: "/"}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containerUsesManagedSnapshot(tt.mount); got != tt.want {
+				t.Fatalf("containerUsesManagedSnapshot(%#v) = %t, want %t", tt.mount, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDesiredContainerNamesAndManagedPrefix(t *testing.T) {
 	l := &lab.Lab{
 		ID: "default",

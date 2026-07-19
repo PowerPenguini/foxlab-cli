@@ -68,6 +68,11 @@ func (a *App) handlePaletteKey(key string) bool {
 
 func (a *App) runSelectedPaletteAction() bool {
 	query := normalizedPaletteQuery(a.State.PaletteQuery)
+	if strings.HasPrefix(query, "tabnext") || strings.HasPrefix(query, "tabprev") || strings.HasPrefix(query, "tabclose") || strings.HasPrefix(query, "tabrestart") {
+		a.closePalette()
+		a.executeCommand(query)
+		return false
+	}
 	if action, ok := executablePaletteCommand(query, a.State); ok {
 		return a.runPaletteAction(action)
 	}
@@ -151,7 +156,7 @@ func (a *App) openPaletteContextGroup(node Node, group string) {
 }
 
 func (a *App) handlePaletteMouse(event mouseEvent) bool {
-	layout, ok := paletteLayout(a.ViewWidth, a.ViewHeight)
+	layout, ok := paletteLayout(a.ViewWidth, a.paletteViewportHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
 		a.closePalette()
 		return false
@@ -166,7 +171,7 @@ func (a *App) handlePaletteMouse(event mouseEvent) bool {
 }
 
 func (a *App) paletteFeedbackRect(event mouseEvent) (rect, bool) {
-	layout, ok := paletteLayout(a.ViewWidth, a.ViewHeight)
+	layout, ok := paletteLayout(a.ViewWidth, a.paletteViewportHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
 		return rect{}, false
 	}
@@ -176,6 +181,13 @@ func (a *App) paletteFeedbackRect(event mouseEvent) (rect, bool) {
 		return rect{X: layout.X + 1, Y: event.y, W: layout.W - 2, H: 1}, true
 	}
 	return rect{}, false
+}
+
+func (a *App) paletteViewportHeight() int {
+	if a.shellPaletteOpen() {
+		return a.ViewHeight
+	}
+	return a.contentHeight()
 }
 
 func paletteActions(_ Model, state ViewState) []paletteAction {

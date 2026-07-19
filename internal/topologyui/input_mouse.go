@@ -47,6 +47,9 @@ func (a *App) handleMouseKey(key string) bool {
 	if !ok {
 		return false
 	}
+	if a.tabs != nil && event.y > 0 && !a.shellPaletteOpen() {
+		event.y -= tabBarHeight
+	}
 	if a.ViewWidth <= 0 {
 		a.ViewWidth = 100
 	}
@@ -64,7 +67,7 @@ func (a *App) handleMouseKey(key string) bool {
 	if event.button != 0 {
 		return false
 	}
-	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.ViewHeight); ok && xyInRect(event.x, event.y, notification) {
+	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.contentHeight()); ok && xyInRect(event.x, event.y, notification) {
 		a.clearMouseDrag()
 		a.clearMousePan()
 		a.dismissNotification()
@@ -268,6 +271,9 @@ func (a *App) prepareMouseClickFeedback(key string) bool {
 	if a.ViewHeight <= 0 {
 		a.ViewHeight = 30
 	}
+	if a.tabs != nil && event.y > 0 && !a.shellPaletteOpen() {
+		event.y -= tabBarHeight
+	}
 	if r, ok := a.mouseClickFeedbackRect(event); ok {
 		a.setMouseClickFeedback(r)
 		return true
@@ -277,7 +283,7 @@ func (a *App) prepareMouseClickFeedback(key string) bool {
 }
 
 func (a *App) mouseClickFeedbackRect(event mouseEvent) (rect, bool) {
-	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.ViewHeight); ok && xyInRect(event.x, event.y, notification) {
+	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.contentHeight()); ok && xyInRect(event.x, event.y, notification) {
 		return notification, true
 	}
 	if a.State.PaletteOpen {
@@ -334,7 +340,7 @@ func (a *App) topMenuDropdownLayout() (menuColumnLayout, bool) {
 	if addIndex < 0 || addIndex >= len(rootRects) {
 		return menuColumnLayout{}, false
 	}
-	return layoutDropdownMenu(rect{X: 0, Y: 0, W: a.ViewWidth, H: a.ViewHeight}, rootRects[addIndex], menuItemsFromLabels(items), a.State.TopMenuSelected)
+	return layoutDropdownMenu(rect{X: 0, Y: 0, W: a.ViewWidth, H: a.contentHeight()}, rootRects[addIndex], menuItemsFromLabels(items), a.State.TopMenuSelected)
 }
 
 func (a *App) mouseInTopMenuDropdown(event mouseEvent) bool {
@@ -460,7 +466,15 @@ func (a *App) mouseInContextMenu(event mouseEvent) bool {
 }
 
 func (a *App) graphBounds() rect {
-	return graphBounds(a.ViewWidth, a.ViewHeight)
+	return graphBounds(a.ViewWidth, a.contentHeight())
+}
+
+func (a *App) contentHeight() int {
+	height := a.ViewHeight
+	if a.tabs != nil {
+		height -= tabBarHeight
+	}
+	return max(0, height)
 }
 
 func (a *App) handleTopMenuMouse(event mouseEvent) bool {
