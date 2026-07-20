@@ -992,6 +992,17 @@ func TestRenderCommandPaletteShowsGhostCompletion(t *testing.T) {
 	}
 }
 
+func TestRenderCommandPaletteShowsQuitAllCompletionForQA(t *testing.T) {
+	state := ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "qa"}
+	out := RenderString(MockModel(), state, 100, 30, false)
+	if !strings.Contains(out, "quit all") {
+		t.Fatalf("render missing quit all completion for qa:\n%s", out)
+	}
+	if strings.Contains(out, "no completions") {
+		t.Fatalf("render showed no completions for qa:\n%s", out)
+	}
+}
+
 func TestRenderCommandPaletteNoCompletionsUsesPadding(t *testing.T) {
 	state := ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "no"}
 	layout, ok := paletteLayout(100, 30)

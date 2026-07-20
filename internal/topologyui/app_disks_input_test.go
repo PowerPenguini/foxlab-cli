@@ -1080,6 +1080,16 @@ func TestCommandQAIsSilentQuitAllAlias(t *testing.T) {
 	}
 }
 
+func TestPaletteTabCompletesQAToQuitAll(t *testing.T) {
+	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph, PaletteOpen: true, PaletteQuery: "qa"}}
+
+	app.handleKey("tab")
+
+	if app.State.PaletteQuery != "quit all" {
+		t.Fatalf("qa completed to %q, want quit all", app.State.PaletteQuery)
+	}
+}
+
 func TestCommandQRejectsExtraArgs(t *testing.T) {
 	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 

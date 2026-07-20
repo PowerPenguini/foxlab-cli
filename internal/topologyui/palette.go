@@ -207,6 +207,9 @@ func filteredPaletteActions(m Model, state ViewState) []paletteAction {
 	if query == "" {
 		return paletteActions(m, state)
 	}
+	if query == "qa" {
+		return []paletteAction{{Label: "quit all", Query: "quit all", Action: "exit", Enabled: true}}
+	}
 	if strings.HasPrefix(query, "add") {
 		if actions := filteredAddPaletteActions(query); actions != nil {
 			return actions
