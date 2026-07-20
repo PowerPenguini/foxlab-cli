@@ -10,6 +10,8 @@ func contextMenuAction(label string) string {
 		return "config-menu"
 	case "NIC >", "NIC", "nic >":
 		return "nic-menu"
+	case "Permissions >", "Permissions", "permissions >":
+		return "permissions-menu"
 	case "Uplink >", "uplink >":
 		return "uplink-menu"
 	case "add >", "create >":
@@ -46,6 +48,9 @@ func contextMenuAction(label string) string {
 		return "exit"
 	}
 	label = strings.TrimSpace(label)
+	if capability, _, ok := permissionCapabilityState(label); ok {
+		return "capability:" + capability
+	}
 	if key := contextItemKey(label); key == "disk" {
 		return "disk"
 	}

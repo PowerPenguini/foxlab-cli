@@ -66,7 +66,7 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5904},
 		}),
@@ -92,6 +92,57 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 	}
 	if details := strings.Join(app.Model.Nodes[0].Details, "\n"); !strings.Contains(details, "vnc-port=5904") {
 		t.Fatalf("model details missing refreshed VNC port: %#v", app.Model.Nodes[0].Details)
+	}
+}
+
+func TestContainerPermissionsMenuTogglesCapabilitiesAndPersistsThem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{ID: "demo", Containers: []lab.Container{{ID: "kali", Image: "kali"}}}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		State: ViewState{
+			Focus:            FocusGraph,
+			ContextMenu:      true,
+			ContextGroup:     "permissions-menu",
+			ContextInSubmenu: true,
+		},
+	}
+	items := app.contextMenuSubmenuItems(app.Model.Nodes[0], true)
+	if len(items) < 2 || items[0] != "[ ] NET_ADMIN" || items[1] != "[X] NET_RAW" {
+		t.Fatalf("permission menu starts with %#v", items[:min(2, len(items))])
+	}
+
+	app.handleKey("enter")
+	if !app.State.ContextMenu || !app.State.ContextInSubmenu {
+		t.Fatalf("capability toggle closed menu: %#v", app.State)
+	}
+	if !lab.ContainerCapabilityEnabled(app.Lab.Containers[0], "NET_ADMIN") {
+		t.Fatalf("NET_ADMIN was not enabled: %#v", app.Lab.Containers[0].Capabilities)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lab.ContainerCapabilityEnabled(reloaded.Containers[0], "NET_ADMIN") {
+		t.Fatalf("persisted capabilities = %#v", reloaded.Containers[0].Capabilities)
+	}
+
+	app.State.ContextSubSelected = 1
+	app.handleKey("enter")
+	if lab.ContainerCapabilityEnabled(app.Lab.Containers[0], "NET_RAW") {
+		t.Fatalf("NET_RAW was not disabled: %#v", app.Lab.Containers[0].Capabilities)
+	}
+	if got := app.Lab.Containers[0].Capabilities; got == nil || len(got.Drop) != 1 || got.Drop[0] != "NET_RAW" {
+		t.Fatalf("NET_RAW drop = %#v", got)
 	}
 }
 
@@ -649,7 +700,7 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		runtimeFactory:   testRuntimeFactory(runtime),
+		runtimeAccess:    testRuntimeAccess(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
@@ -714,7 +765,7 @@ func TestStopActionShowsStoppingWhenAppliedLabIsReconciling(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		runtimeFactory:   testRuntimeFactory(runtime),
+		runtimeAccess:    testRuntimeAccess(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph, ApplyLabDisabled: true},
@@ -754,7 +805,7 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		runtimeFactory:   testRuntimeFactory(runtime),
+		runtimeAccess:    testRuntimeAccess(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -804,15 +855,17 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 	}
 	stateKey := NodeKey(NodeContainer, loaded.Containers[0].ID)
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		runtimeFactory:   testRuntimeFactory(&fakeVMRuntime{states: map[string]string{stateKey: "missing"}}),
+		Model:   ModelFromLab(loaded),
+		Lab:     loaded,
+		LabPath: path,
+		runtimeAccess: testRuntimeAccessWithStatus(
+			&fakeVMRuntime{states: map[string]string{stateKey: "missing"}},
+			func(context.Context, string) (daemonstatus.Snapshot, error) {
+				return daemonstatus.Snapshot{}, errors.New("no daemon snapshot")
+			},
+		),
 		DaemonController: &fakeDaemonController{},
-		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
-			return daemonstatus.Snapshot{}, errors.New("no daemon snapshot")
-		},
-		State: ViewState{Focus: FocusGraph},
+		State:            ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "run")
@@ -851,14 +904,14 @@ func TestDaemonErrorClearsPendingMissingStart(t *testing.T) {
 		Lab:           loaded,
 		LabPath:       path,
 		PendingStarts: map[string]bool{stateKey: true},
-		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
+		runtimeAccess: newRuntimeAccess(nil, "", func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return daemonstatus.Snapshot{
 				LabPath: path,
 				LabName: "demo",
 				States:  map[string]string{stateKey: "missing"},
 				Errors:  []string{"start container:web: image unavailable"},
 			}, nil
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -1336,7 +1389,7 @@ func TestDiskExplorerKeyboardResize(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{states: map[string]string{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{states: map[string]string{
 			NodeKey(NodeVM, loaded.VMs[0].ID): "shutoff",
 		}}),
 		State:      ViewState{DiskExplorerOpen: true},
@@ -1378,10 +1431,10 @@ func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		LabPath:        path,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{statesErr: errors.New("libvirt unavailable")}),
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		LabPath:       path,
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{statesErr: errors.New("libvirt unavailable")}),
 	}
 	app.diskResize("data", map[string]string{"size": "12"})
 	if app.State.Message != "runtime status failed: libvirt unavailable" {

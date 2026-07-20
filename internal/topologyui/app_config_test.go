@@ -38,7 +38,10 @@ func TestNewAppBuildsCompositionRoot(t *testing.T) {
 	if app.State.Focus != FocusGraph || app.LibvirtURI != "qemu:///system" || app.ContainerdAddress != "/tmp/containerd.sock" {
 		t.Fatalf("composition root config = %#v", app)
 	}
-	gotRuntime, closeRuntime, err := app.runtime()
+	if app.runtimeAccess == nil || app.runtimeAccess.statusSocket != "/tmp/foxlabd.sock" {
+		t.Fatalf("runtime access config = %#v", app.runtimeAccess)
+	}
+	gotRuntime, closeRuntime, err := app.runtimeClient().open(app.Lab)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +51,11 @@ func TestNewAppBuildsCompositionRoot(t *testing.T) {
 	}
 }
 
-func TestRuntimeForLabRequiresFactory(t *testing.T) {
-	_, closeRuntime, err := (&App{}).runtimeForLab(&lab.Lab{ID: "demo"})
+func TestRuntimeAccessRequiresFactory(t *testing.T) {
+	_, closeRuntime, err := (&App{}).runtimeClient().open(&lab.Lab{ID: "demo"})
 	closeRuntime()
 	if err == nil || err.Error() != "runtime factory is not configured" {
-		t.Fatalf("runtimeForLab error = %v", err)
+		t.Fatalf("runtime access error = %v", err)
 	}
 }
 
@@ -61,9 +64,9 @@ func TestManagedTerminalSessionReleasesRuntimeOnce(t *testing.T) {
 	runtime := &fakeVMRuntime{}
 	app := &App{
 		Lab: &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1"}}},
-		runtimeFactory: func(*lab.Lab) (workload.Runtime, func(), error) {
+		runtimeAccess: newRuntimeAccess(func(*lab.Lab) (workload.Runtime, func(), error) {
 			return runtime, func() { releases++ }, nil
-		},
+		}, "", nil),
 	}
 	opened, err := app.openTerminalSession(context.Background(), workload.Ref{Type: workload.TypeVM, ID: "vm1"}, workload.TerminalSize{})
 	if err != nil {
@@ -88,9 +91,9 @@ func TestOpenTerminalSessionReleasesRuntimeOnBackendFailure(t *testing.T) {
 	}}
 	app := &App{
 		Lab: &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1"}}},
-		runtimeFactory: func(*lab.Lab) (workload.Runtime, func(), error) {
+		runtimeAccess: newRuntimeAccess(func(*lab.Lab) (workload.Runtime, func(), error) {
 			return runtime, func() { releases++ }, nil
-		},
+		}, "", nil),
 	}
 	_, err := app.openTerminalSession(context.Background(), workload.Ref{Type: workload.TypeVM, ID: "vm1"}, workload.TerminalSize{})
 	if !errors.Is(err, wantErr) || releases != 1 {
@@ -105,9 +108,9 @@ func TestOpenTerminalSessionRejectsEmptySessionAndReleasesRuntime(t *testing.T) 
 	}}
 	app := &App{
 		Lab: &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1"}}},
-		runtimeFactory: func(*lab.Lab) (workload.Runtime, func(), error) {
+		runtimeAccess: newRuntimeAccess(func(*lab.Lab) (workload.Runtime, func(), error) {
 			return runtime, func() { releases++ }, nil
-		},
+		}, "", nil),
 	}
 	_, err := app.openTerminalSession(context.Background(), workload.Ref{Type: workload.TypeVM, ID: "vm1"}, workload.TerminalSize{})
 	if err == nil || !strings.Contains(err.Error(), "empty terminal session") || releases != 1 {

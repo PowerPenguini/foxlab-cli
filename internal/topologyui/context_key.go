@@ -70,6 +70,12 @@ func (a *App) handleContextSubmenuEnter(node Node, ok bool, subItems []string) {
 		}
 		return
 	}
+	if ok && a.State.ContextGroup == "permissions-menu" && node.Type == NodeContainer {
+		if capability, enabled, parsed := permissionCapabilityState(subItems[selected]); parsed {
+			a.containerCapabilitySet(node.ID, capability, !enabled)
+		}
+		return
+	}
 	if ok && isBoolContextItem(subItems[selected]) {
 		a.applyContextEdit(node, subItems[selected], toggledBoolValue(contextItemValue(subItems[selected])))
 		return

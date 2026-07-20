@@ -45,6 +45,13 @@ func (l *Lab) Normalize() {
 		for j := range l.Containers[i].Command {
 			l.Containers[i].Command[j] = strings.TrimSpace(l.Containers[i].Command[j])
 		}
+		if capabilities := l.Containers[i].Capabilities; capabilities != nil {
+			capabilities.Add = normalizeContainerCapabilities(capabilities.Add)
+			capabilities.Drop = normalizeContainerCapabilities(capabilities.Drop)
+			if len(capabilities.Add) == 0 && len(capabilities.Drop) == 0 {
+				l.Containers[i].Capabilities = nil
+			}
+		}
 		for j := range l.Containers[i].Networks {
 			l.Containers[i].Networks[j].Switch = strings.TrimSpace(l.Containers[i].Networks[j].Switch)
 			l.Containers[i].Networks[j].ExternalLink = strings.TrimSpace(l.Containers[i].Networks[j].ExternalLink)

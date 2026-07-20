@@ -116,31 +116,19 @@ func vncViewerUserEnv(u *user.User) []string {
 	return env
 }
 
-func (a *App) refreshVNCWorkloadStatus(node Node) error {
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		return err
-	}
-	defer closeRuntime()
+func (a *App) refreshVNCWorkloadStatus(_ Node) error {
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	a.runtimeState.mu.Lock()
-	defer a.runtimeState.mu.Unlock()
-	var statesErr error
-	if states, err := runtime.States(ctx, a.Lab); err == nil {
-		a.WorkloadStates = cloneRuntimeStateMap(states)
-		if a.Service != nil {
-			a.Service.States = a.WorkloadStates
-		}
-		a.applyWorkloadStates()
-	} else {
-		statesErr = err
+	snapshot := a.runtimeClient().readLiveStatus(ctx, a.Lab, liveStatusOptions{includeVNC: true})
+	if snapshot.runtimeErr != nil {
+		return snapshot.runtimeErr
 	}
-	if err := a.refreshVNCPortsWithRuntime(ctx, runtime); err != nil {
-		if statesErr != nil {
-			return fmt.Errorf("runtime status unavailable: %w", statesErr)
+	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{})
+	if snapshot.vncErr != nil {
+		if snapshot.statesErr != nil {
+			return fmt.Errorf("runtime status unavailable: %w", snapshot.statesErr)
 		}
-		return err
+		return snapshot.vncErr
 	}
 	return nil
 }

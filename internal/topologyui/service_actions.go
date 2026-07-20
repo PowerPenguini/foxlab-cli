@@ -82,6 +82,11 @@ func (a *App) containerSet(id string, args map[string]string) {
 	a.syncAfterServiceMutation()
 }
 
+func (a *App) containerCapabilitySet(id, capability string, enabled bool) {
+	a.setOperationResult(a.ensureService().ContainerCapabilitySet(id, capability, enabled))
+	a.syncAfterServiceMutation()
+}
+
 func (a *App) containerNICAdd(id string, args map[string]string) topology.Result {
 	result := a.ensureService().ContainerNICAdd(id, args)
 	a.setOperationResult(result)

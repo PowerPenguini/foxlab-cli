@@ -685,6 +685,25 @@ func TestRenderContextSubmenuForSelectedNode(t *testing.T) {
 	}
 }
 
+func TestRenderContainerPermissionsSubmenuShowsEffectiveCapabilities(t *testing.T) {
+	model := MockModel()
+	model.Nodes[2].Details = append(model.Nodes[2].Details, "capabilities=CHOWN,NET_RAW")
+	out := RenderString(model, ViewState{
+		Selected:           2,
+		Focus:              FocusGraph,
+		ContextMenu:        true,
+		ContextSelected:    1,
+		ContextGroup:       "permissions-menu",
+		ContextInSubmenu:   true,
+		ContextSubSelected: 0,
+	}, 100, 30, false)
+	for _, want := range []string{"Permissions", "[ ] NET_ADMIN", "[X] NET_RAW"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing permission item %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderSwitchUplinkSubmenuShowsUplinks(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Selected: 3, Focus: FocusGraph, ContextMenu: true}, 100, 30, false)
 	if !strings.Contains(out, " Uplink ") {

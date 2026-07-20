@@ -8,18 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
-	"foxlab-cli/internal/daemonstatus"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
-	"foxlab-cli/internal/workload"
 )
-
-type appRuntimeState struct {
-	mu sync.Mutex
-}
 
 type appInputState struct {
 	pendingKeys   []string
@@ -67,8 +60,6 @@ type App struct {
 	WorkloadStates        map[string]string
 	VNCPorts              map[string]int
 	VNCViewer             string
-	StatusSocket          string
-	StatusQuery           func(context.Context, string) (daemonstatus.Snapshot, error)
 	CommandLog            []string
 	HistoryIndex          int
 	PendingShell          *shellCommand
@@ -81,8 +72,7 @@ type App struct {
 	StatusRefreshInterval time.Duration
 	DaemonController      DaemonController
 	tabs                  *tabManager
-	runtimeFactory        RuntimeFactory
-	runtimeState          appRuntimeState
+	runtimeAccess         *runtimeAccess
 	inputState            appInputState
 	notificationState     appNotificationState
 	routeCache            routeCacheState
@@ -342,57 +332,25 @@ func (a *App) statusRefreshInterval() time.Duration {
 }
 
 type statusUpdate struct {
-	lab                 *lab.Lab
-	states              map[string]string
-	statesConfirmed     bool
-	vncPorts            map[string]int
-	message             string
-	clearStatusMessage  bool
-	applyStatus         DaemonStatus
-	applyStatusReceived bool
+	lab      *lab.Lab
+	snapshot runtimeSnapshot
 }
 
 func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdate) {
 	l := a.Lab
 	snapshot := lab.Clone(l)
+	labPath := a.LabPath
+	access := a.runtimeClient()
 	go func() {
 		statusCtx, cancel := context.WithTimeout(ctx, runtimeStatusTimeout)
 		defer cancel()
-		if daemonSnapshot, ok := a.queryDaemonSnapshot(statusCtx); ok {
-			update := a.statusUpdateFromDaemonSnapshot(l, daemonSnapshot)
-			sendStatusUpdate(ctx, updates, update)
-			return
-		}
-		runtime, closeRuntime, err := a.runtimeForLab(snapshot)
-		if err != nil {
-			sendStatusUpdate(ctx, updates, statusUpdate{lab: l, message: "runtime connection failed: " + err.Error()})
-			return
-		}
-		defer closeRuntime()
-		a.runtimeState.mu.Lock()
-		states, err := runtime.States(statusCtx, snapshot)
-		if err != nil {
-			update := statusUpdate{lab: l, message: "runtime status failed: " + err.Error()}
-			if ports, portErr := runtimeVNCPorts(statusCtx, runtime, snapshot); portErr == nil {
-				update.vncPorts = cloneRuntimePortMap(ports)
+		result := access.readStatus(statusCtx, snapshot, labPath)
+		if result.source == runtimeSnapshotDirect && result.runtimeErr == nil && result.statesErr == nil {
+			if status, err := a.daemonStatus(statusCtx); err == nil {
+				result.applyStatus = &status
 			}
-			a.runtimeState.mu.Unlock()
-			sendStatusUpdate(ctx, updates, update)
-			return
 		}
-		update := statusUpdate{lab: l, states: cloneRuntimeStateMap(states), statesConfirmed: true, clearStatusMessage: true}
-		if ports, err := runtimeVNCPorts(statusCtx, runtime, snapshot); err == nil {
-			update.vncPorts = cloneRuntimePortMap(ports)
-		} else {
-			update.message = "vnc status failed: " + err.Error()
-			update.clearStatusMessage = false
-		}
-		if status, err := a.daemonStatus(statusCtx); err == nil {
-			update.applyStatus = status
-			update.applyStatusReceived = true
-		}
-		a.runtimeState.mu.Unlock()
-		sendStatusUpdate(ctx, updates, update)
+		sendStatusUpdate(ctx, updates, statusUpdate{lab: l, snapshot: result})
 	}()
 }
 
@@ -412,32 +370,11 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 			if update.lab != nil && update.lab != a.Lab {
 				continue
 			}
-			if update.applyStatusReceived {
-				a.updateApplyLabState(update.applyStatus)
-				changed = true
-			}
-			if update.states != nil {
-				a.WorkloadStates = cloneRuntimeStateMap(update.states)
-				if a.Service != nil {
-					a.Service.States = a.WorkloadStates
-					a.Service.StatesConfirmed = update.statesConfirmed
-				}
-				a.clearPendingStartsFromStates(a.WorkloadStates, update.message != "")
-				a.applyWorkloadStates()
-				changed = true
-			}
-			if update.vncPorts != nil {
-				a.VNCPorts = cloneRuntimePortMap(update.vncPorts)
-				a.applyWorkloadStates()
-				changed = true
-			}
-			if update.message != "" {
-				a.State.Message = update.message
-				changed = true
-			} else if update.clearStatusMessage && statusRefreshMessage(a.State.Message) {
-				a.State.Message = ""
-				changed = true
-			}
+			changed = a.applyRuntimeSnapshot(update.lab, update.snapshot, runtimeSnapshotApplyOptions{
+				updateMessage:      true,
+				clearPending:       true,
+				updateConfirmation: true,
+			}) || changed
 		default:
 			return changed
 		}
@@ -488,15 +425,11 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	return err
 }
 
-func (a *App) runtime() (workload.Runtime, func(), error) {
-	return a.runtimeForLab(a.Lab)
-}
-
-func (a *App) runtimeForLab(l *lab.Lab) (workload.Runtime, func(), error) {
-	if a.runtimeFactory == nil {
-		return nil, func() {}, errors.New("runtime factory is not configured")
+func (a *App) runtimeClient() *runtimeAccess {
+	if a.runtimeAccess == nil {
+		return &runtimeAccess{}
 	}
-	return a.runtimeFactory(l)
+	return a.runtimeAccess
 }
 
 func (a *App) ensureDaemonController() {
@@ -611,33 +544,12 @@ func (a *App) refreshWorkloadStates() bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	if snapshot, ok := a.queryDaemonSnapshot(ctx); ok {
-		a.applyDaemonSnapshot(snapshot)
-		return true
-	}
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		a.State.Message = "runtime connection failed: " + err.Error()
-		return true
-	}
-	defer closeRuntime()
-	a.runtimeState.mu.Lock()
-	defer a.runtimeState.mu.Unlock()
-	states, err := runtime.States(ctx, a.Lab)
-	if err != nil {
-		a.State.Message = "runtime status failed: " + err.Error()
-		_ = a.refreshVNCPortsWithRuntime(ctx, runtime)
-		return true
-	}
-	a.WorkloadStates = cloneRuntimeStateMap(states)
-	a.Service.States = a.WorkloadStates
-	a.Service.StatesConfirmed = true
-	if portErr := a.refreshVNCPortsWithRuntime(ctx, runtime); portErr != nil {
-		a.State.Message = "vnc status failed: " + portErr.Error()
-	} else if statusRefreshMessage(a.State.Message) {
-		a.State.Message = ""
-	}
-	a.applyWorkloadStates()
+	snapshot := a.runtimeClient().readStatus(ctx, a.Lab, a.LabPath)
+	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{
+		updateMessage:      true,
+		clearPending:       snapshot.source == runtimeSnapshotDaemon,
+		updateConfirmation: true,
+	})
 	return true
 }
 
@@ -649,90 +561,84 @@ func (a *App) refreshDiskOperationStates() bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		a.State.Message = "runtime connection failed: " + err.Error()
+	snapshot := a.runtimeClient().readLiveStatus(ctx, a.Lab, liveStatusOptions{})
+	if snapshot.runtimeErr != nil {
+		a.State.Message = "runtime connection failed: " + snapshot.runtimeErr.Error()
 		return false
 	}
-	defer closeRuntime()
-	a.runtimeState.mu.Lock()
-	defer a.runtimeState.mu.Unlock()
-	states, err := runtime.States(ctx, a.Lab)
-	if err != nil {
-		a.State.Message = "runtime status failed: " + err.Error()
+	if snapshot.statesErr != nil {
+		a.State.Message = "runtime status failed: " + snapshot.statesErr.Error()
 		return false
 	}
-	a.WorkloadStates = cloneRuntimeStateMap(states)
-	service.States = a.WorkloadStates
-	service.StatesConfirmed = true
-	a.applyWorkloadStates()
+	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{updateConfirmation: true})
 	return true
 }
 
-func (a *App) queryDaemonSnapshot(ctx context.Context) (daemonstatus.Snapshot, bool) {
-	current, err := a.currentLabAbsPath()
-	if err != nil {
-		return daemonstatus.Snapshot{}, false
-	}
-	query := daemonstatus.Query
-	if a.StatusQuery != nil {
-		query = a.StatusQuery
-	}
-	snapshot, err := query(ctx, a.statusSocketPath())
-	if err != nil {
-		return daemonstatus.Snapshot{}, false
-	}
-	if !sameLabPath(snapshot.LabPath, current) {
-		return daemonstatus.Snapshot{}, false
-	}
-	return snapshot, true
+type runtimeSnapshotApplyOptions struct {
+	updateMessage      bool
+	clearPending       bool
+	updateConfirmation bool
 }
 
-func (a *App) statusSocketPath() string {
-	if strings.TrimSpace(a.StatusSocket) != "" {
-		return a.StatusSocket
+func (a *App) applyRuntimeSnapshot(l *lab.Lab, snapshot runtimeSnapshot, options runtimeSnapshotApplyOptions) bool {
+	changed := false
+	message, clearMessage := runtimeSnapshotMessage(l, snapshot)
+	if snapshot.applyStatus != nil {
+		a.updateApplyLabState(*snapshot.applyStatus)
+		changed = true
 	}
-	path, err := userStatusSocketPath()
-	if err != nil {
-		return ""
+	if snapshot.statesReceived {
+		a.WorkloadStates = cloneRuntimeStateMap(snapshot.states)
+		if a.Service != nil {
+			a.Service.States = a.WorkloadStates
+			if options.updateConfirmation {
+				a.Service.StatesConfirmed = snapshot.statesConfirmed
+			}
+		}
+		if options.clearPending {
+			a.clearPendingStartsFromStates(a.WorkloadStates, message != "")
+		}
+		changed = true
 	}
-	return path
+	if snapshot.vncReceived {
+		a.VNCPorts = cloneRuntimePortMap(snapshot.vncPorts)
+		changed = true
+	}
+	if snapshot.statesReceived || snapshot.vncReceived {
+		a.applyWorkloadStates()
+	}
+	if options.updateMessage {
+		if message != "" {
+			a.State.Message = message
+			changed = true
+		} else if clearMessage && statusRefreshMessage(a.State.Message) {
+			a.State.Message = ""
+			changed = true
+		}
+	}
+	return changed
 }
 
-func (a *App) statusUpdateFromDaemonSnapshot(l *lab.Lab, snapshot daemonstatus.Snapshot) statusUpdate {
-	update := statusUpdate{
-		lab:                 l,
-		states:              cloneRuntimeStateMap(snapshot.States),
-		statesConfirmed:     len(snapshot.Errors) == 0,
-		vncPorts:            cloneRuntimePortMap(snapshot.VNCPorts),
-		applyStatus:         DaemonStatus{Active: true, LabPath: snapshot.LabPath},
-		applyStatusReceived: true,
+func runtimeSnapshotMessage(l *lab.Lab, snapshot runtimeSnapshot) (string, bool) {
+	if snapshot.source == runtimeSnapshotDaemon {
+		if len(snapshot.errors) > 0 {
+			return "foxlabd status: " + strings.Join(displayDaemonMessages(l, snapshot.errors), "; "), false
+		}
+		if len(snapshot.actions) > 0 {
+			return "foxlabd: " + strings.Join(displayDaemonMessages(l, snapshot.actions), "; "), false
+		}
+		return "", true
 	}
-	if len(snapshot.Errors) > 0 {
-		update.message = "foxlabd status: " + strings.Join(displayDaemonMessages(l, snapshot.Errors), "; ")
-	} else if len(snapshot.Actions) > 0 {
-		update.message = "foxlabd: " + strings.Join(displayDaemonMessages(l, snapshot.Actions), "; ")
-	} else {
-		update.clearStatusMessage = true
+	if snapshot.runtimeErr != nil {
+		return "runtime connection failed: " + snapshot.runtimeErr.Error(), false
 	}
-	return update
-}
-
-func (a *App) applyDaemonSnapshot(snapshot daemonstatus.Snapshot) {
-	a.WorkloadStates = cloneRuntimeStateMap(snapshot.States)
-	a.Service.States = a.WorkloadStates
-	a.Service.StatesConfirmed = len(snapshot.Errors) == 0
-	a.VNCPorts = cloneRuntimePortMap(snapshot.VNCPorts)
-	a.clearPendingStartsFromStates(a.WorkloadStates, len(snapshot.Errors) > 0)
-	a.updateApplyLabState(DaemonStatus{Active: true, LabPath: snapshot.LabPath})
-	if len(snapshot.Errors) > 0 {
-		a.State.Message = "foxlabd status: " + strings.Join(displayDaemonMessages(a.Lab, snapshot.Errors), "; ")
-	} else if len(snapshot.Actions) > 0 {
-		a.State.Message = "foxlabd: " + strings.Join(displayDaemonMessages(a.Lab, snapshot.Actions), "; ")
-	} else if statusRefreshMessage(a.State.Message) {
-		a.State.Message = ""
+	if snapshot.statesErr != nil {
+		return "runtime status failed: " + snapshot.statesErr.Error(), false
 	}
-	a.applyWorkloadStates()
+	if snapshot.vncErr != nil {
+		return "vnc status failed: " + snapshot.vncErr.Error(), false
+	}
+	return "", true
 }
 
 func statusRefreshMessage(message string) bool {
@@ -749,16 +655,6 @@ func statusRefreshMessage(message string) bool {
 		}
 	}
 	return false
-}
-
-func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime workload.Runtime) error {
-	ports, err := runtimeVNCPorts(ctx, runtime, a.Lab)
-	if err != nil {
-		return err
-	}
-	a.VNCPorts = cloneRuntimePortMap(ports)
-	a.applyWorkloadStates()
-	return nil
 }
 
 func cloneRuntimeStateMap(in map[string]string) map[string]string {
@@ -832,14 +728,6 @@ func (a *App) reconcileTransitionsActive() bool {
 		return false
 	}
 	return a.State.ApplyLabDisabled
-}
-
-func runtimeVNCPorts(ctx context.Context, runtime workload.Runtime, l *lab.Lab) (map[string]int, error) {
-	vncRuntime, ok := runtime.(workload.VNCRuntime)
-	if !ok {
-		return map[string]int{}, nil
-	}
-	return vncRuntime.VNCPorts(ctx, l)
 }
 
 func (a *App) contextMenuRootItems(node Node, ok bool) []string {

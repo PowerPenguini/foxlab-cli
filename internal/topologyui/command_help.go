@@ -31,6 +31,7 @@ func helpLines(topic string) []string {
 	case "container", "containers", "ct":
 		return []string{
 			"container: Configuration edits name, image, command, and power state",
+			"container permissions: Permissions toggles Linux capabilities; NET_ADMIN enables advanced network tools",
 			"container nic: NIC menu adds, deletes, or connects NICs",
 			"container disk: Disk menu creates, attaches, detaches, and deletes rootfs layers",
 			"container actions: Shell, Move, and Delete are root menu actions",

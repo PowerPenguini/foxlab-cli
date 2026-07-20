@@ -64,28 +64,23 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 	if a.Lab == nil {
 		return fmt.Errorf("shell needs a loaded .lab file")
 	}
-	runtime, closeRuntime, err := a.runtime()
-	if err != nil {
-		return err
-	}
-	defer closeRuntime()
 	stateCtx, stateCancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer stateCancel()
-	a.runtimeState.mu.Lock()
-	defer a.runtimeState.mu.Unlock()
-	if states, err := runtime.States(stateCtx, a.Lab); err == nil {
-		key := NodeKey(node.Type, node.ID)
-		if normalizeRuntimeState(states[key]) == "running" {
-			a.WorkloadStates = cloneRuntimeStateMap(states)
-			a.ensureService().States = a.WorkloadStates
-			a.applyWorkloadStates()
-			return nil
-		}
-		state := firstNonEmpty(states[key], "missing")
-		return fmt.Errorf("%s %s is %s; run it first", node.Type, a.displayNodeName(node.Type, node.ID), state)
-	} else {
-		return fmt.Errorf("runtime status unavailable: %w", err)
+	snapshot := a.runtimeClient().readLiveStatus(stateCtx, a.Lab, liveStatusOptions{})
+	if snapshot.runtimeErr != nil {
+		return snapshot.runtimeErr
 	}
+	if snapshot.statesErr != nil {
+		return fmt.Errorf("runtime status unavailable: %w", snapshot.statesErr)
+	}
+	key := NodeKey(node.Type, node.ID)
+	if normalizeRuntimeState(snapshot.states[key]) == "running" {
+		a.ensureService()
+		a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{})
+		return nil
+	}
+	state := firstNonEmpty(snapshot.states[key], "missing")
+	return fmt.Errorf("%s %s is %s; run it first", node.Type, a.displayNodeName(node.Type, node.ID), state)
 }
 
 func (a *App) shellCommand(node Node) (shellCommand, bool) {

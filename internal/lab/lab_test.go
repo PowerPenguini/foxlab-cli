@@ -1179,10 +1179,11 @@ func TestCloneDeepCopiesMutableLabState(t *testing.T) {
 			Networks: []VMNetwork{{Switch: "lan"}},
 		}},
 		Containers: []Container{{
-			ID:       "web",
-			Command:  []string{"nginx"},
-			Env:      map[string]string{"MODE": "prod"},
-			Networks: []ContainerNetwork{{Switch: "lan"}},
+			ID:           "web",
+			Command:      []string{"nginx"},
+			Env:          map[string]string{"MODE": "prod"},
+			Capabilities: &ContainerCapabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"NET_RAW"}},
+			Networks:     []ContainerNetwork{{Switch: "lan"}},
 		}},
 		Switches:      []Switch{{ID: "lan", Mode: "bridge"}},
 		ExternalLinks: []ExternalLink{{ID: "uplink", Interface: "eth0"}},
@@ -1208,6 +1209,8 @@ func TestCloneDeepCopiesMutableLabState(t *testing.T) {
 	original.VMs[0].Networks[0].Switch = "changed"
 	original.Containers[0].Command[0] = "changed"
 	original.Containers[0].Env["MODE"] = "dev"
+	original.Containers[0].Capabilities.Add[0] = "SYS_ADMIN"
+	original.Containers[0].Capabilities.Drop[0] = "CHOWN"
 	original.Containers[0].Networks[0].Switch = "changed"
 	original.Layout.Nodes["vm1"] = Position{X: 9, Y: 9}
 	original.Meta["containerd.address"] = "changed"
@@ -1220,6 +1223,9 @@ func TestCloneDeepCopiesMutableLabState(t *testing.T) {
 	}
 	if cloned.Containers[0].Env["MODE"] != "prod" {
 		t.Fatalf("clone env mutated with original: %#v", cloned.Containers[0].Env)
+	}
+	if cloned.Containers[0].Capabilities.Add[0] != "NET_ADMIN" || cloned.Containers[0].Capabilities.Drop[0] != "NET_RAW" {
+		t.Fatalf("clone capabilities mutated with original: %#v", cloned.Containers[0].Capabilities)
 	}
 	if cloned.Containers[0].Networks[0].Switch != "lan" {
 		t.Fatalf("clone container network mutated with original: %#v", cloned.Containers[0].Networks[0])

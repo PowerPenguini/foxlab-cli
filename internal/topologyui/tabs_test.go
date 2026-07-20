@@ -858,7 +858,7 @@ func TestClosingStartingVMTabCancelsConsoleConnection(t *testing.T) {
 		close(canceled)
 		return workload.OpenedTerminalSession{}, ctx.Err()
 	}
-	app.runtimeFactory = testRuntimeFactory(runtime)
+	app.runtimeAccess = testRuntimeAccess(runtime)
 	tab := &appTab{key: "vm:test", kind: tabKindVM, nodeID: "test", label: "VM: test", status: tabStatusStarting}
 	tab.buffer = newTerminalBuffer(40, 8, terminalScrollback, func() { app.tabs.markActivity(tab) })
 	app.tabs.tabs = append(app.tabs.tabs, tab)

@@ -90,6 +90,14 @@ func testRuntimeFactory(runtime workload.Runtime) RuntimeFactory {
 	}
 }
 
+func testRuntimeAccess(runtime workload.Runtime) *runtimeAccess {
+	return newRuntimeAccess(testRuntimeFactory(runtime), "", nil)
+}
+
+func testRuntimeAccessWithStatus(runtime workload.Runtime, query func(context.Context, string) (daemonstatus.Snapshot, error)) *runtimeAccess {
+	return newRuntimeAccess(testRuntimeFactory(runtime), "", query)
+}
+
 type fakeDaemonController struct {
 	status     DaemonStatus
 	statusErr  error
@@ -736,6 +744,7 @@ func TestContextMenuIncludesConsoleForVMsAndShellForContainers(t *testing.T) {
 	}
 	found := false
 	foundContainerVNC := false
+	foundPermissions := false
 	for _, item := range contextMenuItems(Node{ID: "web", Type: NodeContainer}, "") {
 		if item == "Shell" {
 			found = true
@@ -743,12 +752,18 @@ func TestContextMenuIncludesConsoleForVMsAndShellForContainers(t *testing.T) {
 		if item == "VNC" {
 			foundContainerVNC = true
 		}
+		if item == "Permissions >" {
+			foundPermissions = true
+		}
 	}
 	if !found {
 		t.Fatalf("container context menu missing Shell: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
 	}
 	if foundContainerVNC {
 		t.Fatalf("container context menu unexpectedly contains VNC: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
+	}
+	if !foundPermissions {
+		t.Fatalf("container context menu missing Permissions: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
 	}
 }
 
@@ -792,7 +807,7 @@ func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5903},
 		}),
@@ -819,9 +834,9 @@ func TestRefreshWorkloadStatesCopiesRuntimeMaps(t *testing.T) {
 		vncPorts: map[string]int{stateKey: 5903},
 	}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		runtimeFactory: testRuntimeFactory(runtime),
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		runtimeAccess: testRuntimeAccess(runtime),
 	}
 
 	app.refreshWorkloadStates()
@@ -847,7 +862,7 @@ func TestRefreshWorkloadStatesShowsActualStateWithoutAppliedLab(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
 		}),
 	}
@@ -881,7 +896,7 @@ func TestRefreshWorkloadStatesShowsMissingForAppliedDesiredRunningMissingContain
 		LabPath:          path,
 		State:            ViewState{ApplyLabDisabled: true},
 		DaemonController: &fakeDaemonController{status: DaemonStatus{Active: true, LabPath: path}},
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
 		}),
 	}
@@ -919,12 +934,10 @@ func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
 		Lab:     loaded,
 		LabPath: path,
 		State:   ViewState{Message: "foxlabd status: runtime unavailable"},
-		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
-			return snapshot, nil
-		},
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
-			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		}),
+		runtimeAccess: testRuntimeAccessWithStatus(
+			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
+			func(context.Context, string) (daemonstatus.Snapshot, error) { return snapshot, nil },
+		),
 	}
 
 	app.refreshWorkloadStates()
@@ -965,13 +978,13 @@ func TestRefreshWorkloadStatesShowsStoppedMissingVMAsDefined(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
+		runtimeAccess: newRuntimeAccess(nil, "", func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return daemonstatus.Snapshot{
 				LabPath: path,
 				LabName: "demo",
 				States:  map[string]string{NodeKey(NodeVM, loaded.VMs[0].ID): "missing"},
 			}, nil
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -1006,17 +1019,17 @@ func TestRefreshWorkloadStatesQueriesAppliedDaemonSocketPath(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		StatusQuery: func(_ context.Context, socket string) (daemonstatus.Snapshot, error) {
-			queriedSocket = socket
-			return daemonstatus.Snapshot{
-				LabPath: path,
-				LabName: "demo",
-				States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
-			}, nil
-		},
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
-			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		}),
+		runtimeAccess: testRuntimeAccessWithStatus(
+			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
+			func(_ context.Context, socket string) (daemonstatus.Snapshot, error) {
+				queriedSocket = socket
+				return daemonstatus.Snapshot{
+					LabPath: path,
+					LabName: "demo",
+					States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
+				}, nil
+			},
+		),
 	}
 
 	app.refreshWorkloadStates()
@@ -1036,15 +1049,18 @@ func TestRefreshWorkloadStatesQueriesAppliedDaemonSocketPath(t *testing.T) {
 
 func TestDaemonRestartActionIsShownWithDisplayName(t *testing.T) {
 	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm-id", Name: "router", MemoryMB: 512, CPUs: 1}}}
-	app := App{Lab: l}
-	update := app.statusUpdateFromDaemonSnapshot(l, daemonstatus.Snapshot{
-		States:  map[string]string{NodeKey(NodeVM, "vm-id"): "running"},
-		Actions: []string{"restarted vm:vm-id for configuration change"},
-	})
-	if update.message != "foxlabd: restarted vm:router for configuration change" {
-		t.Fatalf("message = %q", update.message)
+	snapshot := runtimeSnapshot{
+		source:          runtimeSnapshotDaemon,
+		states:          map[string]string{NodeKey(NodeVM, "vm-id"): "running"},
+		statesReceived:  true,
+		statesConfirmed: true,
+		actions:         []string{"restarted vm:vm-id for configuration change"},
 	}
-	if !update.statesConfirmed {
+	message, _ := runtimeSnapshotMessage(l, snapshot)
+	if message != "foxlabd: restarted vm:router for configuration change" {
+		t.Fatalf("message = %q", message)
+	}
+	if !snapshot.statesConfirmed {
 		t.Fatal("successful daemon snapshot did not confirm states")
 	}
 }
@@ -1071,12 +1087,10 @@ func TestRefreshWorkloadStatesFallsBackWhenFoxlabdSnapshotIsForAnotherLab(t *tes
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
-			return snapshot, nil
-		},
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
-			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		}),
+		runtimeAccess: testRuntimeAccessWithStatus(
+			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
+			func(context.Context, string) (daemonstatus.Snapshot, error) { return snapshot, nil },
+		),
 	}
 
 	app.refreshWorkloadStates()
@@ -1099,7 +1113,7 @@ func TestRefreshWorkloadStatesNormalizesRuntimeStates(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{key: " Missing "},
 		}),
 	}
@@ -1572,7 +1586,7 @@ func TestRunInteractiveRefreshesRuntimeStatusWithoutReconciling(t *testing.T) {
 	app := App{
 		Model:                 ModelFromLab(loaded),
 		Lab:                   loaded,
-		runtimeFactory:        testRuntimeFactory(runtime),
+		runtimeAccess:         testRuntimeAccess(runtime),
 		StatusRefreshInterval: time.Millisecond,
 		State:                 ViewState{Focus: FocusGraph},
 		Out:                   tempOutputFile(t),
@@ -1626,8 +1640,11 @@ func TestDrainStatusUpdatesIgnoresStaleLabUpdate(t *testing.T) {
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab:    oldLab,
-		states: map[string]string{NodeKey(NodeContainer, "web"): "running"},
+		lab: oldLab,
+		snapshot: runtimeSnapshot{
+			states:         map[string]string{NodeKey(NodeContainer, "web"): "running"},
+			statesReceived: true,
+		},
 	}
 	active := true
 
@@ -1660,7 +1677,12 @@ func TestDrainStatusUpdatesCopiesUpdateMaps(t *testing.T) {
 		State: ViewState{Focus: FocusGraph},
 	}
 	updates := make(chan statusUpdate, 1)
-	updates <- statusUpdate{lab: loaded, states: states, vncPorts: ports}
+	updates <- statusUpdate{lab: loaded, snapshot: runtimeSnapshot{
+		states:         states,
+		statesReceived: true,
+		vncPorts:       ports,
+		vncReceived:    true,
+	}}
 	active := true
 
 	if changed := app.drainStatusUpdates(updates, &active); !changed {
@@ -1689,9 +1711,12 @@ func TestDrainStatusUpdatesClearsRecoveredStatusMessage(t *testing.T) {
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab:                loaded,
-		states:             map[string]string{NodeKey(NodeContainer, "web"): "running"},
-		clearStatusMessage: true,
+		lab: loaded,
+		snapshot: runtimeSnapshot{
+			states:          map[string]string{NodeKey(NodeContainer, "web"): "running"},
+			statesReceived:  true,
+			statesConfirmed: true,
+		},
 	}
 	active := true
 
@@ -1715,9 +1740,12 @@ func TestDrainStatusUpdatesKeepsCommandMessageOnHealthyStatus(t *testing.T) {
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab:                loaded,
-		states:             map[string]string{NodeKey(NodeContainer, "web"): "running"},
-		clearStatusMessage: true,
+		lab: loaded,
+		snapshot: runtimeSnapshot{
+			states:          map[string]string{NodeKey(NodeContainer, "web"): "running"},
+			statesReceived:  true,
+			statesConfirmed: true,
+		},
 	}
 	active := true
 
@@ -1742,7 +1770,7 @@ func TestStartStatusRefreshUsesLabSnapshot(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, runtimeFactory: testRuntimeFactory(runtime)}
+	app := App{Lab: loaded, runtimeAccess: testRuntimeAccess(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1789,7 +1817,7 @@ func TestRuntimeCallsAreSerializedDuringStatusRefresh(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, runtimeFactory: testRuntimeFactory(runtime)}
+	app := App{Lab: loaded, runtimeAccess: testRuntimeAccess(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

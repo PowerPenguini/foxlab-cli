@@ -187,7 +187,7 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		runtimeFactory:   testRuntimeFactory(runtime),
+		runtimeAccess:    testRuntimeAccess(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -236,10 +236,10 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
 	}
 	app := App{
-		Model:          MockModel(),
-		Lab:            &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		runtimeFactory: testRuntimeFactory(runtime),
-		State:          ViewState{Focus: FocusGraph},
+		Model:         MockModel(),
+		Lab:           &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		runtimeAccess: testRuntimeAccess(runtime),
+		State:         ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1")
@@ -272,10 +272,10 @@ func TestCommandShellRejectsExtraArgs(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
 	}
 	app := App{
-		Model:          MockModel(),
-		Lab:            &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		runtimeFactory: testRuntimeFactory(runtime),
-		State:          ViewState{Focus: FocusGraph},
+		Model:         MockModel(),
+		Lab:           &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		runtimeAccess: testRuntimeAccess(runtime),
+		State:         ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1 extra")
@@ -605,11 +605,11 @@ func TestContainerNICConnectDoesNotReconcileRunningContainer(t *testing.T) {
 	}
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "running"}}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		LabPath:        path,
-		runtimeFactory: testRuntimeFactory(runtime),
-		State:          ViewState{Focus: FocusGraph},
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		LabPath:       path,
+		runtimeAccess: testRuntimeAccess(runtime),
+		State:         ViewState{Focus: FocusGraph},
 	}
 
 	app.containerNICConnect("web", "0", map[string]string{"to": "wan"})
@@ -1114,11 +1114,11 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: endpoint}, nil
 	}
 	app := App{
-		Model:          MockModel(),
-		Lab:            loaded,
-		runtimeFactory: testRuntimeFactory(runtime),
-		LabPath:        path,
-		State:          ViewState{Focus: FocusGraph},
+		Model:         MockModel(),
+		Lab:           loaded,
+		runtimeAccess: testRuntimeAccess(runtime),
+		LabPath:       path,
+		State:         ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
@@ -1259,10 +1259,10 @@ func TestContextMenuVNCActionRefreshesPortWithoutStartingVM(t *testing.T) {
 		vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5906},
 	}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		runtimeFactory: testRuntimeFactory(runtime),
-		VNCViewer:      "/bin/true",
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		runtimeAccess: testRuntimeAccess(runtime),
+		VNCViewer:     "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1284,10 +1284,10 @@ func TestContextMenuVNCActionUsesPortWhenStateRefreshFails(t *testing.T) {
 		vncPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5907},
 	}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		runtimeFactory: testRuntimeFactory(runtime),
-		VNCViewer:      "/bin/true",
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		runtimeAccess: testRuntimeAccess(runtime),
+		VNCViewer:     "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1306,9 +1306,9 @@ func TestRefreshVNCWorkloadStatusUsesTimeoutContext(t *testing.T) {
 	}
 	runtime := &deadlineRuntime{}
 	app := App{
-		Model:          ModelFromLab(loaded),
-		Lab:            loaded,
-		runtimeFactory: testRuntimeFactory(runtime),
+		Model:         ModelFromLab(loaded),
+		Lab:           loaded,
+		runtimeAccess: testRuntimeAccess(runtime),
 	}
 
 	if err := app.refreshVNCWorkloadStatus(Node{ID: "vm1", Type: NodeVM}); err != nil {
@@ -1358,7 +1358,7 @@ func TestContextMenuVNCActionReportsRestartNeededWithoutPort(t *testing.T) {
 			Details: []string{"vnc=true"},
 		}}},
 		Lab: loaded,
-		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
+		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 		}),
 		VNCViewer: "/bin/true",

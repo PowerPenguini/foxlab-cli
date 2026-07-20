@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/identifiers"
 	coci "github.com/containerd/containerd/oci"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"foxlab-cli/internal/lab"
 )
@@ -138,6 +139,8 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 	changedMAC.Networks[0].MAC = "02:00:00:00:00:11"
 	removedNIC := base
 	removedNIC.Networks = nil
+	changedCapabilities := cloneContainerForHashTest(base)
+	changedCapabilities.Capabilities = &lab.ContainerCapabilities{Add: []string{"NET_ADMIN"}}
 	rootMount := containerDiskMount{Source: "/host/rootfs/merged", Destination: "/"}
 	changedRootMount := containerDiskMount{Source: "/host/other-rootfs/merged", Destination: "/"}
 
@@ -165,8 +168,38 @@ func TestContainerConfigHashIncludesShellAndImage(t *testing.T) {
 	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(removedNIC, containerDiskMount{}) {
 		t.Fatal("network removal did not change hash")
 	}
+	if containerConfigHash(base, containerDiskMount{}) == containerConfigHash(changedCapabilities, containerDiskMount{}) {
+		t.Fatal("capability change did not change hash")
+	}
 	if containerConfigHash(base, rootMount) == containerConfigHash(base, changedRootMount) {
 		t.Fatal("disk rootfs source change did not change hash")
+	}
+}
+
+func TestContainerSpecOptsApplyCapabilityAddAndDrop(t *testing.T) {
+	ct := lab.Container{Capabilities: &lab.ContainerCapabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"NET_RAW"}}}
+	opts := containerSpecOpts(nil, ct, containerDiskMount{}, "/run/foxlab/resolv/demo.conf")
+	if len(opts) != 5 {
+		t.Fatalf("containerSpecOpts returned %d options, want image config, process args, add, drop, and resolv.conf", len(opts))
+	}
+	spec := coci.Spec{Process: &specs.Process{Capabilities: &specs.LinuxCapabilities{
+		Bounding:  []string{"CAP_NET_RAW"},
+		Effective: []string{"CAP_NET_RAW"},
+		Permitted: []string{"CAP_NET_RAW"},
+	}}}
+	for _, opt := range opts[2:4] {
+		if err := opt(context.Background(), nil, &cdocontainers.Container{}, &spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, values := range map[string][]string{
+		"bounding":  spec.Process.Capabilities.Bounding,
+		"effective": spec.Process.Capabilities.Effective,
+		"permitted": spec.Process.Capabilities.Permitted,
+	} {
+		if !reflect.DeepEqual(values, []string{"CAP_NET_ADMIN"}) {
+			t.Fatalf("%s capabilities = %#v, want CAP_NET_ADMIN only", name, values)
+		}
 	}
 }
 

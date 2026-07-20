@@ -48,6 +48,14 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 		opts = append(opts, oci.WithRootFSPath(diskMount.Source))
 	}
 	opts = append(opts, oci.WithImageConfig(image), oci.WithProcessArgs(containerProcessArgs(ct)...))
+	if ct.Capabilities != nil {
+		if added := ociCapabilityNames(ct.Capabilities.Add); len(added) > 0 {
+			opts = append(opts, oci.WithAddedCapabilities(added))
+		}
+		if dropped := ociCapabilityNames(ct.Capabilities.Drop); len(dropped) > 0 {
+			opts = append(opts, oci.WithDroppedCapabilities(dropped))
+		}
+	}
 	env := []string{}
 	for key, value := range ct.Env {
 		env = append(env, key+"="+value)
@@ -153,6 +161,10 @@ func deleteContainer(ctx context.Context, container containerd.Container) error 
 
 func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string {
 	parts := []string{"id=" + ct.ID, "image=" + ct.Image, "shell=" + ct.Shell, "disk=" + ct.Disk, "diskSource=" + diskMount.Source, "diskDestination=" + diskMount.Destination, "dns=" + containerDNSMode, "command=" + strings.Join(containerProcessArgs(ct), "\x00")}
+	if ct.Capabilities != nil {
+		parts = append(parts, "capabilities:add="+strings.Join(sortedCapabilityNames(ct.Capabilities.Add), ","))
+		parts = append(parts, "capabilities:drop="+strings.Join(sortedCapabilityNames(ct.Capabilities.Drop), ","))
+	}
 	for i, nic := range ct.Networks {
 		parts = append(parts, fmt.Sprintf("network:%d:switch=%s", i, nic.Switch), fmt.Sprintf("network:%d:external=%s", i, nic.ExternalLink), fmt.Sprintf("network:%d:mac=%s", i, nic.MAC))
 	}
@@ -166,6 +178,32 @@ func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string 
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return hex.EncodeToString(sum[:])
+}
+
+func ociCapabilityNames(capabilities []string) []string {
+	names := sortedCapabilityNames(capabilities)
+	for i := range names {
+		names[i] = "CAP_" + names[i]
+	}
+	return names
+}
+
+func sortedCapabilityNames(capabilities []string) []string {
+	out := make([]string, 0, len(capabilities))
+	seen := map[string]struct{}{}
+	for _, capability := range capabilities {
+		capability = lab.NormalizeContainerCapability(capability)
+		if capability == "" {
+			continue
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		out = append(out, capability)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func desiredContainerDiskMount(l *lab.Lab, ct lab.Container) (containerDiskMount, error) {

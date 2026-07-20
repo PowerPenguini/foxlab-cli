@@ -52,8 +52,10 @@ func containerContextMenuItems(node Node, group string) []string {
 		return nicMenuItems(node.Details)
 	case "disk-menu":
 		return nil
+	case "permissions-menu":
+		return containerPermissionMenuItems(node)
 	case "":
-		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Shell", "Delete"}
+		return []string{"Configuration >", "Permissions >", "NIC >", "Disk >", "Move", "Shell", "Delete"}
 	default:
 		return nil
 	}

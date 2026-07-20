@@ -59,15 +59,21 @@ type VMNetwork struct {
 }
 
 type Container struct {
-	ID           string             `json:"id" yaml:"id"`
-	Name         string             `json:"name,omitempty" yaml:"name,omitempty"`
-	DesiredState string             `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
-	Image        string             `json:"image" yaml:"image"`
-	Disk         string             `json:"disk,omitempty" yaml:"disk,omitempty"`
-	Command      []string           `json:"command,omitempty" yaml:"command,omitempty"`
-	Shell        string             `json:"shell,omitempty" yaml:"shell,omitempty"`
-	Env          map[string]string  `json:"env,omitempty" yaml:"env,omitempty"`
-	Networks     []ContainerNetwork `json:"networks,omitempty" yaml:"networks,omitempty"`
+	ID           string                 `json:"id" yaml:"id"`
+	Name         string                 `json:"name,omitempty" yaml:"name,omitempty"`
+	DesiredState string                 `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
+	Image        string                 `json:"image" yaml:"image"`
+	Disk         string                 `json:"disk,omitempty" yaml:"disk,omitempty"`
+	Command      []string               `json:"command,omitempty" yaml:"command,omitempty"`
+	Shell        string                 `json:"shell,omitempty" yaml:"shell,omitempty"`
+	Env          map[string]string      `json:"env,omitempty" yaml:"env,omitempty"`
+	Capabilities *ContainerCapabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	Networks     []ContainerNetwork     `json:"networks,omitempty" yaml:"networks,omitempty"`
+}
+
+type ContainerCapabilities struct {
+	Add  []string `json:"add,omitempty" yaml:"add,omitempty"`
+	Drop []string `json:"drop,omitempty" yaml:"drop,omitempty"`
 }
 
 type ContainerNetwork struct {

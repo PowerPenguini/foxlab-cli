@@ -104,7 +104,10 @@ func ModelFromLab(l *lab.Lab) Model {
 		}
 	}
 	for i, ct := range l.Containers {
-		details := []string{"image=" + ct.Image}
+		details := []string{
+			"image=" + ct.Image,
+			"capabilities=" + strings.Join(lab.EffectiveContainerCapabilities(ct), ","),
+		}
 		if ct.Disk != "" {
 			details = append(details, "disk="+ct.Disk)
 		}

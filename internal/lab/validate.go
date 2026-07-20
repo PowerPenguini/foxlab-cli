@@ -133,6 +133,7 @@ func (l *Lab) Validate() error {
 		if !validDesiredState(ct.DesiredState) {
 			problems = append(problems, fmt.Sprintf("container %q desiredState must be running or stopped", ctRef))
 		}
+		problems = append(problems, validateContainerCapabilities(ctRef, ct.Capabilities)...)
 		for _, nic := range ct.Networks {
 			if !validMAC(nic.MAC) {
 				problems = append(problems, fmt.Sprintf("container %q network mac %q is invalid", ctRef, nic.MAC))

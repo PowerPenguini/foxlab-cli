@@ -46,13 +46,11 @@ func NewApp(model Model, loadedLab *lab.Lab, config AppConfig, deps AppDeps) *Ap
 		LibvirtURI:            config.LibvirtURI,
 		ContainerdAddress:     config.ContainerdAddress,
 		VNCViewer:             config.VNCViewer,
-		StatusSocket:          config.StatusSocket,
 		StatusRefreshInterval: config.StatusRefreshInterval,
 		In:                    config.In,
 		Out:                   config.Out,
-		StatusQuery:           deps.StatusQuery,
 		DaemonController:      deps.DaemonController,
-		runtimeFactory:        deps.RuntimeFactory,
+		runtimeAccess:         newRuntimeAccess(deps.RuntimeFactory, config.StatusSocket, deps.StatusQuery),
 	}
 	app.Service = topology.NewService(loadedLab, config.LabPath)
 	return app

@@ -38,6 +38,12 @@ func cloneContainers(in []Container) []Container {
 	for i := range out {
 		out[i].Command = append([]string(nil), in[i].Command...)
 		out[i].Env = cloneStringMap(in[i].Env)
+		if in[i].Capabilities != nil {
+			out[i].Capabilities = &ContainerCapabilities{
+				Add:  append([]string(nil), in[i].Capabilities.Add...),
+				Drop: append([]string(nil), in[i].Capabilities.Drop...),
+			}
+		}
 		out[i].Networks = append([]ContainerNetwork(nil), in[i].Networks...)
 	}
 	return out

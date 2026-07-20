@@ -7,7 +7,8 @@
 
 ## Ownership
 
-- `app.go` owns app lifecycle, terminal loop, runtime status refresh, service synchronization, and pending external shell/VNC execution. Desired-state reconciliation belongs to `foxlabd`/`internal/workload`.
+- `app.go` owns app lifecycle, terminal loop, runtime refresh scheduling/application, service synchronization, and pending external shell/VNC execution. Desired-state reconciliation belongs to `foxlabd`/`internal/workload`.
+- `runtime_access.go` owns daemon-first runtime snapshots, direct live-status fallback, serialized runtime reads, terminal-session opening, and runtime connection cleanup.
 - `model.go` maps `.lab` topology into graph nodes, edges, details, desired state, and layout positions.
 - `render.go` and `inventory*.go` style files own visible terminal output and route rendering.
 - `input.go`, `commands.go`, `actions.go`, `menu.go`, `connect.go`, and `move.go` own interaction behavior.

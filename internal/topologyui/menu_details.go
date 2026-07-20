@@ -5,7 +5,7 @@ import "strings"
 func nonNICDetails(details []string) []string {
 	out := make([]string, 0, len(details))
 	for _, detail := range details {
-		if !isNICDetail(detail) && !isRuntimeDetail(detail) && !isDiskDetail(detail) {
+		if !isNICDetail(detail) && !isRuntimeDetail(detail) && !isDiskDetail(detail) && !isPermissionDetail(detail) {
 			out = append(out, detail)
 		}
 	}
@@ -47,6 +47,10 @@ func isRuntimeDetail(detail string) bool {
 
 func isDiskDetail(detail string) bool {
 	return strings.HasPrefix(strings.TrimSpace(detail), "disk=")
+}
+
+func isPermissionDetail(detail string) bool {
+	return strings.HasPrefix(strings.TrimSpace(detail), "capabilities=")
 }
 
 func isDiskMenuDetail(detail string) bool {
