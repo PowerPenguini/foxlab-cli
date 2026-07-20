@@ -1,6 +1,7 @@
 package workload
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -8,6 +9,26 @@ import (
 
 	"foxlab-cli/internal/lab"
 )
+
+type fakeTerminalSession struct {
+	bytes.Buffer
+}
+
+func (s *fakeTerminalSession) Close() error               { return nil }
+func (s *fakeTerminalSession) Resize(columns, rows int)   {}
+func (s *fakeTerminalSession) Wait(context.Context) error { return nil }
+
+type sessionRuntime struct {
+	fakeRuntime
+	opened Ref
+	size   TerminalSize
+}
+
+func (r *sessionRuntime) OpenTerminalSession(_ context.Context, _ *lab.Lab, ref Ref, size TerminalSize) (TerminalSession, error) {
+	r.opened = ref
+	r.size = size
+	return &fakeTerminalSession{}, nil
+}
 
 type stateErrorRuntime struct {
 	fakeRuntime
@@ -147,5 +168,34 @@ func TestCompositeFileTransferReportsUnsupportedRuntime(t *testing.T) {
 	err := (&Composite{VM: &fakeRuntime{}}).PutFile(context.Background(), &lab.Lab{}, Ref{Type: TypeVM, ID: "vm1"}, "/host", "/guest")
 	if err == nil || !strings.Contains(err.Error(), `file transfer not configured for workload type "vm"`) {
 		t.Fatalf("PutFile error = %v, want file transfer not configured", err)
+	}
+}
+
+func TestCompositeTerminalSessionDispatchesByWorkloadType(t *testing.T) {
+	vm := &sessionRuntime{}
+	container := &sessionRuntime{}
+	composite := &Composite{VM: vm, Container: container}
+	ref := Ref{Type: TypeContainer, ID: "web"}
+	size := TerminalSize{Columns: 120, Rows: 40}
+
+	session, err := composite.OpenTerminalSession(context.Background(), &lab.Lab{}, ref, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if container.opened != ref || container.size != size {
+		t.Fatalf("container session = %#v at %#v", container.opened, container.size)
+	}
+	if vm.opened != (Ref{}) {
+		t.Fatalf("vm runtime unexpectedly opened %#v", vm.opened)
+	}
+}
+
+func TestCompositeTerminalSessionReportsUnsupportedBackend(t *testing.T) {
+	_, err := (&Composite{VM: &fakeRuntime{}}).OpenTerminalSession(
+		context.Background(), &lab.Lab{}, Ref{Type: TypeVM, ID: "vm1"}, TerminalSize{},
+	)
+	if err == nil || !strings.Contains(err.Error(), `terminal session not configured for workload type "vm"`) {
+		t.Fatalf("OpenTerminalSession error = %v", err)
 	}
 }

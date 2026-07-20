@@ -119,24 +119,6 @@ func nodeDetailLabelWidth(nodeType string) int {
 	return runeLen("Mode: ")
 }
 
-func drawNodeBox(g *grid, r rect, style string) {
-	if r.W < 2 || r.H < 2 {
-		return
-	}
-	for x := r.X + 1; x < r.X+r.W-1; x++ {
-		g.Set(x, r.Y, lineHorizontal, style)
-		g.Set(x, r.Y+r.H-1, lineHorizontal, style)
-	}
-	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
-		g.Set(r.X, y, lineVertical, style)
-		g.Set(r.X+r.W-1, y, lineVertical, style)
-	}
-	g.Set(r.X, r.Y, '╭', style)
-	g.Set(r.X+r.W-1, r.Y, '╮', style)
-	g.Set(r.X, r.Y+r.H-1, '╰', style)
-	g.Set(r.X+r.W-1, r.Y+r.H-1, '╯', style)
-}
-
 func displayNodeState(state string, frame int) string {
 	if animatedState(state) {
 		return spinner(frame) + " " + state
@@ -158,16 +140,6 @@ func stateGlyph(state string) string {
 	default:
 		return ""
 	}
-}
-
-func selectedBorderStyle(selected, graphFocused bool) string {
-	if !selected || !graphFocused {
-		return ansiWhite
-	}
-	return ansiBold + ansiBrightCyan
-}
-
-func styleBoxBorder(g *grid, r rect, style string) {
 }
 
 func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rect, bounds rect) {

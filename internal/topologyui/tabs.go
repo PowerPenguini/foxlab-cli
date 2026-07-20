@@ -11,8 +11,7 @@ import (
 	"sync"
 	"time"
 
-	containerdruntime "foxlab-cli/internal/containerd"
-	"foxlab-cli/internal/foxruntime"
+	"foxlab-cli/internal/workload"
 	"golang.org/x/sys/unix"
 )
 
@@ -343,48 +342,40 @@ func (a *App) startTabSession(tab *appTab) {
 	a.tabs.mu.Unlock()
 	_, _ = io.WriteString(output, "\r\n[connecting]\r\n")
 
-	switch kind {
-	case tabKindContainer:
-		reader, writer := io.Pipe()
-		runCtx, cancel := context.WithCancel(context.Background())
-		resize := make(chan containerdruntime.ShellSize, 1)
-		if cols > 0 && rows > 0 {
-			resize <- containerdruntime.ShellSize{Columns: cols, Rows: rows}
-		}
-		session := newTabPipeSession(writer, cancel, resize)
-		a.setTabSession(tab, generation, session, tabStatusRunning)
-		go func() {
-			defer session.markFinished()
-			err := a.runContainerShellIO(runCtx, id, reader, output, resize)
-			_ = reader.Close()
-			a.finishTabSession(tab, generation, err)
-		}()
-	case tabKindVM:
-		ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
-		a.tabs.mu.Lock()
-		if a.tabs.closing || !a.tabPresentLocked(tab) || tab.generation != generation {
-			a.tabs.mu.Unlock()
+	if kind != tabKindContainer && kind != tabKindVM {
+		return
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	a.tabs.mu.Lock()
+	if a.tabs.closing || !a.tabPresentLocked(tab) || tab.generation != generation {
+		a.tabs.mu.Unlock()
+		cancel()
+		return
+	}
+	tab.connectCancel = cancel
+	a.tabs.mu.Unlock()
+	go func() {
+		ref := workload.Ref{Type: string(kind), ID: id}
+		session, err := a.openTerminalSession(runCtx, ref, workload.TerminalSize{Columns: cols, Rows: rows})
+		a.clearTabConnectCancel(tab, generation)
+		if err != nil {
 			cancel()
+			a.finishTabSession(tab, generation, err)
 			return
 		}
-		tab.connectCancel = cancel
-		a.tabs.mu.Unlock()
-		go func() {
-			console, _, err := a.vmConsole(ctx, id)
-			cancel()
-			a.clearTabConnectCancel(tab, generation)
-			if err != nil {
-				a.finishTabSession(tab, generation, err)
-				return
-			}
-			a.setTabSession(tab, generation, console, tabStatusRunning)
-			_, err = io.Copy(output, console)
-			if errors.Is(err, io.EOF) {
-				err = nil
-			}
-			a.finishTabSession(tab, generation, err)
-		}()
-	}
+		a.setTabSession(tab, generation, session, tabStatusRunning)
+		_, copyErr := io.Copy(output, session)
+		if errors.Is(copyErr, io.EOF) {
+			copyErr = nil
+		}
+		waitErr := session.Wait(runCtx)
+		err = errors.Join(copyErr, waitErr)
+		if err != nil && kind == tabKindContainer && containerShellNeedsRestart(err.Error()) {
+			err = fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", err)
+		}
+		cancel()
+		a.finishTabSession(tab, generation, err)
+	}()
 }
 
 func (a *App) clearTabConnectCancel(tab *appTab, generation uint64) {
@@ -451,23 +442,11 @@ func (a *App) tabPresentLocked(target *appTab) bool {
 	return false
 }
 
-func (a *App) runContainerShellIO(ctx context.Context, id string, in io.Reader, out io.Writer, resize <-chan containerdruntime.ShellSize) error {
-	runtime := containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)))
-	defer runtime.Close()
-	if err := runtime.ExecShellWithResize(ctx, a.Lab, id, in, out, resize); err != nil {
-		if containerShellNeedsRestart(err.Error()) {
-			return fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", err)
-		}
-		return containerdruntime.WithAccessHint(err)
-	}
-	return nil
-}
-
 type tabPipeSession struct {
 	mu              sync.Mutex
 	writer          *io.PipeWriter
 	cancel          context.CancelFunc
-	resize          chan containerdruntime.ShellSize
+	resize          chan workload.TerminalSize
 	input           chan []byte
 	done            chan struct{}
 	runtimeDone     chan struct{}
@@ -475,7 +454,7 @@ type tabPipeSession struct {
 	closed          bool
 }
 
-func newTabPipeSession(writer *io.PipeWriter, cancel context.CancelFunc, resize chan containerdruntime.ShellSize) *tabPipeSession {
+func newTabPipeSession(writer *io.PipeWriter, cancel context.CancelFunc, resize chan workload.TerminalSize) *tabPipeSession {
 	session := &tabPipeSession{
 		writer:      writer,
 		cancel:      cancel,
@@ -561,7 +540,7 @@ func (s *tabPipeSession) Resize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
-	size := containerdruntime.ShellSize{Columns: cols, Rows: rows}
+	size := workload.TerminalSize{Columns: cols, Rows: rows}
 	select {
 	case s.resize <- size:
 		return

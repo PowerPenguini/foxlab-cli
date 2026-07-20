@@ -243,63 +243,23 @@ func rewriteLayoutEndpoint(endpoint *lab.LayoutEndpoint, kind, oldID, newID stri
 }
 
 func (s *Service) resolveVMID(ref string) (string, bool) {
-	if vm, ok := s.LabVM(ref); ok {
-		return vm.ID, true
-	}
-	if s.Lab == nil {
-		return "", false
-	}
-	for _, vm := range s.Lab.VMs {
-		if vm.Name == ref {
-			return vm.ID, true
-		}
-	}
-	return "", false
+	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindVM)
+	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveContainerID(ref string) (string, bool) {
-	if ct, ok := s.LabContainer(ref); ok {
-		return ct.ID, true
-	}
-	if s.Lab == nil {
-		return "", false
-	}
-	for _, ct := range s.Lab.Containers {
-		if ct.Name == ref {
-			return ct.ID, true
-		}
-	}
-	return "", false
+	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindContainer)
+	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveSwitchID(ref string) (string, bool) {
-	if sw, ok := s.LabSwitch(ref); ok {
-		return sw.ID, true
-	}
-	if s.Lab == nil {
-		return "", false
-	}
-	for _, sw := range s.Lab.Switches {
-		if sw.Name == ref {
-			return sw.ID, true
-		}
-	}
-	return "", false
+	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindSwitch)
+	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveExternalID(ref string) (string, bool) {
-	if link, ok := s.LabExternal(ref); ok {
-		return link.ID, true
-	}
-	if s.Lab == nil {
-		return "", false
-	}
-	for _, link := range s.Lab.ExternalLinks {
-		if link.Name == ref {
-			return link.ID, true
-		}
-	}
-	return "", false
+	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindExternal)
+	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveWorkloadID(typ, ref string) (string, bool) {

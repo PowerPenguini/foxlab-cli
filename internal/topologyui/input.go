@@ -58,7 +58,7 @@ func (a *App) handleKey(key string) bool {
 			if _, ok := selectedNode(a.Model, a.State.Selected); !ok {
 				return false
 			}
-			a.State.ContextMenu = true
+			a.State.openOverlay(overlayContextMenu)
 			a.State.ContextGroup = ""
 			a.State.ContextInSubmenu = false
 			a.State.ContextSelected = 0

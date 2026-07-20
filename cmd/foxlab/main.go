@@ -12,7 +12,6 @@ import (
 	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
-	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/topologyui"
 	"foxlab-cli/internal/virt"
 	"foxlab-cli/internal/workload"
@@ -80,17 +79,11 @@ func main() {
 		fmt.Fprintln(os.Stdout)
 		return
 	}
-	app := topologyui.App{
-		Model:             model,
-		Lab:               loadedLab,
+	app := topologyui.NewApp(model, loadedLab, topologyui.AppConfig{
 		LabPath:           *labPath,
-		Service:           topology.NewService(loadedLab, *labPath),
 		LibvirtURI:        *uri,
 		ContainerdAddress: *containerdAddress,
-		State: topologyui.ViewState{
-			Focus: topologyui.FocusGraph,
-		},
-	}
+	}, topologyui.AppDeps{})
 	if action.kind != "" {
 		switch action.kind {
 		case "shell":
@@ -152,68 +145,25 @@ func resolveDirectAction(args []string) (directAction, []string, error) {
 }
 
 func resolveShellWorkload(loaded *lab.Lab, name string) (string, string, error) {
-	type workloadMatch struct {
-		typ string
-		id  string
-	}
-	exactMatches := []workloadMatch{}
-	nameMatches := []workloadMatch{}
-	for _, vm := range loaded.VMs {
-		match := workloadMatch{typ: topologyui.NodeVM, id: vm.ID}
-		if vm.ID == name {
-			exactMatches = append(exactMatches, match)
-		} else if vm.Name == name {
-			nameMatches = append(nameMatches, match)
+	resolved, err := lab.ResolveNode(loaded, name, lab.NodeKindVM, lab.NodeKindContainer)
+	if err != nil {
+		if resolveErr, ok := err.(*lab.ResolveNodeError); ok && resolveErr.Count > 1 {
+			return "", "", fmt.Errorf("workload %s is ambiguous: %s", resolveErr.Match, name)
 		}
-	}
-	for _, ct := range loaded.Containers {
-		match := workloadMatch{typ: topologyui.NodeContainer, id: ct.ID}
-		if ct.ID == name {
-			exactMatches = append(exactMatches, match)
-		} else if ct.Name == name {
-			nameMatches = append(nameMatches, match)
-		}
-	}
-	if len(exactMatches) == 1 {
-		return exactMatches[0].typ, exactMatches[0].id, nil
-	}
-	if len(exactMatches) > 1 {
-		return "", "", fmt.Errorf("workload id is ambiguous: %s", name)
-	}
-	matches := nameMatches
-	if len(matches) == 0 {
 		return "", "", fmt.Errorf("workload not found: %s", name)
 	}
-	if len(matches) > 1 {
-		return "", "", fmt.Errorf("workload name is ambiguous: %s", name)
-	}
-	return matches[0].typ, matches[0].id, nil
+	return string(resolved.Kind), resolved.ID, nil
 }
 
 func resolveVMName(loaded *lab.Lab, name string) (string, error) {
-	exactMatches := []string{}
-	nameMatches := []string{}
-	for _, vm := range loaded.VMs {
-		if vm.ID == name {
-			exactMatches = append(exactMatches, vm.ID)
-		} else if vm.Name == name {
-			nameMatches = append(nameMatches, vm.ID)
+	resolved, err := lab.ResolveNode(loaded, name, lab.NodeKindVM)
+	if err != nil {
+		if resolveErr, ok := err.(*lab.ResolveNodeError); ok && resolveErr.Count > 1 {
+			return "", fmt.Errorf("vm %s is ambiguous: %s", resolveErr.Match, name)
 		}
-	}
-	if len(exactMatches) == 1 {
-		return exactMatches[0], nil
-	}
-	if len(exactMatches) > 1 {
-		return "", fmt.Errorf("vm id is ambiguous: %s", name)
-	}
-	matches := nameMatches
-	if len(matches) == 0 {
 		return "", fmt.Errorf("vm not found: %s", name)
 	}
-	if len(matches) > 1 {
-		return "", fmt.Errorf("vm name is ambiguous: %s", name)
-	}
-	return matches[0], nil
+	return resolved.ID, nil
 }
 
 type copyEndpoint struct {

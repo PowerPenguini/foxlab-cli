@@ -87,20 +87,15 @@ type App struct {
 	Out                   *os.File
 	ViewWidth             int
 	ViewHeight            int
-	RouteCacheKey         string
-	RouteCacheStableKey   string
-	RouteCacheWidth       int
-	RouteCacheHeight      int
-	RouteCachePanX        int
-	RouteCachePanY        int
-	RouteCacheRoutes      []visibleEdge
 	StatusRefreshInterval time.Duration
 	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 	DaemonController      DaemonController
 	tabs                  *tabManager
+	runtimeFactory        RuntimeFactory
 	runtimeState          appRuntimeState
 	inputState            appInputState
 	notificationState     appNotificationState
+	routeCache            routeCacheState
 }
 
 const runtimeStatusTimeout = 5 * time.Second
@@ -151,13 +146,7 @@ func (a *App) syncFromService() {
 }
 
 func (a *App) resetRouteCache() {
-	a.RouteCacheKey = ""
-	a.RouteCacheStableKey = ""
-	a.RouteCacheWidth = 0
-	a.RouteCacheHeight = 0
-	a.RouteCachePanX = 0
-	a.RouteCachePanY = 0
-	a.RouteCacheRoutes = nil
+	a.routeCache = routeCacheState{}
 }
 
 type terminalStartFunc func(*App) (func(), error)
@@ -472,26 +461,25 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	key := renderRouteCacheKey(a.Model, width, contentHeight, a.State.PanX, a.State.PanY)
 	stableKey := renderRouteCacheStableKey(a.Model, width, contentHeight)
 	reuseMovingRoutes := a.State.MoveMode &&
-		a.RouteCacheKey != "" &&
-		len(a.RouteCacheRoutes) > 0 &&
-		a.RouteCacheWidth == width &&
-		a.RouteCacheHeight == height &&
-		a.RouteCachePanX == a.State.PanX &&
-		a.RouteCachePanY == a.State.PanY
-	reusePanningRoutes := a.inputState.mouse.panActive && stableKey == a.RouteCacheStableKey && len(a.RouteCacheRoutes) > 0
-	if key != a.RouteCacheKey && !reuseMovingRoutes && !reusePanningRoutes {
+		a.routeCache.key != "" &&
+		len(a.routeCache.routes) > 0 &&
+		a.routeCache.width == width &&
+		a.routeCache.height == height &&
+		a.routeCache.panX == a.State.PanX &&
+		a.routeCache.panY == a.State.PanY
+	reusePanningRoutes := a.inputState.mouse.panActive && stableKey == a.routeCache.stableKey && len(a.routeCache.routes) > 0
+	if key != a.routeCache.key && !reuseMovingRoutes && !reusePanningRoutes {
 		_, routes := planRenderRoutes(a.Model, renderState, width, contentHeight)
-		a.RouteCacheKey = key
-		a.RouteCacheStableKey = stableKey
-		a.RouteCacheWidth = width
-		a.RouteCacheHeight = height
-		a.RouteCachePanX = a.State.PanX
-		a.RouteCachePanY = a.State.PanY
-		a.RouteCacheRoutes = routes
+		a.routeCache = routeCacheState{
+			key: key, stableKey: stableKey,
+			width: width, height: height,
+			panX: a.State.PanX, panY: a.State.PanY,
+			routes: routes,
+		}
 	}
-	routes := a.RouteCacheRoutes
-	if key != a.RouteCacheKey && reusePanningRoutes {
-		routes = translateVisibleEdges(routes, a.State.PanX-a.RouteCachePanX, a.State.PanY-a.RouteCachePanY)
+	routes := a.routeCache.routes
+	if key != a.routeCache.key && reusePanningRoutes {
+		routes = translateVisibleEdges(routes, a.State.PanX-a.routeCache.panX, a.State.PanY-a.routeCache.panY)
 	}
 	content := renderGridWithRoutes(a.Model, renderState, width, contentHeight, routes)
 	g := newGrid(width, height)
@@ -509,6 +497,9 @@ func (a *App) runtime() (WorkloadRuntime, func(), error) {
 func (a *App) runtimeForLab(l *lab.Lab) (WorkloadRuntime, func(), error) {
 	if a.Runtime != nil {
 		return a.Runtime, func() {}, nil
+	}
+	if a.runtimeFactory != nil {
+		return a.runtimeFactory(l)
 	}
 	runtime, err := foxruntime.New(a.LibvirtURI, a.ContainerdAddress, l)
 	if err != nil {

@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"io"
 
 	"foxlab-cli/internal/lab"
 )
@@ -38,6 +39,27 @@ type VNCRuntime interface {
 type FileTransferer interface {
 	PutFile(context.Context, *lab.Lab, Ref, string, string) error
 	GetFile(context.Context, *lab.Lab, Ref, string, string) error
+}
+
+// TerminalSize describes the visible terminal area for an interactive
+// workload session.
+type TerminalSize struct {
+	Columns int
+	Rows    int
+}
+
+// TerminalSession is a runtime-neutral interactive console or shell. Wait
+// reports the backend result after the stream ends or the session is closed.
+type TerminalSession interface {
+	io.ReadWriteCloser
+	Resize(columns, rows int)
+	Wait(context.Context) error
+}
+
+// SessionRuntime is an optional runtime capability for interactive workload
+// consoles and shells.
+type SessionRuntime interface {
+	OpenTerminalSession(context.Context, *lab.Lab, Ref, TerminalSize) (TerminalSession, error)
 }
 
 type StartOutcome struct {

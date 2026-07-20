@@ -1897,11 +1897,11 @@ func TestAppRenderReusesRouteCacheAcrossViewStateChanges(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(app.RouteCacheRoutes) == 0 {
+	if len(app.routeCache.routes) == 0 {
 		t.Fatal("route cache was not populated")
 	}
-	key := app.RouteCacheKey
-	routes := app.RouteCacheRoutes
+	key := app.routeCache.key
+	routes := app.routeCache.routes
 
 	out.Reset()
 	app.State.Selected = 2
@@ -1909,10 +1909,10 @@ func TestAppRenderReusesRouteCacheAcrossViewStateChanges(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey != key {
-		t.Fatalf("route cache key changed after view-only state update: %q -> %q", key, app.RouteCacheKey)
+	if app.routeCache.key != key {
+		t.Fatalf("route cache key changed after view-only state update: %q -> %q", key, app.routeCache.key)
 	}
-	if &app.RouteCacheRoutes[0] != &routes[0] {
+	if &app.routeCache.routes[0] != &routes[0] {
 		t.Fatal("route cache was recomputed for view-only state update")
 	}
 
@@ -1921,17 +1921,17 @@ func TestAppRenderReusesRouteCacheAcrossViewStateChanges(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache key did not change after viewport pan")
 	}
-	key = app.RouteCacheKey
+	key = app.routeCache.key
 
 	out.Reset()
 	app.Model.Nodes[0].X++
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache key did not change after model layout update")
 	}
 }
@@ -1942,12 +1942,12 @@ func TestAppRenderTranslatesRouteCacheWhileMousePanning(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(app.RouteCacheRoutes) == 0 || len(app.RouteCacheRoutes[0].route.cells) == 0 {
+	if len(app.routeCache.routes) == 0 || len(app.routeCache.routes[0].route.cells) == 0 {
 		t.Fatal("route cache was not populated")
 	}
-	key := app.RouteCacheKey
-	routes := app.RouteCacheRoutes
-	first := app.RouteCacheRoutes[0].route.cells[0]
+	key := app.routeCache.key
+	routes := app.routeCache.routes
+	first := app.routeCache.routes[0].route.cells[0]
 
 	out.Reset()
 	app.inputState.mouse.panActive = true
@@ -1956,13 +1956,13 @@ func TestAppRenderTranslatesRouteCacheWhileMousePanning(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey != key {
-		t.Fatalf("route cache key changed while panning: %q -> %q", key, app.RouteCacheKey)
+	if app.routeCache.key != key {
+		t.Fatalf("route cache key changed while panning: %q -> %q", key, app.routeCache.key)
 	}
-	if &app.RouteCacheRoutes[0] != &routes[0] {
+	if &app.routeCache.routes[0] != &routes[0] {
 		t.Fatal("route cache was recomputed while panning")
 	}
-	if got := app.RouteCacheRoutes[0].route.cells[0]; got != first {
+	if got := app.routeCache.routes[0].route.cells[0]; got != first {
 		t.Fatalf("cached route was mutated while panning: %+v -> %+v", first, got)
 	}
 
@@ -1971,7 +1971,7 @@ func TestAppRenderTranslatesRouteCacheWhileMousePanning(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache did not refresh after mouse panning ended")
 	}
 }
@@ -1982,8 +1982,8 @@ func TestAppRenderReusesRouteCacheWhileMovingNode(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	key := app.RouteCacheKey
-	routes := app.RouteCacheRoutes
+	key := app.routeCache.key
+	routes := app.routeCache.routes
 
 	app.startMove(app.Model.Nodes[0])
 	app.moveActiveNode(4, 0)
@@ -1991,15 +1991,15 @@ func TestAppRenderReusesRouteCacheWhileMovingNode(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey != key {
-		t.Fatalf("route cache key changed while moving node: %q -> %q", key, app.RouteCacheKey)
+	if app.routeCache.key != key {
+		t.Fatalf("route cache key changed while moving node: %q -> %q", key, app.routeCache.key)
 	}
-	if &app.RouteCacheRoutes[0] != &routes[0] {
+	if &app.routeCache.routes[0] != &routes[0] {
 		t.Fatal("route cache was recomputed while moving node")
 	}
 	rects := layoutNodeRects(app.Model, rect{X: 0, Y: 0, W: 100, H: 30})
 	moved := rects[app.Model.Nodes[0].Key()]
-	g := renderGridWithRoutes(app.Model, app.State, 100, 30, app.RouteCacheRoutes)
+	g := renderGridWithRoutes(app.Model, app.State, 100, 30, app.routeCache.routes)
 	followed := false
 	for y := moved.Y + 1; y < moved.Y+moved.H-1; y++ {
 		if g.Cells[y*g.Width+moved.X+moved.W].Ch != ' ' {
@@ -2016,7 +2016,7 @@ func TestAppRenderReusesRouteCacheWhileMovingNode(t *testing.T) {
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache did not refresh after move mode ended")
 	}
 }
@@ -2027,29 +2027,29 @@ func TestAppRenderRefreshesRouteCacheWhenViewportChangesDuringMoveMode(t *testin
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	key := app.RouteCacheKey
+	key := app.routeCache.key
 	app.startMove(app.Model.Nodes[0])
 	app.State.PanX = -2
 	out.Reset()
 	if err := app.render(&out, 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache was reused after viewport pan during move mode")
 	}
-	if app.RouteCachePanX != -2 {
-		t.Fatalf("route cache panX = %d, want -2", app.RouteCachePanX)
+	if app.routeCache.panX != -2 {
+		t.Fatalf("route cache panX = %d, want -2", app.routeCache.panX)
 	}
 
-	key = app.RouteCacheKey
+	key = app.routeCache.key
 	out.Reset()
 	if err := app.render(&out, 96, 30, true); err != nil {
 		t.Fatal(err)
 	}
-	if app.RouteCacheKey == key {
+	if app.routeCache.key == key {
 		t.Fatal("route cache was reused after viewport resize during move mode")
 	}
-	if app.RouteCacheWidth != 96 || app.RouteCacheHeight != 30 {
-		t.Fatalf("route cache size = %dx%d, want 96x30", app.RouteCacheWidth, app.RouteCacheHeight)
+	if app.routeCache.width != 96 || app.routeCache.height != 30 {
+		t.Fatalf("route cache size = %dx%d, want 96x30", app.routeCache.width, app.routeCache.height)
 	}
 }
