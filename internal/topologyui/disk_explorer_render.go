@@ -49,6 +49,25 @@ func drawDiskExplorer(g *grid, _ Model, state ViewState, width, height int) {
 	drawDiskExplorerActions(g, state, layout)
 }
 
+func (a *App) renderDiskExplorerTab(width, height int) *grid {
+	width = max(0, width)
+	height = max(0, height)
+	contentHeight := max(0, height-tabBarHeight)
+	state := a.diskExplorerRenderState()
+	content := newGrid(width, contentHeight)
+	drawDiskExplorer(content, a.Model, state, width, contentHeight)
+	drawConsole(content, state, width, contentHeight)
+	drawMouseClickFeedback(content, state)
+	drawPalette(content, a.Model, state, width, contentHeight)
+	applyTerminalBackground(content)
+
+	g := newGrid(width, height)
+	copyCanvas(g, content, 0, tabBarHeight)
+	a.drawTabBar(g)
+	applyTerminalBackground(g)
+	return g
+}
+
 func drawDiskExplorerRows(g *grid, state ViewState, layout rect) {
 	visible := diskExplorerVisibleRowsForState(state, layout)
 	start := clamp(state.DiskExplorerScroll, 0, max(0, len(state.DiskExplorerRows)-1))

@@ -66,10 +66,10 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5904},
-		},
+		}),
 		State: ViewState{
 			Focus:              FocusGraph,
 			ContextMenu:        true,
@@ -649,7 +649,7 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		Runtime:          runtime,
+		runtimeFactory:   testRuntimeFactory(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
@@ -714,7 +714,7 @@ func TestStopActionShowsStoppingWhenAppliedLabIsReconciling(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		Runtime:          runtime,
+		runtimeFactory:   testRuntimeFactory(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph, ApplyLabDisabled: true},
@@ -754,7 +754,7 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		Runtime:          runtime,
+		runtimeFactory:   testRuntimeFactory(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -807,7 +807,7 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		Runtime:          &fakeVMRuntime{states: map[string]string{stateKey: "missing"}},
+		runtimeFactory:   testRuntimeFactory(&fakeVMRuntime{states: map[string]string{stateKey: "missing"}}),
 		DaemonController: &fakeDaemonController{},
 		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return daemonstatus.Snapshot{}, errors.New("no daemon snapshot")
@@ -1042,14 +1042,41 @@ func TestCommandBarIsRemoved(t *testing.T) {
 	}
 }
 
-func TestCommandQQuits(t *testing.T) {
-	app := App{Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+func TestCommandQClosesOnlyActiveCard(t *testing.T) {
+	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+	app.openDiskExplorer()
 
-	if !app.executeCommand("q") {
-		t.Fatal(":q command did not quit")
+	if app.executeCommand("q") {
+		t.Fatal(":q quit the application")
 	}
-	if !app.executeCommand("quit") {
-		t.Fatal(":quit command did not quit")
+	if len(app.tabs.tabs) != 1 || app.tabs.active != 0 {
+		t.Fatalf(":q left tabs=%d active=%d", len(app.tabs.tabs), app.tabs.active)
+	}
+	if app.executeCommand("q") {
+		t.Fatal(":q on pinned Lab quit the application")
+	}
+
+	app.openDiskExplorer()
+	if app.executeCommand("quit") {
+		t.Fatal(":quit quit the application")
+	}
+	if len(app.tabs.tabs) != 1 {
+		t.Fatalf(":quit left %d tabs", len(app.tabs.tabs))
+	}
+}
+
+func TestCommandQAIsSilentQuitAllAlias(t *testing.T) {
+	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph, Message: "unchanged"}}
+	app.openDiskExplorer()
+
+	if !app.executeCommand("quit all") {
+		t.Fatal(":quit all did not quit")
+	}
+	if !app.executeCommand("qa") {
+		t.Fatal(":qa did not alias :quit all")
+	}
+	if app.State.Message != "unchanged" {
+		t.Fatalf(":qa changed message to %q", app.State.Message)
 	}
 }
 
@@ -1059,8 +1086,8 @@ func TestCommandQRejectsExtraArgs(t *testing.T) {
 	if app.executeCommand("quit now") {
 		t.Fatal(":quit with extra args quit unexpectedly")
 	}
-	if app.State.Message != "usage: quit" {
-		t.Fatalf("message = %q, want usage: quit", app.State.Message)
+	if app.State.Message != "usage: quit [all]" {
+		t.Fatalf("message = %q, want usage: quit [all]", app.State.Message)
 	}
 }
 
@@ -1161,20 +1188,25 @@ func TestMouseClickPaletteCreatesVM(t *testing.T) {
 	}
 }
 
-func TestPaletteExitQuits(t *testing.T) {
+func TestPaletteQClosesOnlyActiveCard(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "empty"},
+		Lab:        &lab.Lab{ID: "empty"},
 		State:      ViewState{Focus: FocusGraph},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
+	app.openDiskExplorer()
 
 	app.handleKey("char::")
 	for _, key := range []string{"char:q"} {
 		app.handleKey(key)
 	}
-	if !app.handleKey("enter") {
-		t.Fatal("palette q did not quit")
+	if app.handleKey("enter") {
+		t.Fatal("palette q quit the application")
+	}
+	if len(app.tabs.tabs) != 1 || app.tabs.active != 0 {
+		t.Fatalf("palette q left tabs=%d active=%d", len(app.tabs.tabs), app.tabs.active)
 	}
 }
 
@@ -1293,9 +1325,9 @@ func TestDiskExplorerKeyboardResize(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		Runtime: &fakeVMRuntime{states: map[string]string{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{states: map[string]string{
 			NodeKey(NodeVM, loaded.VMs[0].ID): "shutoff",
-		}},
+		}}),
 		State:      ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
@@ -1335,10 +1367,10 @@ func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		Runtime: &fakeVMRuntime{statesErr: errors.New("libvirt unavailable")},
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		LabPath:        path,
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{statesErr: errors.New("libvirt unavailable")}),
 	}
 	app.diskResize("data", map[string]string{"size": "12"})
 	if app.State.Message != "runtime status failed: libvirt unavailable" {
@@ -1649,7 +1681,7 @@ func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 	}
 }
 
-func TestDiskExplorerTopRowClickClosesExplorerWithoutAction(t *testing.T) {
+func TestDiskExplorerClickOutsidePanelKeepsCardOpen(t *testing.T) {
 	app := App{
 		Model:      Model{ID: "demo"},
 		Lab:        &lab.Lab{ID: "demo"},
@@ -1659,10 +1691,10 @@ func TestDiskExplorerTopRowClickClosesExplorerWithoutAction(t *testing.T) {
 	}
 
 	if app.handleKey("mouse:10:0:0") {
-		t.Fatal("top row click quit while disk explorer was open")
+		t.Fatal("click outside panel quit while disk explorer was open")
 	}
-	if app.State.DiskExplorerOpen {
-		t.Fatal("top row click did not close disk explorer")
+	if !app.State.DiskExplorerOpen {
+		t.Fatal("click outside panel closed the disk card")
 	}
 }
 
@@ -1844,11 +1876,11 @@ func TestPaletteKeyboardAddAndExit(t *testing.T) {
 	}
 
 	app.handleKey("char::")
-	for _, key := range []string{"char:q"} {
+	for _, key := range []string{"char:q", "char:a"} {
 		app.handleKey(key)
 	}
 	if !app.handleKey("enter") {
-		t.Fatal("keyboard palette q did not quit")
+		t.Fatal("keyboard palette qa did not quit all")
 	}
 }
 

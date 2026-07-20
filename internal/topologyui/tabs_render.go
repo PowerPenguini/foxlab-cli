@@ -14,7 +14,7 @@ func (a *App) drawTabBar(g *grid) {
 	labels := make([]string, len(a.tabs.tabs))
 	for index, tab := range a.tabs.tabs {
 		marker := ""
-		if tab.kind != tabKindLab {
+		if isShellTabKind(tab.kind) {
 			switch tab.status {
 			case tabStatusStarting:
 				marker = "◌ "
@@ -27,6 +27,8 @@ func (a *App) drawTabBar(g *grid) {
 				marker = "• "
 			}
 			labels[index] = " " + marker + tab.label + " × "
+		} else if tab.kind == tabKindDisks {
+			labels[index] = " " + tab.label + " × "
 		} else {
 			labels[index] = " " + tab.label + " "
 		}
@@ -55,7 +57,7 @@ func (a *App) drawTabBar(g *grid) {
 		style := themeChrome
 		if index == a.tabs.active {
 			style = themeChromeActive
-		} else if a.tabs.tabs[index].status == tabStatusExited {
+		} else if isShellTabKind(a.tabs.tabs[index].kind) && a.tabs.tabs[index].status == tabStatusExited {
 			style = ansiBgPanelTop + ansiRed
 		}
 		g.Text(x, 0, label, style)

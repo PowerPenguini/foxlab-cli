@@ -17,6 +17,13 @@ func (a *App) executeCommand(command string) bool {
 	if len(fields) == 0 {
 		return false
 	}
+	if fields[0] == "qa" {
+		if len(fields) != 1 {
+			a.State.Message = "usage: quit all"
+			return false
+		}
+		fields = []string{"quit", "all"}
+	}
 	spec, ok := resolveCommandSpec(fields[0])
 	if !ok {
 		a.State.Message = "unknown command: " + fields[0]
@@ -25,10 +32,17 @@ func (a *App) executeCommand(command string) bool {
 	fields[0] = spec.Name
 	switch spec.Name {
 	case "quit":
-		if !a.requireExactCommandArgs(fields, 1, "usage: quit") {
+		switch {
+		case len(fields) == 1:
+			a.ensureTabs()
+			a.closeActiveTab()
+			return false
+		case len(fields) == 2 && fields[1] == "all":
+			return true
+		default:
+			a.State.Message = "usage: quit [all]"
 			return false
 		}
-		return true
 	case "help":
 		if len(fields) > 2 {
 			a.State.Message = "usage: help [topic]"

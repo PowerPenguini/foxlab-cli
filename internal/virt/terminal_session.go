@@ -12,15 +12,23 @@ type consoleTerminalSession struct {
 	*Console
 }
 
-func (r *LibvirtRuntime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workload.Ref, _ workload.TerminalSize) (workload.TerminalSession, error) {
+func (r *LibvirtRuntime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workload.Ref, _ workload.TerminalSize) (workload.OpenedTerminalSession, error) {
 	if ref.Type != workload.TypeVM {
-		return nil, fmt.Errorf("libvirt terminal sessions require a vm workload")
+		return workload.OpenedTerminalSession{}, fmt.Errorf("libvirt terminal sessions require a vm workload")
 	}
 	console, err := r.OpenConsole(ctx, l, ref.ID)
 	if err != nil {
-		return nil, err
+		return workload.OpenedTerminalSession{}, err
 	}
-	return &consoleTerminalSession{Console: console}, nil
+	endpoint := terminalSessionEndpoint(ref.ID, console.Path())
+	return workload.OpenedTerminalSession{Session: &consoleTerminalSession{Console: console}, Endpoint: endpoint}, nil
+}
+
+func terminalSessionEndpoint(id, path string) string {
+	if path != "" {
+		return path
+	}
+	return id
 }
 
 func (s *consoleTerminalSession) Resize(_, _ int) {}

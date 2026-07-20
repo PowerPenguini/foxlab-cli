@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 func TestInspectCommandsAreRemoved(t *testing.T) {
@@ -186,7 +187,7 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 		Model:            ModelFromLab(loaded),
 		Lab:              loaded,
 		LabPath:          path,
-		Runtime:          runtime,
+		runtimeFactory:   testRuntimeFactory(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -226,18 +227,19 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 
 func TestShellVMUsesDirectConsole(t *testing.T) {
 	var consoleCtx context.Context
+	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): " Running "}}
+	runtime.openTerminal = func(ctx context.Context, _ *lab.Lab, ref workload.Ref, _ workload.TerminalSize) (workload.OpenedTerminalSession, error) {
+		consoleCtx = ctx
+		if ref.ID != "vm1" {
+			t.Fatalf("console id = %q", ref.ID)
+		}
+		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
+	}
 	app := App{
-		Model:   MockModel(),
-		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): " Running "}},
-		State:   ViewState{Focus: FocusGraph},
-		VMConsole: func(ctx context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
-			consoleCtx = ctx
-			if id != "vm1" {
-				t.Fatalf("console id = %q", id)
-			}
-			return &fakeConsole{}, "vm console /dev/pts/7", nil
-		},
+		Model:          MockModel(),
+		Lab:            &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		runtimeFactory: testRuntimeFactory(runtime),
+		State:          ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1")
@@ -245,13 +247,13 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("vm shell did not set pending command")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+	if got := runtime.starts; got != 0 {
 		t.Fatalf("vm shell started workload %d times", got)
 	}
 	if got := app.WorkloadStates[NodeKey(NodeVM, "vm1")]; got != "running" {
 		t.Fatalf("workload state = %q, want normalized running", got)
 	}
-	if app.PendingShell.Console == nil || app.PendingShell.NativeRun != nil {
+	if app.PendingShell.Session == nil || app.PendingShell.NativeRun != nil {
 		t.Fatalf("vm shell command = %#v", app.PendingShell)
 	}
 	if app.PendingShell.Display != "vm console /dev/pts/7" {
@@ -264,15 +266,16 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 
 func TestCommandShellRejectsExtraArgs(t *testing.T) {
 	consoleCalled := false
+	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "running"}}
+	runtime.openTerminal = func(context.Context, *lab.Lab, workload.Ref, workload.TerminalSize) (workload.OpenedTerminalSession, error) {
+		consoleCalled = true
+		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
+	}
 	app := App{
-		Model:   MockModel(),
-		Lab:     &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		Runtime: &fakeVMRuntime{states: map[string]string{NodeKey(NodeVM, "vm1"): "running"}},
-		State:   ViewState{Focus: FocusGraph},
-		VMConsole: func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error) {
-			consoleCalled = true
-			return &fakeConsole{}, "vm console /dev/pts/7", nil
-		},
+		Model:          MockModel(),
+		Lab:            &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
+		runtimeFactory: testRuntimeFactory(runtime),
+		State:          ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1 extra")
@@ -602,11 +605,11 @@ func TestContainerNICConnectDoesNotReconcileRunningContainer(t *testing.T) {
 	}
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "running"}}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		Runtime: runtime,
-		State:   ViewState{Focus: FocusGraph},
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		LabPath:        path,
+		runtimeFactory: testRuntimeFactory(runtime),
+		State:          ViewState{Focus: FocusGraph},
 	}
 
 	app.containerNICConnect("web", "0", map[string]string{"to": "wan"})
@@ -1096,21 +1099,26 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime := &fakeVMRuntime{states: map[string]string{
+		NodeKey(NodeVM, loaded.VMs[0].ID):               "running",
+		NodeKey(NodeContainer, loaded.Containers[0].ID): "running",
+	}}
+	runtime.openTerminal = func(_ context.Context, _ *lab.Lab, ref workload.Ref, _ workload.TerminalSize) (workload.OpenedTerminalSession, error) {
+		if ref.Type == workload.TypeVM && ref.ID != loaded.VMs[0].ID {
+			t.Fatalf("console id = %q", ref.ID)
+		}
+		endpoint := ref.ID
+		if ref.Type == workload.TypeVM {
+			endpoint = "/dev/pts/7"
+		}
+		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: endpoint}, nil
+	}
 	app := App{
-		Model: MockModel(),
-		Lab:   loaded,
-		Runtime: &fakeVMRuntime{states: map[string]string{
-			NodeKey(NodeVM, loaded.VMs[0].ID):               "running",
-			NodeKey(NodeContainer, loaded.Containers[0].ID): "running",
-		}},
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
-		VMConsole: func(_ context.Context, _ *lab.Lab, id string) (io.ReadWriteCloser, string, error) {
-			if id != loaded.VMs[0].ID {
-				t.Fatalf("console id = %q", id)
-			}
-			return &fakeConsole{}, "vm console /dev/pts/7", nil
-		},
+		Model:          MockModel(),
+		Lab:            loaded,
+		runtimeFactory: testRuntimeFactory(runtime),
+		LabPath:        path,
+		State:          ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
@@ -1165,10 +1173,10 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("vm shell did not set pending shell")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+	if got := runtime.starts; got != 0 {
 		t.Fatalf("vm shell started workload %d times", got)
 	}
-	if app.PendingShell.Console == nil || app.PendingShell.Display != "vm console /dev/pts/7" {
+	if app.PendingShell.Session == nil || app.PendingShell.Display != "vm console /dev/pts/7" {
 		t.Fatalf("vm shell command = %#v", app.PendingShell)
 	}
 	app.PendingShell = nil
@@ -1189,10 +1197,10 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	if app.PendingShell == nil {
 		t.Fatal("container shell did not set pending shell")
 	}
-	if got := app.Runtime.(*fakeVMRuntime).starts; got != 0 {
+	if got := runtime.starts; got != 0 {
 		t.Fatalf("container shell started workload %d times", got)
 	}
-	if app.PendingShell.NativeRun == nil || app.PendingShell.Console != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-"+loaded.Containers[0].ID) {
+	if app.PendingShell.OpenSession == nil || app.PendingShell.Session != nil || !strings.Contains(app.PendingShell.Display, "foxlab-demo-"+loaded.Containers[0].ID) {
 		t.Fatalf("container shell command = %#v", app.PendingShell)
 	}
 }
@@ -1251,10 +1259,10 @@ func TestContextMenuVNCActionRefreshesPortWithoutStartingVM(t *testing.T) {
 		vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5906},
 	}
 	app := App{
-		Model:     ModelFromLab(loaded),
-		Lab:       loaded,
-		Runtime:   runtime,
-		VNCViewer: "/bin/true",
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		runtimeFactory: testRuntimeFactory(runtime),
+		VNCViewer:      "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1276,10 +1284,10 @@ func TestContextMenuVNCActionUsesPortWhenStateRefreshFails(t *testing.T) {
 		vncPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5907},
 	}
 	app := App{
-		Model:     ModelFromLab(loaded),
-		Lab:       loaded,
-		Runtime:   runtime,
-		VNCViewer: "/bin/true",
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		runtimeFactory: testRuntimeFactory(runtime),
+		VNCViewer:      "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1298,9 +1306,9 @@ func TestRefreshVNCWorkloadStatusUsesTimeoutContext(t *testing.T) {
 	}
 	runtime := &deadlineRuntime{}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		Runtime: runtime,
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		runtimeFactory: testRuntimeFactory(runtime),
 	}
 
 	if err := app.refreshVNCWorkloadStatus(Node{ID: "vm1", Type: NodeVM}); err != nil {
@@ -1350,9 +1358,9 @@ func TestContextMenuVNCActionReportsRestartNeededWithoutPort(t *testing.T) {
 			Details: []string{"vnc=true"},
 		}}},
 		Lab: loaded,
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeVM, "vm1"): "running"},
-		},
+		}),
 		VNCViewer: "/bin/true",
 	}
 

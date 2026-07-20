@@ -24,10 +24,10 @@ type sessionRuntime struct {
 	size   TerminalSize
 }
 
-func (r *sessionRuntime) OpenTerminalSession(_ context.Context, _ *lab.Lab, ref Ref, size TerminalSize) (TerminalSession, error) {
+func (r *sessionRuntime) OpenTerminalSession(_ context.Context, _ *lab.Lab, ref Ref, size TerminalSize) (OpenedTerminalSession, error) {
 	r.opened = ref
 	r.size = size
-	return &fakeTerminalSession{}, nil
+	return OpenedTerminalSession{Session: &fakeTerminalSession{}, Endpoint: ref.ID}, nil
 }
 
 type stateErrorRuntime struct {
@@ -178,13 +178,16 @@ func TestCompositeTerminalSessionDispatchesByWorkloadType(t *testing.T) {
 	ref := Ref{Type: TypeContainer, ID: "web"}
 	size := TerminalSize{Columns: 120, Rows: 40}
 
-	session, err := composite.OpenTerminalSession(context.Background(), &lab.Lab{}, ref, size)
+	opened, err := composite.OpenTerminalSession(context.Background(), &lab.Lab{}, ref, size)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer opened.Session.Close()
 	if container.opened != ref || container.size != size {
 		t.Fatalf("container session = %#v at %#v", container.opened, container.size)
+	}
+	if opened.Endpoint != "web" {
+		t.Fatalf("terminal endpoint = %q, want web", opened.Endpoint)
 	}
 	if vm.opened != (Ref{}) {
 		t.Fatalf("vm runtime unexpectedly opened %#v", vm.opened)

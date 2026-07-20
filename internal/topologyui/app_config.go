@@ -2,13 +2,13 @@ package topologyui
 
 import (
 	"context"
-	"io"
 	"os"
 	"time"
 
 	"foxlab-cli/internal/daemonstatus"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
+	"foxlab-cli/internal/workload"
 )
 
 // AppConfig contains the stable process-level configuration used by App.
@@ -24,18 +24,17 @@ type AppConfig struct {
 	Out                   *os.File
 }
 
-// AppDeps contains replaceable process integrations. Production callers can
-// leave every field empty and use the package defaults.
+// AppDeps contains replaceable process integrations. RuntimeFactory is
+// required for every operation that inspects or controls workloads.
 type AppDeps struct {
 	RuntimeFactory   RuntimeFactory
 	StatusQuery      func(context.Context, string) (daemonstatus.Snapshot, error)
 	DaemonController DaemonController
-	VMConsole        func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 }
 
 // RuntimeFactory opens a workload runtime for the supplied lab. The returned
 // close function must always be safe to call.
-type RuntimeFactory func(*lab.Lab) (WorkloadRuntime, func(), error)
+type RuntimeFactory func(*lab.Lab) (workload.Runtime, func(), error)
 
 // NewApp is the composition root for the interactive topology application.
 func NewApp(model Model, loadedLab *lab.Lab, config AppConfig, deps AppDeps) *App {
@@ -53,7 +52,6 @@ func NewApp(model Model, loadedLab *lab.Lab, config AppConfig, deps AppDeps) *Ap
 		Out:                   config.Out,
 		StatusQuery:           deps.StatusQuery,
 		DaemonController:      deps.DaemonController,
-		VMConsole:             deps.VMConsole,
 		runtimeFactory:        deps.RuntimeFactory,
 	}
 	app.Service = topology.NewService(loadedLab, config.LabPath)

@@ -81,14 +81,14 @@ func (c *Composite) GetFile(ctx context.Context, l *lab.Lab, ref Ref, guestPath,
 	return transferer.GetFile(ctx, l, ref, guestPath, hostPath)
 }
 
-func (c *Composite) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref Ref, size TerminalSize) (TerminalSession, error) {
+func (c *Composite) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref Ref, size TerminalSize) (OpenedTerminalSession, error) {
 	runtime, err := c.runtimeFor(ref)
 	if err != nil {
-		return nil, err
+		return OpenedTerminalSession{}, err
 	}
 	sessions, ok := runtime.(SessionRuntime)
 	if !ok {
-		return nil, fmt.Errorf("terminal session not configured for workload type %q", ref.Type)
+		return OpenedTerminalSession{}, fmt.Errorf("terminal session not configured for workload type %q", ref.Type)
 	}
 	return sessions.OpenTerminalSession(ctx, l, ref, size)
 }

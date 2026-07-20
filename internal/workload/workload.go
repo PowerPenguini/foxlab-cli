@@ -56,10 +56,17 @@ type TerminalSession interface {
 	Wait(context.Context) error
 }
 
+// OpenedTerminalSession contains a terminal stream and the backend endpoint
+// used to describe it to callers without exposing backend-specific types.
+type OpenedTerminalSession struct {
+	Session  TerminalSession
+	Endpoint string
+}
+
 // SessionRuntime is an optional runtime capability for interactive workload
 // consoles and shells.
 type SessionRuntime interface {
-	OpenTerminalSession(context.Context, *lab.Lab, Ref, TerminalSize) (TerminalSession, error)
+	OpenTerminalSession(context.Context, *lab.Lab, Ref, TerminalSize) (OpenedTerminalSession, error)
 }
 
 type StartOutcome struct {

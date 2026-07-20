@@ -116,6 +116,9 @@ func (a *App) runPaletteAction(action paletteAction) bool {
 	switch action.Action {
 	case "exit":
 		return true
+	case "tab-close-active":
+		a.ensureTabs()
+		a.closeActiveTab()
 	case "apply-lab":
 		a.applyOpenLab()
 	case "disk-explorer":
@@ -195,7 +198,7 @@ func topLevelPaletteActions(state ViewState) []paletteAction {
 		{Label: "add", Hint: "create", Query: "add", Enabled: true, CompleteOnly: true},
 		{Label: "apply", Hint: "lab", Query: "apply", Action: "apply-lab", Enabled: !state.ApplyLabDisabled, DisabledReason: "lab already applied"},
 		{Label: "disk", Hint: "explorer", Query: "disk", Action: "disk-explorer", Enabled: true},
-		{Label: "quit", Hint: "quit", Query: "quit", Action: "exit", Enabled: true},
+		{Label: "quit", Hint: "card", Query: "quit", Action: "tab-close-active", Enabled: true},
 	}
 }
 
@@ -258,8 +261,10 @@ func filteredAddPaletteActions(query string) []paletteAction {
 
 func executablePaletteCommand(query string, state ViewState) (paletteAction, bool) {
 	switch query {
-	case "q", "quit", "exit":
-		return paletteAction{Label: "q", Query: query, Action: "exit", Enabled: true}, true
+	case "q", "quit":
+		return paletteAction{Label: "q", Query: query, Action: "tab-close-active", Enabled: true}, true
+	case "qa", "quit all", "exit":
+		return paletteAction{Label: "quit all", Query: query, Action: "exit", Enabled: true}, true
 	case "apply":
 		return paletteAction{Label: "apply", Query: query, Action: "apply-lab", Enabled: !state.ApplyLabDisabled, DisabledReason: "lab already applied"}, true
 	case "disk", "disks":

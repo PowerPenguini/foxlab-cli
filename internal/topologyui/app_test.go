@@ -28,6 +28,10 @@ func (f *fakeConsole) Close() error {
 	return nil
 }
 
+func (f *fakeConsole) Resize(_, _ int) {}
+
+func (f *fakeConsole) Wait(context.Context) error { return nil }
+
 type eofReader struct{}
 
 func (eofReader) Read([]byte) (int, error) {
@@ -69,14 +73,21 @@ func (closedPipeReader) Read([]byte) (int, error) {
 }
 
 type fakeVMRuntime struct {
-	mu        sync.Mutex
-	states    map[string]string
-	vncPorts  map[string]int
-	statesErr error
-	started   string
-	stopped   string
-	starts    int
-	stops     int
+	mu           sync.Mutex
+	states       map[string]string
+	vncPorts     map[string]int
+	statesErr    error
+	started      string
+	stopped      string
+	starts       int
+	stops        int
+	openTerminal func(context.Context, *lab.Lab, workload.Ref, workload.TerminalSize) (workload.OpenedTerminalSession, error)
+}
+
+func testRuntimeFactory(runtime workload.Runtime) RuntimeFactory {
+	return func(*lab.Lab) (workload.Runtime, func(), error) {
+		return runtime, func() {}, nil
+	}
 }
 
 type fakeDaemonController struct {
@@ -137,6 +148,22 @@ func (f *fakeVMRuntime) Stop(_ context.Context, _ *lab.Lab, ref workload.Ref) er
 }
 
 func (f *fakeVMRuntime) Close() error { return nil }
+
+func (f *fakeVMRuntime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workload.Ref, size workload.TerminalSize) (workload.OpenedTerminalSession, error) {
+	if f.openTerminal != nil {
+		return f.openTerminal(ctx, l, ref, size)
+	}
+	endpoint := ref.ID
+	if ref.Type == workload.TypeContainer && l != nil {
+		for _, ct := range l.Containers {
+			if ct.ID == ref.ID {
+				endpoint = l.ManagedContainerName(ct)
+				break
+			}
+		}
+	}
+	return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: endpoint}, nil
+}
 
 func (f *fakeVMRuntime) setState(key, state string) {
 	f.mu.Lock()
@@ -765,10 +792,10 @@ func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5903},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -792,9 +819,9 @@ func TestRefreshWorkloadStatesCopiesRuntimeMaps(t *testing.T) {
 		vncPorts: map[string]int{stateKey: 5903},
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		Runtime: runtime,
+		Model:          ModelFromLab(loaded),
+		Lab:            loaded,
+		runtimeFactory: testRuntimeFactory(runtime),
 	}
 
 	app.refreshWorkloadStates()
@@ -820,9 +847,9 @@ func TestRefreshWorkloadStatesShowsActualStateWithoutAppliedLab(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -854,9 +881,9 @@ func TestRefreshWorkloadStatesShowsMissingForAppliedDesiredRunningMissingContain
 		LabPath:          path,
 		State:            ViewState{ApplyLabDisabled: true},
 		DaemonController: &fakeDaemonController{status: DaemonStatus{Active: true, LabPath: path}},
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -895,9 +922,9 @@ func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
 		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return snapshot, nil
 		},
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -987,9 +1014,9 @@ func TestRefreshWorkloadStatesQueriesAppliedDaemonSocketPath(t *testing.T) {
 				States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
 			}, nil
 		},
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -1047,9 +1074,9 @@ func TestRefreshWorkloadStatesFallsBackWhenFoxlabdSnapshotIsForAnotherLab(t *tes
 		StatusQuery: func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return snapshot, nil
 		},
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "web"): "missing"},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -1072,9 +1099,9 @@ func TestRefreshWorkloadStatesNormalizesRuntimeStates(t *testing.T) {
 	app := App{
 		Model: ModelFromLab(loaded),
 		Lab:   loaded,
-		Runtime: &fakeVMRuntime{
+		runtimeFactory: testRuntimeFactory(&fakeVMRuntime{
 			states: map[string]string{key: " Missing "},
-		},
+		}),
 	}
 
 	app.refreshWorkloadStates()
@@ -1545,7 +1572,7 @@ func TestRunInteractiveRefreshesRuntimeStatusWithoutReconciling(t *testing.T) {
 	app := App{
 		Model:                 ModelFromLab(loaded),
 		Lab:                   loaded,
-		Runtime:               runtime,
+		runtimeFactory:        testRuntimeFactory(runtime),
 		StatusRefreshInterval: time.Millisecond,
 		State:                 ViewState{Focus: FocusGraph},
 		Out:                   tempOutputFile(t),
@@ -1715,7 +1742,7 @@ func TestStartStatusRefreshUsesLabSnapshot(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, Runtime: runtime}
+	app := App{Lab: loaded, runtimeFactory: testRuntimeFactory(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1762,7 +1789,7 @@ func TestRuntimeCallsAreSerializedDuringStatusRefresh(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, Runtime: runtime}
+	app := App{Lab: loaded, runtimeFactory: testRuntimeFactory(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

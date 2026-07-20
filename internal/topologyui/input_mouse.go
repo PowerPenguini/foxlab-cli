@@ -79,10 +79,6 @@ func (a *App) handleMouseKey(key string) bool {
 		return a.handlePaletteMouse(event)
 	}
 	if a.State.DiskExplorerOpen {
-		if event.y == 0 {
-			a.closeDiskExplorer()
-			return false
-		}
 		return a.handleDiskExplorerMouse(event)
 	}
 	if a.State.ConnectTargetMenu {

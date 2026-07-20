@@ -21,12 +21,13 @@ type terminalSession struct {
 	err       error
 }
 
-func (r *Runtime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workload.Ref, size workload.TerminalSize) (workload.TerminalSession, error) {
+func (r *Runtime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workload.Ref, size workload.TerminalSize) (workload.OpenedTerminalSession, error) {
 	if ref.Type != workload.TypeContainer {
-		return nil, errors.New("containerd terminal sessions require a container workload")
+		return workload.OpenedTerminalSession{}, errors.New("containerd terminal sessions require a container workload")
 	}
-	if _, ok := findContainer(l, ref.ID); !ok {
-		return nil, errors.New("container not found: " + ref.ID)
+	ct, ok := findContainer(l, ref.ID)
+	if !ok {
+		return workload.OpenedTerminalSession{}, errors.New("container not found: " + ref.ID)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	inputReader, inputWriter := io.Pipe()
@@ -52,7 +53,7 @@ func (r *Runtime) OpenTerminalSession(ctx context.Context, l *lab.Lab, ref workl
 		session.errMu.Unlock()
 		close(session.done)
 	}()
-	return session, nil
+	return workload.OpenedTerminalSession{Session: session, Endpoint: l.ManagedContainerName(ct)}, nil
 }
 
 func (s *terminalSession) Read(p []byte) (int, error) {

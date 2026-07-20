@@ -8,7 +8,7 @@ type commandSpec struct {
 }
 
 var commandCatalog = []commandSpec{
-	{Name: "quit", Aliases: []string{"q"}, Usage: "quit"},
+	{Name: "quit", Aliases: []string{"q"}, Usage: "quit [all]"},
 	{Name: "help", Aliases: []string{"h"}, Usage: "help [topic]"},
 	{Name: "add", Usage: "add <vm|container|switch|disk|uplink>", HelpTopic: "add"},
 	{Name: "vm", Usage: "vm <create|set|start|stop|nic|delete> ...", HelpTopic: "vm"},

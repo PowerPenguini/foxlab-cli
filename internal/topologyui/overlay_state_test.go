@@ -22,11 +22,14 @@ func TestOpenOverlayClosesOtherTransientSurfaces(t *testing.T) {
 	if state.activeOverlay() != overlayPalette || !state.PaletteOpen {
 		t.Fatalf("active overlay = %v, palette=%v", state.activeOverlay(), state.PaletteOpen)
 	}
-	if state.ContextMenu || state.DiskExplorerOpen || state.ConnectTargetMenu || state.TopMenuOpen {
+	if state.ContextMenu || state.ConnectTargetMenu || state.TopMenuOpen {
 		t.Fatalf("other overlays remain open: %#v", state)
 	}
-	if state.ContextGroup != "" || state.DiskExplorerEdit != "" || state.ConnectTargetID != "" {
+	if state.ContextGroup != "" || state.ConnectTargetID != "" {
 		t.Fatalf("closed overlay state was not reset: %#v", state)
+	}
+	if !state.DiskExplorerOpen || state.DiskExplorerEdit != diskExplorerActionRename {
+		t.Fatalf("independent disk card state was reset: %#v", state)
 	}
 	if state.PaletteQuery != "add vm" {
 		t.Fatalf("active overlay query = %q", state.PaletteQuery)

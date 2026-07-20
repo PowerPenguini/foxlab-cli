@@ -8,11 +8,12 @@ func helpLines(topic string) []string {
 		return []string{
 			"palette/menu: : opens actions from Lab; Alt+: opens them over a shell; Escape closes",
 			"navigation: arrows or hjkl move selection; mouse click selects nodes and buttons",
-			"tabs: gt/gT or Alt+1..9 switches cards; click a tab or its x to focus/close",
+			"tabs: gt/gT from Lab or Disks; Alt+g then t/T or Alt+1..9 works globally",
+			"closing: q or quit closes one card; qa silently aliases quit all",
 			"shell: Ctrl-] returns to Lab; Shift+PageUp/PageDown scrolls session history",
 			"editing: choose Configuration fields and type inline",
 			"links: use NIC menu and connect mode to create direct links",
-			"disks: open Disks from the palette for global disk management",
+			"disks: open the Disks card from the palette for global disk management",
 		}
 	case "add":
 		return []string{
@@ -36,7 +37,7 @@ func helpLines(topic string) []string {
 		}
 	case "disk", "disks":
 		return []string{
-			"disk: open Disks from the palette or use Disk menu from a workload",
+			"disk: open the Disks card from the palette or use Disk menu from a workload",
 			"disk buttons: L creates a layer, M merges, D detaches, X deletes",
 			"disk explorer: N creates base, L creates layer, E renames, R resizes, M merges, X deletes",
 			"disk commands: create, attach, detach, merge, rename, resize, info, layer create/delete, delete",
@@ -49,11 +50,12 @@ func helpLines(topic string) []string {
 		}
 	case "tab", "tabs", "shell", "console":
 		return []string{
-			"tabs: Lab is pinned; each VM console or container shell has one reusable card",
-			"switch: gt/gT from Lab or an ended session; Alt+1..9 works globally",
+			"tabs: Lab is pinned; Disks and each workload session use one reusable card",
+			"switch: gt/gT from Lab, Disks, or ended sessions; Alt+g then t/T works globally",
 			"running shell: Alt+: opens FoxLab actions; Ctrl-] returns to Lab; click x to close it",
 			"ended shell: r restarts, x closes; scrollback remains available",
 			"commands: tabnext, tabprev, tabclose [index|label], tabrestart [index|label]",
+			"quit: q or quit closes the active card; quit all closes the application",
 		}
 	case "switch", "switches":
 		return []string{

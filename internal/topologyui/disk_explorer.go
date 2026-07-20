@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	diskExplorerTabKey       = "disks"
 	diskExplorerActionCreate = "create"
 	diskExplorerActionLayer  = "layer"
 	diskExplorerActionRename = "rename"
@@ -24,16 +25,53 @@ type diskExplorerRow struct {
 }
 
 func (a *App) openDiskExplorer() {
-	a.State.openOverlay(overlayDiskExplorer)
+	a.ensureTabs()
+	a.State.openOverlay(overlayNone)
+	a.tabs.mu.Lock()
+	for index, tab := range a.tabs.tabs {
+		if tab.key == diskExplorerTabKey {
+			a.tabs.active = index
+			tab.unread = false
+			a.tabs.gPrefix = false
+			a.tabs.mu.Unlock()
+			a.syncActiveTabView(tabKindDisks)
+			a.clampDiskExplorerSelection()
+			a.ensureDiskExplorerSelectionVisible()
+			a.tabs.notify()
+			return
+		}
+	}
+	tab := &appTab{key: diskExplorerTabKey, kind: tabKindDisks, label: "Disks", status: tabStatusRunning}
+	a.tabs.tabs = append(a.tabs.tabs, tab)
+	a.tabs.active = len(a.tabs.tabs) - 1
+	a.tabs.gPrefix = false
+	a.tabs.mu.Unlock()
+	a.syncActiveTabView(tabKindDisks)
 	a.State.DiskExplorerEdit = ""
 	a.State.DiskExplorerEditValue = ""
 	a.State.DiskExplorerEditCursor = 0
 	a.clampDiskExplorerSelection()
+	a.tabs.notify()
 }
 
 func (a *App) closeDiskExplorer() {
 	a.State.DiskExplorerOpen = false
 	a.clearDiskExplorerEdit()
+	if a.tabs == nil {
+		return
+	}
+	a.tabs.mu.Lock()
+	index := -1
+	for candidate, tab := range a.tabs.tabs {
+		if tab.key == diskExplorerTabKey {
+			index = candidate
+			break
+		}
+	}
+	a.tabs.mu.Unlock()
+	if index >= 0 {
+		a.closeTab(index)
+	}
 }
 
 func (a *App) clearDiskExplorerEdit() {
@@ -331,7 +369,6 @@ func diskExplorerVisibleRows(layout rect) int {
 func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
 	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
-		a.closeDiskExplorer()
 		return false
 	}
 	if action, ok := diskExplorerActionAt(layout, event.x, event.y); ok {

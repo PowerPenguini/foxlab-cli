@@ -69,5 +69,5 @@ func workloadRef(typ, id string) workload.Ref {
 }
 
 func (a *App) shouldRefreshRuntimeAfterMutation() bool {
-	return a.Runtime != nil || a.WorkloadStates != nil || a.VNCPorts != nil
+	return a.runtimeFactory != nil || a.WorkloadStates != nil || a.VNCPorts != nil
 }

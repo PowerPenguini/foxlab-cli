@@ -24,6 +24,7 @@ type tabKind string
 
 const (
 	tabKindLab       tabKind = "lab"
+	tabKindDisks     tabKind = "disks"
 	tabKindContainer tabKind = "container"
 	tabKindVM        tabKind = "vm"
 )
@@ -232,7 +233,7 @@ func (a *App) tabInputNeedsImmediateRender(key string, wasRunningShell bool) boo
 	if !wasRunningShell {
 		return true
 	}
-	if key == "ctrl+]" || key == "shift-pageup" || key == "shift-pagedown" || strings.HasPrefix(key, "alt+") {
+	if key == "ctrl+]" || key == "shift-pageup" || key == "shift-pagedown" || key == "char:t" || key == "char:T" || strings.HasPrefix(key, "alt+") {
 		return true
 	}
 	if event, ok := parseMouseEvent(key); ok && event.y == 0 {
@@ -242,7 +243,7 @@ func (a *App) tabInputNeedsImmediateRender(key string, wasRunningShell bool) boo
 }
 
 func (a *App) shellPaletteOpen() bool {
-	return a != nil && a.State.PaletteOpen && a.tabs != nil && a.tabs.activeKind() != tabKindLab
+	return a != nil && a.State.PaletteOpen && a.tabs != nil && isShellTabKind(a.tabs.activeKind())
 }
 
 func (m *tabManager) markActivity(tab *appTab) {
@@ -270,7 +271,19 @@ func (m *tabManager) activeRunningShell() bool {
 		return false
 	}
 	tab := m.tabs[m.active]
-	return tab.kind != tabKindLab && tab.status == tabStatusRunning
+	return isShellTabKind(tab.kind) && tab.status == tabStatusRunning
+}
+
+func isShellTabKind(kind tabKind) bool {
+	return kind == tabKindContainer || kind == tabKindVM
+}
+
+func isAppTabKind(kind tabKind) bool {
+	return kind == tabKindLab || kind == tabKindDisks
+}
+
+func (a *App) syncActiveTabView(kind tabKind) {
+	a.State.DiskExplorerOpen = kind == tabKindDisks
 }
 
 func (a *App) openShellTab(node Node) {
@@ -282,6 +295,7 @@ func (a *App) openShellTab(node Node) {
 			a.tabs.active = i
 			tab.unread = false
 			a.tabs.mu.Unlock()
+			a.syncActiveTabView(tab.kind)
 			a.tabs.notify()
 			return
 		}
@@ -310,6 +324,7 @@ func (a *App) openShellTab(node Node) {
 	a.tabs.tabs = append(a.tabs.tabs, tab)
 	a.tabs.active = len(a.tabs.tabs) - 1
 	a.tabs.mu.Unlock()
+	a.syncActiveTabView(tab.kind)
 	a.tabs.notify()
 	a.startTabSession(tab)
 }
@@ -356,13 +371,14 @@ func (a *App) startTabSession(tab *appTab) {
 	a.tabs.mu.Unlock()
 	go func() {
 		ref := workload.Ref{Type: string(kind), ID: id}
-		session, err := a.openTerminalSession(runCtx, ref, workload.TerminalSize{Columns: cols, Rows: rows})
+		opened, err := a.openTerminalSession(runCtx, ref, workload.TerminalSize{Columns: cols, Rows: rows})
 		a.clearTabConnectCancel(tab, generation)
 		if err != nil {
 			cancel()
 			a.finishTabSession(tab, generation, err)
 			return
 		}
+		session := opened.Session
 		a.setTabSession(tab, generation, session, tabStatusRunning)
 		_, copyErr := io.Copy(output, session)
 		if errors.Is(copyErr, io.EOF) {
@@ -570,10 +586,10 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 		active := a.tabs.tabs[a.tabs.active]
 		kind, status := active.kind, active.status
 		a.tabs.mu.Unlock()
-		if (kind == tabKindLab || paletteOwnsInput) && !a.inputState.pasteToUI {
+		if (isAppTabKind(kind) || paletteOwnsInput) && !a.inputState.pasteToUI {
 			return true
 		}
-		if kind == tabKindLab || paletteOwnsInput {
+		if isAppTabKind(kind) || paletteOwnsInput {
 			if strings.HasPrefix(key, "char:") {
 				return false
 			}
@@ -582,7 +598,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 			}
 			return true
 		}
-		if kind != tabKindLab {
+		if isShellTabKind(kind) {
 			if status == tabStatusRunning && active.buffer != nil && active.buffer.acceptsKeyboardInput() && len(raw) > 0 {
 				if err := a.writeActiveTab(raw); err != nil {
 					a.State.Message = "shell paste input failed: " + err.Error()
@@ -613,7 +629,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 			active := a.tabs.tabs[a.tabs.active]
 			kind, status, buffer := active.kind, active.status, active.buffer
 			a.tabs.mu.Unlock()
-			if kind == tabKindLab {
+			if isAppTabKind(kind) {
 				return false
 			}
 			if status != tabStatusRunning || buffer == nil {
@@ -639,7 +655,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 		active := a.tabs.tabs[a.tabs.active]
 		kind, status, buffer := active.kind, active.status, active.buffer
 		a.tabs.mu.Unlock()
-		if kind == tabKindLab || paletteOwnsInput {
+		if isAppTabKind(kind) || paletteOwnsInput {
 			if key == "paste-start" {
 				a.inputState.pasteActive = true
 				a.inputState.pasteToUI = paletteOwnsInput || a.State.ContextEdit || a.State.DiskExplorerEdit != ""
@@ -665,7 +681,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 		active := a.tabs.tabs[a.tabs.active]
 		kind, status, buffer := active.kind, active.status, active.buffer
 		a.tabs.mu.Unlock()
-		if kind != tabKindLab && status == tabStatusRunning && buffer != nil && buffer.acceptsFocusInput() {
+		if isShellTabKind(kind) && status == tabStatusRunning && buffer != nil && buffer.acceptsFocusInput() {
 			if err := a.writeActiveTab(raw); err != nil {
 				a.State.Message = "shell focus input failed: " + err.Error()
 			}
@@ -684,35 +700,35 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 	a.tabs.mu.Lock()
 	active := a.tabs.tabs[a.tabs.active]
 	status := active.status
-	if active.kind == tabKindLab || active.status == tabStatusExited {
-		if a.tabs.gPrefix {
-			a.tabs.gPrefix = false
-			a.tabs.mu.Unlock()
-			switch key {
-			case "char:t":
-				a.nextTab(1)
-				return true
-			case "char:T":
-				a.nextTab(-1)
-				return true
-			}
-			return active.kind != tabKindLab
-		}
-		if key == "char:g" {
-			a.tabs.gPrefix = true
-			a.tabs.mu.Unlock()
+	plainTabChord := isAppTabKind(active.kind) || active.status == tabStatusExited
+	if a.tabs.gPrefix {
+		a.tabs.gPrefix = false
+		a.tabs.mu.Unlock()
+		switch key {
+		case "char:t", "alt+t":
+			a.nextTab(1)
+			return true
+		case "char:T", "alt+T":
+			a.nextTab(-1)
 			return true
 		}
+		return active.status == tabStatusExited
+	}
+	if key == "alt+g" || (plainTabChord && key == "char:g") {
+		a.tabs.gPrefix = true
 		a.tabs.mu.Unlock()
-		if active.kind == tabKindLab {
-			return false
-		}
-	} else {
-		a.tabs.mu.Unlock()
+		return true
+	}
+	a.tabs.mu.Unlock()
+	if active.kind == tabKindLab {
+		return false
 	}
 	if key == "ctrl+]" {
 		a.activateTab(0)
 		return true
+	}
+	if active.kind == tabKindDisks {
+		return false
 	}
 	if key == "shift-pageup" {
 		a.scrollActiveTab(5)
@@ -766,24 +782,30 @@ func (a *App) writeActiveTab(raw []byte) error {
 
 func (a *App) activateTab(index int) {
 	a.tabs.mu.Lock()
-	defer a.tabs.mu.Unlock()
 	if index < 0 || index >= len(a.tabs.tabs) {
+		a.tabs.mu.Unlock()
 		return
 	}
 	a.tabs.active = index
 	a.tabs.tabs[index].unread = false
 	a.tabs.gPrefix = false
+	kind := a.tabs.tabs[index].kind
+	a.tabs.mu.Unlock()
+	a.syncActiveTabView(kind)
 	a.tabs.notify()
 }
 
 func (a *App) nextTab(delta int) {
 	a.tabs.mu.Lock()
 	count := len(a.tabs.tabs)
+	kind := tabKindLab
 	if count > 0 {
 		a.tabs.active = (a.tabs.active + delta%count + count) % count
 		a.tabs.tabs[a.tabs.active].unread = false
+		kind = a.tabs.tabs[a.tabs.active].kind
 	}
 	a.tabs.mu.Unlock()
+	a.syncActiveTabView(kind)
 	a.tabs.notify()
 }
 
@@ -814,7 +836,12 @@ func (a *App) closeTab(index int) {
 	} else if a.tabs.active > index {
 		a.tabs.active--
 	}
+	activeKind := a.tabs.tabs[a.tabs.active].kind
 	a.tabs.mu.Unlock()
+	if tab.kind == tabKindDisks {
+		a.clearDiskExplorerEdit()
+	}
+	a.syncActiveTabView(activeKind)
 	if connectCancel != nil {
 		connectCancel()
 	}
@@ -832,6 +859,10 @@ func (a *App) restartActiveTab() {
 		return
 	}
 	tab := a.tabs.tabs[a.tabs.active]
+	if tab.kind == tabKindDisks {
+		a.tabs.mu.Unlock()
+		return
+	}
 	session := tab.session
 	connectCancel := tab.connectCancel
 	tab.session = nil
@@ -859,7 +890,7 @@ func (a *App) restartActiveTab() {
 func (a *App) scrollActiveTab(delta int) {
 	a.tabs.mu.Lock()
 	tab := a.tabs.tabs[a.tabs.active]
-	if tab.kind != tabKindLab {
+	if isShellTabKind(tab.kind) {
 		tab.scroll = max(0, tab.scroll+delta)
 	}
 	a.tabs.mu.Unlock()

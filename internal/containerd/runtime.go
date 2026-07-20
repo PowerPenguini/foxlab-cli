@@ -56,6 +56,11 @@ func (r *Runtime) diskManager() *diskManager {
 func (r *Runtime) Close() error { return nil }
 
 func (r *Runtime) States(ctx context.Context, l *lab.Lab) (map[string]string, error) {
+	states, err := r.states(ctx, l)
+	return states, WithAccessHint(err)
+}
+
+func (r *Runtime) states(ctx context.Context, l *lab.Lab) (map[string]string, error) {
 	client, ctx, closeClient, err := r.client(ctx)
 	if err != nil {
 		return nil, err

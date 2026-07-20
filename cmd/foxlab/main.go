@@ -83,7 +83,15 @@ func main() {
 		LabPath:           *labPath,
 		LibvirtURI:        *uri,
 		ContainerdAddress: *containerdAddress,
-	}, topologyui.AppDeps{})
+	}, topologyui.AppDeps{
+		RuntimeFactory: func(current *lab.Lab) (workload.Runtime, func(), error) {
+			runtime, runtimeErr := foxruntime.New(*uri, *containerdAddress, current)
+			if runtimeErr != nil {
+				return nil, func() {}, runtimeErr
+			}
+			return runtime, func() { _ = runtime.Close() }, nil
+		},
+	})
 	if action.kind != "" {
 		switch action.kind {
 		case "shell":

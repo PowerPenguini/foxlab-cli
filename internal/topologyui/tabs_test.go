@@ -13,8 +13,8 @@ import (
 
 	"github.com/cfoust/cy/pkg/emu"
 
-	containerdruntime "foxlab-cli/internal/containerd"
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 type recordingTabSession struct {
@@ -61,6 +61,57 @@ func TestTabsStartWithPinnedLabCard(t *testing.T) {
 	app.closeTab(0)
 	if len(app.tabs.tabs) != 1 {
 		t.Fatal("pinned Lab tab was closed")
+	}
+}
+
+func TestDiskExplorerOpensAsReusableApplicationTab(t *testing.T) {
+	app := &App{
+		Lab:        &lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Kind: "base", SizeGB: 10, Format: "qcow2", Path: "disks/data.qcow2"}}},
+		Model:      Model{ID: "demo"},
+		ViewWidth:  80,
+		ViewHeight: 20,
+	}
+	app.openDiskExplorer()
+
+	if len(app.tabs.tabs) != 2 || app.tabs.active != 1 {
+		t.Fatalf("disk tabs = %d active=%d", len(app.tabs.tabs), app.tabs.active)
+	}
+	if app.tabs.tabs[1].kind != tabKindDisks || app.tabs.tabs[1].buffer != nil || !app.State.DiskExplorerOpen {
+		t.Fatalf("disk tab = %#v state=%#v", app.tabs.tabs[1], app.State)
+	}
+	var rendered bytes.Buffer
+	if err := app.render(&rendered, 80, 20, false); err != nil {
+		t.Fatal(err)
+	}
+	if out := rendered.String(); !strings.Contains(out, "Disks ×") || !strings.Contains(out, "data") {
+		t.Fatalf("disk card render missing tab or row:\n%s", out)
+	}
+
+	app.activateTab(0)
+	if app.State.DiskExplorerOpen {
+		t.Fatal("Lab activation left disk card active")
+	}
+	app.openDiskExplorer()
+	if len(app.tabs.tabs) != 2 || app.tabs.active != 1 || !app.State.DiskExplorerOpen {
+		t.Fatalf("reopening duplicated or missed disk card: tabs=%d active=%d open=%t", len(app.tabs.tabs), app.tabs.active, app.State.DiskExplorerOpen)
+	}
+	app.handleKey("char::")
+	if !app.State.PaletteOpen || !app.State.DiskExplorerOpen {
+		t.Fatalf("palette replaced disk card state: palette=%t disks=%t", app.State.PaletteOpen, app.State.DiskExplorerOpen)
+	}
+	app.closePalette()
+
+	if !app.handleTabInput("char:g", []byte("g")) || !app.handleTabInput("char:t", []byte("t")) {
+		t.Fatal("gt did not switch from Disks like it does from Lab")
+	}
+	if app.tabs.active != 0 || app.State.DiskExplorerOpen {
+		t.Fatalf("active after disk gt = %d open=%t", app.tabs.active, app.State.DiskExplorerOpen)
+	}
+
+	app.activateTab(1)
+	app.handleKey("escape")
+	if len(app.tabs.tabs) != 1 {
+		t.Fatalf("Escape closing disk card left %d tabs", len(app.tabs.tabs))
 	}
 }
 
@@ -708,6 +759,28 @@ func TestTabNavigationAndCloseControls(t *testing.T) {
 	}
 }
 
+func TestRunningShellUsesAltGTForTabNavigation(t *testing.T) {
+	app, _, session := testAppWithShellTab(t, tabStatusRunning)
+
+	if !app.handleTabInput("alt+g", []byte("\x1bg")) || !app.handleTabInput("char:t", []byte("t")) {
+		t.Fatal("Alt+g then t was not handled")
+	}
+	if app.tabs.active != 0 {
+		t.Fatalf("active tab after Alt+g then t = %d", app.tabs.active)
+	}
+
+	app.activateTab(1)
+	if !app.handleTabInput("alt+g", []byte("\x1bg")) || !app.handleTabInput("alt+T", []byte("\x1bT")) {
+		t.Fatal("Alt+g then Alt+T was not handled")
+	}
+	if app.tabs.active != 0 {
+		t.Fatalf("active tab after Alt+g then Alt+T = %d", app.tabs.active)
+	}
+	if session.Len() != 0 {
+		t.Fatalf("tab chord leaked to shell: %q", session.String())
+	}
+}
+
 func TestNaturalSessionExitClosesBackendHandle(t *testing.T) {
 	app, tab, session := testAppWithShellTab(t, tabStatusRunning)
 	app.finishTabSession(tab, tab.generation, nil)
@@ -724,7 +797,7 @@ func TestClosingContainerTabWaitsForRuntimeCleanup(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	session := newTabPipeSession(writer, cancel, make(chan containerdruntime.ShellSize, 1))
+	session := newTabPipeSession(writer, cancel, make(chan workload.TerminalSize, 1))
 	tab.session = session
 	cleaned := make(chan struct{})
 	go func() {
@@ -757,12 +830,14 @@ func TestClosingStartingVMTabCancelsConsoleConnection(t *testing.T) {
 	app.ensureTabs()
 	started := make(chan struct{})
 	canceled := make(chan struct{})
-	app.VMConsole = func(ctx context.Context, _ *lab.Lab, _ string) (io.ReadWriteCloser, string, error) {
+	runtime := &fakeVMRuntime{}
+	runtime.openTerminal = func(ctx context.Context, _ *lab.Lab, _ workload.Ref, _ workload.TerminalSize) (workload.OpenedTerminalSession, error) {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
-		return nil, "", ctx.Err()
+		return workload.OpenedTerminalSession{}, ctx.Err()
 	}
+	app.runtimeFactory = testRuntimeFactory(runtime)
 	tab := &appTab{key: "vm:test", kind: tabKindVM, nodeID: "test", label: "VM: test", status: tabStatusStarting}
 	tab.buffer = newTerminalBuffer(40, 8, terminalScrollback, func() { app.tabs.markActivity(tab) })
 	app.tabs.tabs = append(app.tabs.tabs, tab)
@@ -810,8 +885,8 @@ func TestTabCommandsAcceptIndexAndUnquotedLabel(t *testing.T) {
 }
 
 func TestDecodeTabControlSequences(t *testing.T) {
-	got := decodeKeys("\x1b1\x1b:\x1b[5;2~\x1b[6;2~\x1d", false)
-	want := []string{"alt+1", "alt+:", "shift-pageup", "shift-pagedown", "ctrl+]"}
+	got := decodeKeys("\x1b1\x1b:\x1bg\x1bt\x1bT\x1b[5;2~\x1b[6;2~\x1d", false)
+	want := []string{"alt+1", "alt+:", "alt+g", "alt+t", "alt+T", "shift-pageup", "shift-pagedown", "ctrl+]"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("keys = %#v, want %#v", got, want)
 	}

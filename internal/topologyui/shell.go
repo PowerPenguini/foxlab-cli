@@ -11,17 +11,18 @@ import (
 	"syscall"
 	"time"
 
-	containerdruntime "foxlab-cli/internal/containerd"
-	"foxlab-cli/internal/foxruntime"
-	"foxlab-cli/internal/virt"
+	"foxlab-cli/internal/workload"
+	"golang.org/x/sys/unix"
 )
 
 var errConsoleExit = errors.New("console exit")
 
 type shellCommand struct {
-	Display   string
-	Console   io.ReadWriteCloser
-	NativeRun func(*App) error
+	Display      string
+	WorkloadType string
+	Session      workload.TerminalSession
+	OpenSession  func(context.Context) (workload.OpenedTerminalSession, error)
+	NativeRun    func(*App) error
 }
 
 func (a *App) startShell(node Node) {
@@ -83,7 +84,7 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 		state := firstNonEmpty(states[key], "missing")
 		return fmt.Errorf("%s %s is %s; run it first", node.Type, a.displayNodeName(node.Type, node.ID), state)
 	} else {
-		return containerdruntime.WithAccessHint(fmt.Errorf("runtime status unavailable: %w", err))
+		return fmt.Errorf("runtime status unavailable: %w", err)
 	}
 }
 
@@ -96,12 +97,13 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 	case NodeVM:
 		ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 		defer cancel()
-		console, display, err := a.vmConsole(ctx, node.ID)
+		opened, err := a.openTerminalSession(ctx, workload.Ref{Type: workload.TypeVM, ID: node.ID}, workload.TerminalSize{})
 		if err != nil {
 			a.State.Message = "vm console failed: " + err.Error()
 			return shellCommand{}, false
 		}
-		return shellCommand{Display: display, Console: console}, true
+		display := "vm console " + firstNonEmpty(opened.Endpoint, node.ID)
+		return shellCommand{Display: display, WorkloadType: workload.TypeVM, Session: opened.Session}, true
 	case NodeContainer:
 		ct, ok := a.labContainer(node.ID)
 		if !ok {
@@ -110,39 +112,16 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 		}
 		display := "container shell " + a.Lab.ManagedContainerName(ct)
 		return shellCommand{
-			Display: display,
-			NativeRun: func(a *App) error {
-				return a.runContainerShell(node.ID)
+			Display:      display,
+			WorkloadType: workload.TypeContainer,
+			OpenSession: func(ctx context.Context) (workload.OpenedTerminalSession, error) {
+				return a.openTerminalSession(ctx, workload.Ref{Type: workload.TypeContainer, ID: node.ID}, workload.TerminalSize{})
 			},
 		}, true
 	default:
 		a.State.Message = "shell is available for vm and container nodes"
 		return shellCommand{}, false
 	}
-}
-
-func (a *App) runContainerShell(id string) error {
-	if a.Lab == nil {
-		return fmt.Errorf("shell needs a loaded .lab file")
-	}
-	restoreRaw, err := makeShellBlockingRaw(int(a.In.Fd()))
-	if err != nil {
-		return err
-	}
-	defer restoreRaw()
-
-	_, _ = io.WriteString(a.Out, "\r\nconnected to container shell "+a.displayNodeName(NodeContainer, id)+"; Ctrl-] exits\r\n")
-	runtime := containerdruntime.NewRuntime(firstNonEmpty(a.ContainerdAddress, foxruntime.ContainerdAddressFromLab(a.Lab)))
-	defer runtime.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
-	if err := runtime.ExecShell(ctx, a.Lab, id, a.In, a.Out); err != nil {
-		if containerShellNeedsRestart(err.Error()) {
-			return fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", err)
-		}
-		return containerdruntime.WithAccessHint(err)
-	}
-	return nil
 }
 
 func containerShellNeedsRestart(detail string) bool {
@@ -157,8 +136,17 @@ func (a *App) runShell(command shellCommand) error {
 	if command.NativeRun != nil {
 		return command.NativeRun(a)
 	}
-	if command.Console != nil {
-		return a.runConsole(command.Console, command.Display)
+	if command.Session != nil {
+		return a.runTerminalSession(context.Background(), command.Session, command.Display, command.WorkloadType)
+	}
+	if command.OpenSession != nil {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer stop()
+		opened, err := command.OpenSession(ctx)
+		if err != nil {
+			return err
+		}
+		return a.runTerminalSession(ctx, opened.Session, command.Display, command.WorkloadType)
 	}
 	return fmt.Errorf("shell command has no runner")
 }
@@ -181,51 +169,15 @@ func stateMessageError(message, fallback string) error {
 	return errors.New(message)
 }
 
-func (a *App) vmConsole(ctx context.Context, id string) (io.ReadWriteCloser, string, error) {
-	if a.VMConsole != nil {
-		return a.VMConsole(ctx, a.Lab, id)
+func (a *App) runTerminalSession(ctx context.Context, session workload.TerminalSession, display, workloadType string) error {
+	defer session.Close()
+	makeRaw := makeShellRaw
+	waitForBackend := false
+	if workloadType == workload.TypeContainer {
+		makeRaw = makeShellBlockingRaw
+		waitForBackend = true
 	}
-	runtime, err := virt.NewLibvirtRuntime(a.LibvirtURI)
-	if err != nil {
-		return nil, "", err
-	}
-	console, err := runtime.OpenConsole(ctx, a.Lab, id)
-	if err != nil {
-		_ = runtime.Close()
-		return nil, "", err
-	}
-	display := "vm console " + id
-	if console.Path() != "" {
-		display = "vm console " + console.Path()
-	}
-	return &runtimeConsole{console: console, closeRuntime: runtime.Close}, display, nil
-}
-
-type runtimeConsole struct {
-	console      io.ReadWriteCloser
-	closeRuntime func() error
-}
-
-func (c *runtimeConsole) Read(p []byte) (int, error) {
-	return c.console.Read(p)
-}
-
-func (c *runtimeConsole) Write(p []byte) (int, error) {
-	return c.console.Write(p)
-}
-
-func (c *runtimeConsole) Close() error {
-	consoleErr := c.console.Close()
-	runtimeErr := c.closeRuntime()
-	if consoleErr != nil {
-		return consoleErr
-	}
-	return runtimeErr
-}
-
-func (a *App) runConsole(console io.ReadWriteCloser, display string) error {
-	defer console.Close()
-	restoreRaw, err := makeShellRaw(int(a.In.Fd()))
+	restoreRaw, err := makeRaw(int(a.In.Fd()))
 	if err != nil {
 		return err
 	}
@@ -235,14 +187,37 @@ func (a *App) runConsole(console io.ReadWriteCloser, display string) error {
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		_ = copyConsoleOutput(a.Out, console, done)
+		_ = copyConsoleOutput(a.Out, session, done)
 	}()
+	var wait <-chan error
+	if waitForBackend {
+		waitC := make(chan error, 1)
+		go func() { waitC <- session.Wait(ctx) }()
+		wait = waitC
+	}
 
 	buf := make([]byte, 4096)
 	for {
+		select {
+		case waitErr := <-wait:
+			if waitErr != nil && containerShellNeedsRestart(waitErr.Error()) {
+				return fmt.Errorf("%w; stop and run the container to rebuild/restart its rootfs", waitErr)
+			}
+			return waitErr
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		ready, pollErr := terminalInputReady(int(a.In.Fd()), 100*time.Millisecond)
+		if pollErr != nil {
+			return pollErr
+		}
+		if !ready {
+			continue
+		}
 		n, err := a.In.Read(buf)
 		if n > 0 {
-			if writeErr := writeConsoleInput(console, buf[:n]); writeErr != nil {
+			if writeErr := writeConsoleInput(session, buf[:n]); writeErr != nil {
 				if errors.Is(writeErr, errConsoleExit) {
 					return nil
 				}
@@ -260,6 +235,18 @@ func (a *App) runConsole(console io.ReadWriteCloser, display string) error {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+}
+
+func terminalInputReady(fd int, timeout time.Duration) (bool, error) {
+	pollFDs := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	ready, err := unix.Poll(pollFDs, int(timeout.Milliseconds()))
+	if err != nil {
+		if errors.Is(err, unix.EINTR) {
+			return false, nil
+		}
+		return false, err
+	}
+	return ready > 0 && pollFDs[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0, nil
 }
 
 func consoleConnectMessage(display string) string {

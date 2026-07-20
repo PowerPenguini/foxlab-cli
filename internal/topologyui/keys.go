@@ -423,6 +423,8 @@ func decodeEscapeKey(seq string) (string, int) {
 		return "alt+:", len("\x1b:")
 	case len(seq) >= 2 && seq[0] == '\x1b' && seq[1] >= '1' && seq[1] <= '9':
 		return "alt+" + string(seq[1]), 2
+	case len(seq) >= 2 && seq[0] == '\x1b' && strings.ContainsRune("gtT", rune(seq[1])):
+		return "alt+" + string(seq[1]), 2
 	case seq == "\x1b":
 		return "escape", 1
 	default:

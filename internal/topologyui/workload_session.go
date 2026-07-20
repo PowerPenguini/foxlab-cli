@@ -3,8 +3,8 @@ package topologyui
 import (
 	"context"
 	"errors"
-	"io"
 	"sync"
+	"time"
 
 	"foxlab-cli/internal/workload"
 )
@@ -16,29 +16,27 @@ type managedTerminalSession struct {
 	closeErr     error
 }
 
-func (a *App) openTerminalSession(ctx context.Context, ref workload.Ref, size workload.TerminalSize) (workload.TerminalSession, error) {
-	if ref.Type == workload.TypeVM && a.VMConsole != nil {
-		console, _, err := a.VMConsole(ctx, a.Lab, ref.ID)
-		if err != nil {
-			return nil, err
-		}
-		return &legacyTerminalSession{ReadWriteCloser: console}, nil
-	}
+func (a *App) openTerminalSession(ctx context.Context, ref workload.Ref, size workload.TerminalSize) (workload.OpenedTerminalSession, error) {
 	runtime, closeRuntime, err := a.runtime()
 	if err != nil {
-		return nil, err
+		return workload.OpenedTerminalSession{}, err
 	}
 	sessions, ok := runtime.(workload.SessionRuntime)
 	if !ok {
 		closeRuntime()
-		return nil, errors.New("runtime does not support terminal sessions")
+		return workload.OpenedTerminalSession{}, errors.New("runtime does not support terminal sessions")
 	}
-	session, err := sessions.OpenTerminalSession(ctx, a.Lab, ref, size)
+	opened, err := sessions.OpenTerminalSession(ctx, a.Lab, ref, size)
 	if err != nil {
 		closeRuntime()
-		return nil, err
+		return workload.OpenedTerminalSession{}, err
 	}
-	return &managedTerminalSession{TerminalSession: session, closeRuntime: closeRuntime}, nil
+	if opened.Session == nil {
+		closeRuntime()
+		return workload.OpenedTerminalSession{}, errors.New("runtime returned an empty terminal session")
+	}
+	opened.Session = &managedTerminalSession{TerminalSession: opened.Session, closeRuntime: closeRuntime}
+	return opened, nil
 }
 
 func (s *managedTerminalSession) Close() error {
@@ -51,10 +49,12 @@ func (s *managedTerminalSession) Close() error {
 	return s.closeErr
 }
 
-type legacyTerminalSession struct {
-	io.ReadWriteCloser
+func (s *managedTerminalSession) wait(timeout time.Duration) bool {
+	ctx := context.Background()
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+	return !errors.Is(s.TerminalSession.Wait(ctx), context.DeadlineExceeded)
 }
-
-func (s *legacyTerminalSession) Resize(_, _ int) {}
-
-func (s *legacyTerminalSession) Wait(context.Context) error { return nil }

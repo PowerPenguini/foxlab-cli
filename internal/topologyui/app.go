@@ -12,18 +12,10 @@ import (
 	"time"
 
 	"foxlab-cli/internal/daemonstatus"
-	"foxlab-cli/internal/foxruntime"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/workload"
 )
-
-type WorkloadRuntime interface {
-	States(context.Context, *lab.Lab) (map[string]string, error)
-	Start(context.Context, *lab.Lab, workload.Ref) error
-	Stop(context.Context, *lab.Lab, workload.Ref) error
-	Close() error
-}
 
 type appRuntimeState struct {
 	mu sync.Mutex
@@ -72,7 +64,6 @@ type App struct {
 	Service               *topology.Service
 	LibvirtURI            string
 	ContainerdAddress     string
-	Runtime               WorkloadRuntime
 	WorkloadStates        map[string]string
 	VNCPorts              map[string]int
 	VNCViewer             string
@@ -88,7 +79,6 @@ type App struct {
 	ViewWidth             int
 	ViewHeight            int
 	StatusRefreshInterval time.Duration
-	VMConsole             func(context.Context, *lab.Lab, string) (io.ReadWriteCloser, string, error)
 	DaemonController      DaemonController
 	tabs                  *tabManager
 	runtimeFactory        RuntimeFactory
@@ -452,7 +442,11 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 
 func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	a.ensureTabs()
-	if a.tabs.activeKind() != tabKindLab {
+	switch a.tabs.activeKind() {
+	case tabKindDisks:
+		_, err := io.WriteString(w, a.renderDiskExplorerTab(width, height).String(ansi))
+		return err
+	case tabKindContainer, tabKindVM:
 		_, err := io.WriteString(w, a.renderShellTabs(width, height).String(ansi))
 		return err
 	}
@@ -490,22 +484,15 @@ func (a *App) render(w io.Writer, width, height int, ansi bool) error {
 	return err
 }
 
-func (a *App) runtime() (WorkloadRuntime, func(), error) {
+func (a *App) runtime() (workload.Runtime, func(), error) {
 	return a.runtimeForLab(a.Lab)
 }
 
-func (a *App) runtimeForLab(l *lab.Lab) (WorkloadRuntime, func(), error) {
-	if a.Runtime != nil {
-		return a.Runtime, func() {}, nil
+func (a *App) runtimeForLab(l *lab.Lab) (workload.Runtime, func(), error) {
+	if a.runtimeFactory == nil {
+		return nil, func() {}, errors.New("runtime factory is not configured")
 	}
-	if a.runtimeFactory != nil {
-		return a.runtimeFactory(l)
-	}
-	runtime, err := foxruntime.New(a.LibvirtURI, a.ContainerdAddress, l)
-	if err != nil {
-		return nil, func() {}, err
-	}
-	return runtime, func() { _ = runtime.Close() }, nil
+	return a.runtimeFactory(l)
 }
 
 func (a *App) ensureDaemonController() {
@@ -760,7 +747,7 @@ func statusRefreshMessage(message string) bool {
 	return false
 }
 
-func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime WorkloadRuntime) error {
+func (a *App) refreshVNCPortsWithRuntime(ctx context.Context, runtime workload.Runtime) error {
 	ports, err := runtimeVNCPorts(ctx, runtime, a.Lab)
 	if err != nil {
 		return err
@@ -843,7 +830,7 @@ func (a *App) reconcileTransitionsActive() bool {
 	return a.State.ApplyLabDisabled
 }
 
-func runtimeVNCPorts(ctx context.Context, runtime WorkloadRuntime, l *lab.Lab) (map[string]int, error) {
+func runtimeVNCPorts(ctx context.Context, runtime workload.Runtime, l *lab.Lab) (map[string]int, error) {
 	vncRuntime, ok := runtime.(workload.VNCRuntime)
 	if !ok {
 		return map[string]int{}, nil
