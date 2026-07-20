@@ -14,16 +14,14 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 func (r *Runtime) ExecShell(ctx context.Context, l *lab.Lab, id string, in io.Reader, out io.Writer) error {
 	return r.execShell(ctx, l, id, in, out, nil)
 }
 
-type ShellSize struct {
-	Columns int
-	Rows    int
-}
+type ShellSize = workload.TerminalSize
 
 func (r *Runtime) ExecShellWithResize(ctx context.Context, l *lab.Lab, id string, in io.Reader, out io.Writer, resize <-chan ShellSize) error {
 	return r.execShell(ctx, l, id, in, out, resize)

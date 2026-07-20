@@ -24,9 +24,7 @@ type diskExplorerRow struct {
 }
 
 func (a *App) openDiskExplorer() {
-	a.State.closeContextMenu()
-	a.State.TopMenuOpen = false
-	a.State.DiskExplorerOpen = true
+	a.State.openOverlay(overlayDiskExplorer)
 	a.State.DiskExplorerEdit = ""
 	a.State.DiskExplorerEditValue = ""
 	a.State.DiskExplorerEditCursor = 0

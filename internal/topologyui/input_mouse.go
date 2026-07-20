@@ -112,7 +112,7 @@ func (a *App) handleMouseKey(key string) bool {
 		a.recordMouseNodePress(index, event)
 		a.State.Focus = FocusGraph
 		a.State.Selected = index
-		a.State.ContextMenu = true
+		a.State.openOverlay(overlayContextMenu)
 		a.State.ContextGroup = ""
 		a.State.ContextInSubmenu = false
 		a.State.ContextSelected = 0

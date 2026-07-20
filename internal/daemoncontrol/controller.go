@@ -165,20 +165,7 @@ func (c *systemdDaemonController) ensureSystemUnit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	data := []byte("[Unit]\n" +
-		"Description=FoxLab reconciliator\n\n" +
-		"After=containerd.service libvirtd.service\n" +
-		"Wants=containerd.service libvirtd.service\n\n" +
-		"[Service]\n" +
-		"Type=simple\n" +
-		"Environment=FOXLAB_LAB=/root/.foxlab/default.lab\n" +
-		"Environment=FOXLAB_STATUS_SOCKET=/run/foxlab/foxlabd.sock\n" +
-		"ExecStart=" + systemdExecPath(binary) + " --lab ${FOXLAB_LAB} --status-socket ${FOXLAB_STATUS_SOCKET}\n" +
-		"Restart=on-failure\n" +
-		"RestartSec=2s\n\n" +
-		"[Install]\n" +
-		"WantedBy=multi-user.target\n")
-	return c.writeRootFile(ctx, path, data, 0o644)
+	return c.writeRootFile(ctx, path, systemdUnitData(binary), 0o644)
 }
 
 func isSystemdUnitMissing(err error) bool {
@@ -224,21 +211,8 @@ func (c *systemdDaemonController) writeDropIn(ctx context.Context, labPath strin
 	if err != nil {
 		return err
 	}
-	env := []string{
-		"FOXLAB_LAB=" + labPath,
-		"FOXLAB_STATUS_SOCKET=" + statusSocket,
-	}
-	if home, userName := serviceUserHomeAndName(); home != "" {
-		env = append(env, "HOME="+home)
-		if userName != "" {
-			env = append(env, "SUDO_USER="+userName)
-		}
-	}
-	data := []byte("[Service]\n")
-	for _, value := range env {
-		data = append(data, []byte("Environment="+strconv.Quote(value)+"\n")...)
-	}
-	return c.writeRootFile(ctx, path, data, 0o644)
+	home, userName := serviceUserHomeAndName()
+	return c.writeRootFile(ctx, path, systemdDropInData(labPath, statusSocket, home, userName), 0o644)
 }
 
 func (c *systemdDaemonController) dropInPath() (string, error) {

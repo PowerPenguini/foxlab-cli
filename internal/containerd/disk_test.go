@@ -16,7 +16,7 @@ import (
 const testImageRef = "docker.io/library/bash:latest"
 
 func TestMountContainerDiskFormatsAfterWrongFSType(t *testing.T) {
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager := stubDiskManager(t, func(name string, args ...string) error {
 		if name == "mount" && len(args) == 2 && args[0] == "/dev/nbd0" {
 			if mountCalls := testCommandCount(t, "mount"); mountCalls == 1 {
 				return fmt.Errorf("exit status 32: mount: /rootfs: wrong fs type, bad superblock on /dev/nbd0")
@@ -27,9 +27,8 @@ func TestMountContainerDiskFormatsAfterWrongFSType(t *testing.T) {
 		}
 		return nil
 	})
-	defer restore()
 
-	if err := mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
+	if err := manager.mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -44,15 +43,14 @@ func TestMountContainerDiskFormatsAfterWrongFSType(t *testing.T) {
 }
 
 func TestMountContainerDiskDoesNotFormatExistingFilesystem(t *testing.T) {
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager := stubDiskManager(t, func(name string, args ...string) error {
 		if name == "mount" {
 			return fmt.Errorf("exit status 32: mount: /rootfs: wrong fs type, bad superblock on /dev/nbd0")
 		}
 		return nil
 	})
-	defer restore()
 
-	if err := mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err == nil {
+	if err := manager.mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err == nil {
 		t.Fatal("mountContainerDisk returned nil error")
 	}
 	want := []string{
@@ -65,15 +63,14 @@ func TestMountContainerDiskDoesNotFormatExistingFilesystem(t *testing.T) {
 }
 
 func TestMountContainerDiskDoesNotFormatOtherMountErrors(t *testing.T) {
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager := stubDiskManager(t, func(name string, args ...string) error {
 		if name == "mount" {
 			return fmt.Errorf("exit status 32: mount: permission denied")
 		}
 		return nil
 	})
-	defer restore()
 
-	if err := mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err == nil {
+	if err := manager.mountContainerDisk(context.Background(), "/dev/nbd0", "/rootfs"); err == nil {
 		t.Fatal("mountContainerDisk returned nil error")
 	}
 	want := []string{"mount /dev/nbd0 /rootfs"}
@@ -83,18 +80,15 @@ func TestMountContainerDiskDoesNotFormatOtherMountErrors(t *testing.T) {
 }
 
 func TestGrowMountedContainerDiskFilesystemExpandsExt4(t *testing.T) {
-	oldHooks := containerDiskHooks
-	containerDiskHooks.filesystemType = func(path string) (string, error) {
+	manager := stubDiskManager(t, func(name string, args ...string) error { return nil })
+	manager.ops.filesystemType = func(path string) (string, error) {
 		if path != "/rootfs" {
 			t.Fatalf("filesystem type path = %q, want /rootfs", path)
 		}
 		return "ext4", nil
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
-	defer restore()
 
-	if err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
+	if err := manager.growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"resize2fs /dev/nbd0"}
@@ -104,13 +98,10 @@ func TestGrowMountedContainerDiskFilesystemExpandsExt4(t *testing.T) {
 }
 
 func TestGrowMountedContainerDiskFilesystemSkipsNonExtFilesystem(t *testing.T) {
-	oldHooks := containerDiskHooks
-	containerDiskHooks.filesystemType = func(string) (string, error) { return "xfs", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
-	defer restore()
+	manager := stubDiskManager(t, func(name string, args ...string) error { return nil })
+	manager.ops.filesystemType = func(string) (string, error) { return "xfs", nil }
 
-	if err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
+	if err := manager.growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs"); err != nil {
 		t.Fatal(err)
 	}
 	if got := testCommands(t); len(got) != 0 {
@@ -119,62 +110,53 @@ func TestGrowMountedContainerDiskFilesystemSkipsNonExtFilesystem(t *testing.T) {
 }
 
 func TestGrowMountedContainerDiskFilesystemReportsResizeFailure(t *testing.T) {
-	oldHooks := containerDiskHooks
-	containerDiskHooks.filesystemType = func(string) (string, error) { return "ext4", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager := stubDiskManager(t, func(name string, args ...string) error {
 		return fmt.Errorf("resize failed")
 	})
-	defer restore()
+	manager.ops.filesystemType = func(string) (string, error) { return "ext4", nil }
 
-	err := growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs")
+	err := manager.growMountedContainerDiskFilesystem(context.Background(), "/dev/nbd0", "/rootfs")
 	if err == nil || !strings.Contains(err.Error(), "grow container disk filesystem: resize failed") {
 		t.Fatalf("grow error = %v", err)
 	}
 }
 
 func TestRequireContainerDiskToolsDoesNotRequireUnusedQemuImg(t *testing.T) {
-	oldLookPath := lookPath
-	lookPath = func(file string) (string, error) {
+	lookup := func(file string) (string, error) {
 		if file == "qemu-img" {
 			return "", exec.ErrNotFound
 		}
 		return "/usr/bin/" + file, nil
 	}
-	t.Cleanup(func() { lookPath = oldLookPath })
 
-	if err := requireContainerDiskTools(); err != nil {
+	if err := requireContainerDiskTools(lookup); err != nil {
 		t.Fatalf("requireContainerDiskTools() = %v, want qemu-img absence ignored", err)
 	}
 }
 
 func TestRequireContainerDiskToolsReportsMissingUsedTool(t *testing.T) {
-	oldLookPath := lookPath
-	lookPath = func(file string) (string, error) {
+	lookup := func(file string) (string, error) {
 		if file == "qemu-nbd" {
 			return "", exec.ErrNotFound
 		}
 		return "/usr/bin/" + file, nil
 	}
-	t.Cleanup(func() { lookPath = oldLookPath })
 
-	err := requireContainerDiskTools()
+	err := requireContainerDiskTools(lookup)
 	if err == nil || !strings.Contains(err.Error(), "requires qemu-nbd") {
 		t.Fatalf("requireContainerDiskTools() = %v, want qemu-nbd error", err)
 	}
 }
 
 func TestRequireContainerDiskToolsReportsMissingResize2FS(t *testing.T) {
-	oldLookPath := lookPath
-	lookPath = func(file string) (string, error) {
+	lookup := func(file string) (string, error) {
 		if file == "resize2fs" {
 			return "", exec.ErrNotFound
 		}
 		return "/usr/bin/" + file, nil
 	}
-	t.Cleanup(func() { lookPath = oldLookPath })
 
-	err := requireContainerDiskTools()
+	err := requireContainerDiskTools(lookup)
 	if err == nil || !strings.Contains(err.Error(), "requires resize2fs") {
 		t.Fatalf("requireContainerDiskTools() = %v, want resize2fs error", err)
 	}
@@ -200,15 +182,14 @@ func TestContainerDiskMountActiveUsesManagedMountPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldHooks := containerDiskHooks
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		if path != mountPath {
 			t.Fatalf("mount path = %q, want %q", path, mountPath)
 		}
 		return true, "/dev/nbd0", nil
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	mounted, err := containerDiskMountActive(l, ct)
+	mounted, err := manager.containerDiskMountActive(l, ct)
 	if err != nil || !mounted {
 		t.Fatalf("containerDiskMountActive = %t, %v", mounted, err)
 	}
@@ -233,9 +214,9 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 	mergedPath := filepath.Join(mountPath, "merged")
 	overlayOptions := "lowerdir=" + lowerPath + ",upperdir=" + filepath.Join(mountPath, "upper") + ",workdir=" + filepath.Join(mountPath, "work")
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.requireTools = func() error { return nil }
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.requireTools = func() error { return nil }
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
@@ -246,21 +227,19 @@ func TestPrepareContainerDiskMountDoesNotForceFormatAfterStaleMountCleanup(t *te
 			return false, "", nil
 		}
 	}
-	containerDiskHooks.rootWritable = func(path string) bool {
+	manager.ops.rootWritable = func(path string) bool {
 		if path != mountPath {
 			t.Fatalf("rootWritable path = %q, want %q", path, mountPath)
 		}
 		return false
 	}
-	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
-	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager.ops.sourceHealthy = func(source string) bool { return true }
+	manager.ops.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	mount, err := manager.prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,9 +292,9 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 		t.Fatal(err)
 	}
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.requireTools = func() error { return nil }
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.requireTools = func() error { return nil }
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
@@ -326,19 +305,17 @@ func TestPrepareContainerDiskMountReusesMountedDiskWhenMarkerMatches(t *testing.
 			return false, "", nil
 		}
 	}
-	containerDiskHooks.rootWritable = func(path string) bool { return true }
-	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
-	containerDiskHooks.freeNBD = func() (string, error) {
+	manager.ops.rootWritable = func(path string) bool { return true }
+	manager.ops.sourceHealthy = func(source string) bool { return true }
+	manager.ops.freeNBD = func() (string, error) {
 		t.Fatal("freeNBD called for matching mounted disk")
 		return "", nil
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	mount, err := manager.prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,9 +358,9 @@ func TestPrepareContainerDiskMountReplacesMountWhenSourceUnhealthy(t *testing.T)
 		t.Fatal(err)
 	}
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.requireTools = func() error { return nil }
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.requireTools = func() error { return nil }
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
@@ -394,8 +371,8 @@ func TestPrepareContainerDiskMountReplacesMountWhenSourceUnhealthy(t *testing.T)
 			return false, "", nil
 		}
 	}
-	containerDiskHooks.rootWritable = func(path string) bool { return true }
-	containerDiskHooks.sourceHealthy = func(source string) bool {
+	manager.ops.rootWritable = func(path string) bool { return true }
+	manager.ops.sourceHealthy = func(source string) bool {
 		switch source {
 		case "/dev/nbd0":
 			return false
@@ -406,14 +383,12 @@ func TestPrepareContainerDiskMountReplacesMountWhenSourceUnhealthy(t *testing.T)
 			return false
 		}
 	}
-	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager.ops.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	mount, err := manager.prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,9 +433,9 @@ func TestPrepareContainerDiskMountReplacesWritableMountWithoutMarker(t *testing.
 		t.Fatal(err)
 	}
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.requireTools = func() error { return nil }
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.requireTools = func() error { return nil }
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
@@ -471,16 +446,14 @@ func TestPrepareContainerDiskMountReplacesWritableMountWithoutMarker(t *testing.
 			return false, "", nil
 		}
 	}
-	containerDiskHooks.rootWritable = func(path string) bool { return true }
-	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
-	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager.ops.rootWritable = func(path string) bool { return true }
+	manager.ops.sourceHealthy = func(source string) bool { return true }
+	manager.ops.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	mount, err := manager.prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,9 +512,9 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 		t.Fatal(err)
 	}
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.requireTools = func() error { return nil }
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.requireTools = func() error { return nil }
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mountPath:
 			return true, "/dev/nbd0", nil
@@ -552,16 +525,14 @@ func TestPrepareContainerDiskMountReplacesMountedDiskWhenMarkerDiffers(t *testin
 			return false, "", nil
 		}
 	}
-	containerDiskHooks.rootWritable = func(path string) bool { return true }
-	containerDiskHooks.sourceHealthy = func(source string) bool { return true }
-	containerDiskHooks.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	manager.ops.rootWritable = func(path string) bool { return true }
+	manager.ops.sourceHealthy = func(source string) bool { return true }
+	manager.ops.freeNBD = func() (string, error) { return "/dev/nbd1", nil }
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	mount, err := prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
+	mount, err := manager.prepareContainerDiskMount(context.Background(), l, ct, testImageRef, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,8 +576,8 @@ func TestCleanupPreparedContainerDiskMountReturnsCleanupError(t *testing.T) {
 	mergedPath := filepath.Join(mountPath, "merged")
 	lowerPath := filepath.Join(root, "container-image-rootfs", "web")
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case mergedPath, lowerPath:
 			return false, "", nil
@@ -617,16 +588,15 @@ func TestCleanupPreparedContainerDiskMountReturnsCleanupError(t *testing.T) {
 			return false, "", nil
 		}
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		if name == "umount" {
 			return fmt.Errorf("busy")
 		}
 		return nil
 	})
-	defer restore()
 
-	err = cleanupPreparedContainerDiskMount(l, ct, containerDiskMount{CleanupDiskOnFailure: true}, "", DefaultNamespace)
+	runtime := &Runtime{disks: manager}
+	err = runtime.cleanupPreparedContainerDiskMount(l, ct, containerDiskMount{CleanupDiskOnFailure: true}, "", DefaultNamespace)
 
 	if err == nil || !strings.Contains(err.Error(), "unmount container disk") {
 		t.Fatalf("cleanup error = %v, want unmount error", err)
@@ -648,8 +618,8 @@ func TestCleanupContainerDiskMountCleansStaleMountWhenDesiredDiskDetached(t *tes
 	}
 	mountPath := filepath.Join(root, "container-data", "web")
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case filepath.Join(mountPath, "merged"), filepath.Join(root, "container-image-rootfs", "web"):
 			return false, "", nil
@@ -660,13 +630,11 @@ func TestCleanupContainerDiskMountCleansStaleMountWhenDesiredDiskDetached(t *tes
 			return false, "", nil
 		}
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error {
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error {
 		return nil
 	})
-	defer restore()
 
-	if err := cleanupContainerDiskMount(context.Background(), l, ct, "", DefaultNamespace); err != nil {
+	if err := manager.cleanupContainerDiskMount(context.Background(), l, ct, "", DefaultNamespace); err != nil {
 		t.Fatal(err)
 	}
 
@@ -693,8 +661,8 @@ func TestCleanupOrphanContainerDiskMountsRemovesRenamedContainerMount(t *testing
 		t.Fatal(err)
 	}
 
-	oldHooks := containerDiskHooks
-	containerDiskHooks.mountSource = func(path string) (bool, string, error) {
+	manager := newDiskManager()
+	manager.ops.mountSource = func(path string) (bool, string, error) {
 		switch path {
 		case filepath.Join(mountPath, "merged"), filepath.Join(root, "container-image-rootfs", staleID):
 			return false, "", nil
@@ -705,11 +673,9 @@ func TestCleanupOrphanContainerDiskMountsRemovesRenamedContainerMount(t *testing
 			return false, "", nil
 		}
 	}
-	t.Cleanup(func() { containerDiskHooks = oldHooks })
-	restore := stubRunHostCommand(t, func(name string, args ...string) error { return nil })
-	defer restore()
+	stubDiskManagerCommands(t, manager, func(name string, args ...string) error { return nil })
 
-	actions, err := cleanupOrphanContainerDiskMounts(context.Background(), l, nil, "", DefaultNamespace)
+	actions, err := manager.cleanupOrphanContainerDiskMounts(context.Background(), l, nil, "", DefaultNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,23 +694,24 @@ func TestCleanupOrphanContainerDiskMountsKeepsMountAfterDeleteFailure(t *testing
 	}
 }
 
-func stubRunHostCommand(t *testing.T, fn func(name string, args ...string) error) func() {
+func stubDiskManager(t *testing.T, fn func(name string, args ...string) error) *diskManager {
 	t.Helper()
-	old := runHostCommand
+	manager := newDiskManager()
+	stubDiskManagerCommands(t, manager, fn)
+	return manager
+}
+
+func stubDiskManagerCommands(t *testing.T, manager *diskManager, fn func(name string, args ...string) error) {
+	t.Helper()
 	var commands []string
-	runHostCommand = func(ctx context.Context, name string, args ...string) error {
+	manager.ops.runCommand = func(ctx context.Context, name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 		return fn(name, args...)
 	}
 	t.Cleanup(func() {
-		runHostCommand = old
 		testCommandLog = nil
 	})
 	testCommandLog = &commands
-	return func() {
-		runHostCommand = old
-		testCommandLog = nil
-	}
 }
 
 var testCommandLog *[]string

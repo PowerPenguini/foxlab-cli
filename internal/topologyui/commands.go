@@ -17,13 +17,19 @@ func (a *App) executeCommand(command string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	switch fields[0] {
-	case "q", "quit":
+	spec, ok := resolveCommandSpec(fields[0])
+	if !ok {
+		a.State.Message = "unknown command: " + fields[0]
+		return false
+	}
+	fields[0] = spec.Name
+	switch spec.Name {
+	case "quit":
 		if !a.requireExactCommandArgs(fields, 1, "usage: quit") {
 			return false
 		}
 		return true
-	case "help", "h":
+	case "help":
 		if len(fields) > 2 {
 			a.State.Message = "usage: help [topic]"
 			return false
@@ -34,7 +40,7 @@ func (a *App) executeCommand(command string) bool {
 		a.executeAddCommand(fields)
 	case "vm":
 		a.executeVMCommand(fields)
-	case "container", "ct":
+	case "container":
 		a.executeContainerCommand(fields)
 	case "disk":
 		a.executeDiskCommand(fields)
@@ -43,14 +49,12 @@ func (a *App) executeCommand(command string) bool {
 	case "tabnext", "tabprev", "tabclose", "tabrestart":
 		a.ensureTabs()
 		a.executeTabCommand(fields)
-	case "switch", "sw":
+	case "switch":
 		a.executeSwitchCommand(fields)
-	case "uplink", "up", "external", "ext":
+	case "uplink":
 		a.executeExternalCommand(fields)
-	case "link", "links":
+	case "link":
 		a.executeLinkCommand(fields)
-	default:
-		a.State.Message = "unknown command: " + fields[0]
 	}
 	return false
 }

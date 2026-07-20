@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+type routeCacheState struct {
+	key       string
+	stableKey string
+	width     int
+	height    int
+	panX      int
+	panY      int
+	routes    []visibleEdge
+}
+
 func renderRouteCacheKey(m Model, width, height, panX, panY int) string {
 	var b strings.Builder
 	writeRouteCacheSize(&b, width, height)

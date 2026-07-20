@@ -93,22 +93,6 @@ func renderGridWithRoutes(m Model, state ViewState, width, height int, visibleEd
 	for _, visible := range moveRoutes {
 		drawRoutedEdgePortsStyled(g, visible.route, routeStyle(m, state, visible.edge))
 	}
-	for i, node := range m.Nodes {
-		if i == selectedIndex {
-			continue
-		}
-		nodeRect := nodeRects[node.Key()]
-		if rectIntersects(nodeRect, graph) {
-			styleBoxBorder(g, nodeRect, nodePanelStyle(node.Type, false)+selectedBorderStyle(false, state.Focus == FocusGraph))
-		}
-	}
-	if len(m.Nodes) > 0 {
-		node := m.Nodes[selectedIndex]
-		nodeRect := nodeRects[node.Key()]
-		if rectIntersects(nodeRect, graph) {
-			styleBoxBorder(g, nodeRect, nodePanelStyle(node.Type, state.Focus == FocusGraph)+selectedBorderStyle(true, state.Focus == FocusGraph))
-		}
-	}
 	drawInspector(g, m, state, inspectorBounds(width, height))
 	drawContextMenu(g, m, state, nodeRects, graph)
 	drawConnectTargetMenu(g, m, state, nodeRects, graph)

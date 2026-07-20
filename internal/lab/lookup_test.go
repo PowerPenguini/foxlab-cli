@@ -1,44 +1,39 @@
 package lab
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestNetworkLookupsUseCompleteEndpointIdentity(t *testing.T) {
+func TestResolveNodePrefersExactIDBeforeName(t *testing.T) {
 	l := &Lab{
-		Switches:      []Switch{{ID: "sw1"}},
-		ExternalLinks: []ExternalLink{{ID: "uplink1"}},
-		NetworkLinks: []NetworkLink{{
-			From: NetworkEndpoint{Type: "vm", ID: "node", NIC: 0},
-			To:   NetworkEndpoint{Type: "container", ID: "node", NIC: 0},
-		}},
+		VMs:        []VM{{ID: "router", Name: "edge"}},
+		Containers: []Container{{ID: "edge", Name: "web"}},
 	}
-	if _, ok := FindSwitch(l, "sw1"); !ok {
-		t.Fatal("switch lookup failed")
+	resolved, err := ResolveNode(l, "edge", NodeKindVM, NodeKindContainer)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := FindExternalLink(l, "uplink1"); !ok {
-		t.Fatal("external link lookup failed")
-	}
-	if _, ok := FindNetworkLinkForEndpoint(l, NetworkEndpoint{Type: "container", ID: "node", NIC: 0}); !ok {
-		t.Fatal("network link endpoint lookup failed")
-	}
-	if SameNetworkEndpoint(
-		NetworkEndpoint{Type: "vm", ID: "node", NIC: 0},
-		NetworkEndpoint{Type: "container", ID: "node", NIC: 0},
-	) {
-		t.Fatal("endpoint equality ignored workload type")
-	}
-	if _, ok := FindNetworkLinkForEndpoint(l, NetworkEndpoint{Type: "vm", ID: "node", NIC: 1}); ok {
-		t.Fatal("endpoint lookup ignored NIC index")
+	if resolved != (NodeRef{Kind: NodeKindContainer, ID: "edge"}) {
+		t.Fatalf("resolved = %#v", resolved)
 	}
 }
 
-func TestNetworkLookupsAreNilSafe(t *testing.T) {
-	if _, ok := FindSwitch(nil, "sw1"); ok {
-		t.Fatal("nil lab returned switch")
+func TestResolveNodeFiltersKindsAndPreservesCase(t *testing.T) {
+	l := &Lab{VMs: []VM{{ID: "Router", Name: "Edge"}}}
+	if _, err := ResolveNode(l, "Router", NodeKindContainer); err == nil {
+		t.Fatal("expected kind-filtered lookup to fail")
 	}
-	if _, ok := FindExternalLink(nil, "uplink1"); ok {
-		t.Fatal("nil lab returned external link")
+	if _, err := ResolveNode(l, "router", NodeKindVM); err == nil {
+		t.Fatal("expected case-sensitive lookup to fail")
 	}
-	if _, ok := FindNetworkLinkForEndpoint(nil, NetworkEndpoint{}); ok {
-		t.Fatal("nil lab returned network link")
+}
+
+func TestResolveNodeReportsAmbiguousName(t *testing.T) {
+	l := &Lab{VMs: []VM{{ID: "vm-1", Name: "node"}}, Containers: []Container{{ID: "ct-1", Name: "node"}}}
+	_, err := ResolveNode(l, "node", NodeKindVM, NodeKindContainer)
+	var resolveErr *ResolveNodeError
+	if !errors.As(err, &resolveErr) || resolveErr.Match != ResolveMatchName || resolveErr.Count != 2 {
+		t.Fatalf("error = %#v", err)
 	}
 }

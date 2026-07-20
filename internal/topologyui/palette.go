@@ -15,11 +15,7 @@ type paletteAction struct {
 }
 
 func (a *App) openPalette() {
-	a.State.closeContextMenu()
-	a.State.TopMenuOpen = false
-	a.closeDiskExplorer()
-	a.State.ConnectTargetMenu = false
-	a.State.PaletteOpen = true
+	a.State.openOverlay(overlayPalette)
 	a.State.PaletteSelected = 0
 }
 
@@ -139,7 +135,7 @@ func (a *App) runPaletteAction(action paletteAction) bool {
 }
 
 func (a *App) openPaletteContextGroup(node Node, group string) {
-	a.State.ContextMenu = true
+	a.State.openOverlay(overlayContextMenu)
 	a.State.ContextGroup = group
 	a.State.ContextInSubmenu = true
 	a.State.ContextSubSelected = 0

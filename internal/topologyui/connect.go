@@ -192,7 +192,7 @@ func (a *App) connectSwitchExternal(sourceType, sourceID, targetType, targetID s
 }
 
 func (a *App) openConnectTargetMenu(endpoint Node) {
-	a.State.ConnectTargetMenu = true
+	a.State.openOverlay(overlayConnectTarget)
 	a.State.ConnectTargetID = endpoint.ID
 	a.State.ConnectTargetType = endpoint.Type
 	a.State.ConnectTargetIndex = 0
