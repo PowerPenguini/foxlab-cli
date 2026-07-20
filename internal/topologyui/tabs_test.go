@@ -49,7 +49,7 @@ func testAppWithShellTab(t *testing.T, status tabStatus) (*App, *appTab, *record
 	return app, tab, session
 }
 
-func TestTabsStartWithPinnedLabCard(t *testing.T) {
+func TestLabCardClosesLikeEveryOtherCard(t *testing.T) {
 	app := &App{Lab: &lab.Lab{ID: "training"}}
 	app.ensureTabs()
 	if len(app.tabs.tabs) != 1 {
@@ -58,9 +58,15 @@ func TestTabsStartWithPinnedLabCard(t *testing.T) {
 	if got := app.tabs.tabs[0].label; got != "Lab: training" {
 		t.Fatalf("lab tab = %q", got)
 	}
-	app.closeTab(0)
-	if len(app.tabs.tabs) != 1 {
-		t.Fatal("pinned Lab tab was closed")
+	app.openDiskExplorer()
+	if app.closeTab(0) {
+		t.Fatal("closing Lab while Disks remained requested application exit")
+	}
+	if len(app.tabs.tabs) != 1 || app.tabs.tabs[0].kind != tabKindDisks || app.tabs.active != 0 {
+		t.Fatalf("closing Lab left tabs=%#v active=%d", app.tabs.tabs, app.tabs.active)
+	}
+	if !app.closeTab(0) || !app.quitRequested {
+		t.Fatal("closing the final card did not request application exit")
 	}
 }
 
@@ -216,6 +222,21 @@ func TestRunningShellReceivesRawInputAndCtrlBracketReturnsToLab(t *testing.T) {
 	}
 	if session.closed {
 		t.Fatal("Ctrl-] closed the background session")
+	}
+}
+
+func TestCtrlBracketDoesNotActivateAnotherCardAfterLabIsClosed(t *testing.T) {
+	app, _, session := testAppWithShellTab(t, tabStatusRunning)
+	app.closeTab(0)
+
+	if len(app.tabs.tabs) != 1 || app.tabs.tabs[0].kind != tabKindContainer || app.tabs.active != 0 {
+		t.Fatalf("closing Lab left tabs=%#v active=%d", app.tabs.tabs, app.tabs.active)
+	}
+	if !app.handleTabInput("ctrl+]", []byte{0x1d}) {
+		t.Fatal("Ctrl-] was not handled without a Lab card")
+	}
+	if app.tabs.active != 0 || session.closed {
+		t.Fatalf("Ctrl-] changed the remaining card: active=%d closed=%t", app.tabs.active, session.closed)
 	}
 }
 
@@ -867,8 +888,31 @@ func TestTabBarIsAlwaysFirstRowAndShellOutputStartsBelowIt(t *testing.T) {
 	if got := canvasRow(g, 1); !strings.HasPrefix(got, "hello") {
 		t.Fatalf("first shell row = %q", got)
 	}
-	if len(app.tabs.hits) != 2 || app.tabs.hits[0].closeX >= 0 || app.tabs.hits[1].closeX < 0 {
+	if len(app.tabs.hits) != 2 || app.tabs.hits[0].closeX < 0 || app.tabs.hits[1].closeX < 0 {
 		t.Fatalf("tab hit targets = %#v", app.tabs.hits)
+	}
+}
+
+func TestClickingCloseOnFinalLabCardExitsInteractiveRun(t *testing.T) {
+	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	reads := 0
+	start := func(*App) (func(), error) { return func() {}, nil }
+	read := func(app *App) (string, error) {
+		reads++
+		if reads > 1 {
+			return "", errors.New("interactive loop read again after closing its final card")
+		}
+		app.tabs.mu.Lock()
+		closeX := app.tabs.hits[0].closeX
+		app.tabs.mu.Unlock()
+		return fmt.Sprintf("mouse:%d:0:0", closeX), nil
+	}
+
+	if err := app.runInteractive(start, read, func(*App) (int, int) { return 80, 20 }); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 || !app.quitRequested {
+		t.Fatalf("reads=%d quitRequested=%t", reads, app.quitRequested)
 	}
 }
 

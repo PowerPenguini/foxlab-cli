@@ -35,8 +35,7 @@ func (a *App) executeCommand(command string) bool {
 		switch {
 		case len(fields) == 1:
 			a.ensureTabs()
-			a.closeActiveTab()
-			return false
+			return a.closeActiveTab()
 		case len(fields) == 2 && fields[1] == "all":
 			return true
 		default:

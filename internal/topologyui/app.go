@@ -86,6 +86,7 @@ type App struct {
 	inputState            appInputState
 	notificationState     appNotificationState
 	routeCache            routeCacheState
+	quitRequested         bool
 }
 
 const runtimeStatusTimeout = 5 * time.Second
@@ -220,6 +221,9 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		}
 		wasRunningShell := a.tabs.activeRunningShell()
 		if a.handleTabInput(key, a.inputState.currentRaw) {
+			if a.quitRequested {
+				return nil
+			}
 			dirty = a.tabInputNeedsImmediateRender(key, wasRunningShell)
 			continue
 		}
@@ -232,7 +236,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 			a.clearMouseClickFeedback()
 		}
 		quit := a.handleKey(key)
-		if quit {
+		if quit || a.quitRequested {
 			return nil
 		}
 		if a.PendingShell != nil {

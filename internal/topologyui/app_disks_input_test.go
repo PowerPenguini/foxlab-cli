@@ -1052,16 +1052,17 @@ func TestCommandQClosesOnlyActiveCard(t *testing.T) {
 	if len(app.tabs.tabs) != 1 || app.tabs.active != 0 {
 		t.Fatalf(":q left tabs=%d active=%d", len(app.tabs.tabs), app.tabs.active)
 	}
-	if app.executeCommand("q") {
-		t.Fatal(":q on pinned Lab quit the application")
+	if !app.executeCommand("q") {
+		t.Fatal(":q on the final Lab card did not quit the application")
 	}
 
-	app.openDiskExplorer()
-	if app.executeCommand("quit") {
+	other := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+	other.openDiskExplorer()
+	if other.executeCommand("quit") {
 		t.Fatal(":quit quit the application")
 	}
-	if len(app.tabs.tabs) != 1 {
-		t.Fatalf(":quit left %d tabs", len(app.tabs.tabs))
+	if len(other.tabs.tabs) != 1 {
+		t.Fatalf(":quit left %d tabs", len(other.tabs.tabs))
 	}
 }
 

@@ -50,7 +50,7 @@ func helpLines(topic string) []string {
 		}
 	case "tab", "tabs", "shell", "console":
 		return []string{
-			"tabs: Lab is pinned; Disks and each workload session use one reusable card",
+			"tabs: Lab, Disks, and each workload session are closable cards",
 			"switch: gt/gT from Lab, Disks, or ended sessions; Alt+g then t/T works globally",
 			"running shell: Alt+: opens FoxLab actions; Ctrl-] returns to Lab; click x to close it",
 			"ended shell: r restarts, x closes; scrollback remains available",

@@ -691,7 +691,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 	if paletteOwnsInput {
 		if key == "ctrl+]" {
 			a.closePalette()
-			a.activateTab(0)
+			a.activateTabKind(tabKindLab)
 			return true
 		}
 		return false
@@ -724,7 +724,7 @@ func (a *App) handleTabInput(key string, raw []byte) bool {
 		return false
 	}
 	if key == "ctrl+]" {
-		a.activateTab(0)
+		a.activateTabKind(tabKindLab)
 		return true
 	}
 	if active.kind == tabKindDisks {
@@ -795,6 +795,23 @@ func (a *App) activateTab(index int) {
 	a.tabs.notify()
 }
 
+func (a *App) activateTabKind(kind tabKind) bool {
+	a.tabs.mu.Lock()
+	index := -1
+	for candidate, tab := range a.tabs.tabs {
+		if tab.kind == kind {
+			index = candidate
+			break
+		}
+	}
+	a.tabs.mu.Unlock()
+	if index < 0 {
+		return false
+	}
+	a.activateTab(index)
+	return true
+}
+
 func (a *App) nextTab(delta int) {
 	a.tabs.mu.Lock()
 	count := len(a.tabs.tabs)
@@ -809,18 +826,23 @@ func (a *App) nextTab(delta int) {
 	a.tabs.notify()
 }
 
-func (a *App) closeActiveTab() {
+func (a *App) closeActiveTab() bool {
 	a.tabs.mu.Lock()
 	index := a.tabs.active
 	a.tabs.mu.Unlock()
-	a.closeTab(index)
+	return a.closeTab(index)
 }
 
-func (a *App) closeTab(index int) {
+func (a *App) closeTab(index int) bool {
 	a.tabs.mu.Lock()
-	if index <= 0 || index >= len(a.tabs.tabs) {
+	if index < 0 || index >= len(a.tabs.tabs) {
 		a.tabs.mu.Unlock()
-		return
+		return false
+	}
+	if len(a.tabs.tabs) == 1 {
+		a.quitRequested = true
+		a.tabs.mu.Unlock()
+		return true
 	}
 	tab := a.tabs.tabs[index]
 	session := tab.session
@@ -850,16 +872,17 @@ func (a *App) closeTab(index int) {
 		waitForTabSession(session, 8*time.Second)
 	}
 	a.tabs.notify()
+	return false
 }
 
 func (a *App) restartActiveTab() {
 	a.tabs.mu.Lock()
-	if a.tabs.active <= 0 || a.tabs.active >= len(a.tabs.tabs) {
+	if a.tabs.active < 0 || a.tabs.active >= len(a.tabs.tabs) {
 		a.tabs.mu.Unlock()
 		return
 	}
 	tab := a.tabs.tabs[a.tabs.active]
-	if tab.kind == tabKindDisks {
+	if tab.kind == tabKindLab || tab.kind == tabKindDisks {
 		a.tabs.mu.Unlock()
 		return
 	}

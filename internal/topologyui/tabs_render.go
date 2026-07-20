@@ -27,10 +27,8 @@ func (a *App) drawTabBar(g *grid) {
 				marker = "• "
 			}
 			labels[index] = " " + marker + tab.label + " × "
-		} else if tab.kind == tabKindDisks {
-			labels[index] = " " + tab.label + " × "
 		} else {
-			labels[index] = " " + tab.label + " "
+			labels[index] = " " + tab.label + " × "
 		}
 	}
 	a.tabs.offset = tabOffsetForActive(labels, a.tabs.offset, a.tabs.active, g.Width)
@@ -63,7 +61,7 @@ func (a *App) drawTabBar(g *grid) {
 		g.Text(x, 0, label, style)
 		w := runeLen(label)
 		closeX := -1
-		if a.tabs.tabs[index].kind != tabKindLab && strings.HasSuffix(label, "× ") {
+		if strings.HasSuffix(label, "× ") {
 			closeX = x + w - 2
 		}
 		a.tabs.hits = append(a.tabs.hits, tabHit{index: index, bounds: rect{X: x, Y: 0, W: w, H: 1}, closeX: closeX})

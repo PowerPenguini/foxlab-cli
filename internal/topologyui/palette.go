@@ -118,7 +118,7 @@ func (a *App) runPaletteAction(action paletteAction) bool {
 		return true
 	case "tab-close-active":
 		a.ensureTabs()
-		a.closeActiveTab()
+		return a.closeActiveTab()
 	case "apply-lab":
 		a.applyOpenLab()
 	case "disk-explorer":
