@@ -35,7 +35,7 @@ func contextMenuItems(node Node, groups ...string) []string {
 	case NodeExternal:
 		return externalContextMenuItems(node, group)
 	default:
-		return []string{"Configuration >", "Move", "Delete"}
+		return []string{"Configuration >", "Move"}
 	}
 }
 
@@ -55,7 +55,7 @@ func containerContextMenuItems(node Node, group string) []string {
 	case "permissions-menu":
 		return containerPermissionMenuItems(node)
 	case "":
-		return []string{"Configuration >", "Permissions >", "NIC >", "Disk >", "Move", "Shell", "Delete"}
+		return []string{"Configuration >", "Permissions >", "NIC >", "Disk >", "Move"}
 	default:
 		return nil
 	}
@@ -82,7 +82,7 @@ func vmContextMenuItems(node Node, group string) []string {
 	case "disk-menu":
 		return nil
 	case "":
-		return []string{"Configuration >", "NIC >", "Disk >", "Move", "Console", "VNC", "Delete"}
+		return []string{"Configuration >", "NIC >", "Disk >", "Move", "VNC"}
 	default:
 		return nil
 	}
@@ -100,7 +100,7 @@ func switchContextMenuItems(node Node, group string) []string {
 	case "mode-menu":
 		return []string{"Bridge", "NAT", "MACNAT"}
 	case "":
-		return []string{"Configuration >", "Uplink >", "Move", "Delete"}
+		return []string{"Configuration >", "Uplink >", "Move"}
 	default:
 		return nil
 	}
@@ -119,10 +119,25 @@ func externalContextMenuItems(node Node, group string) []string {
 	case "mode-menu":
 		return []string{"NAT", "Direct", "MACNAT"}
 	case "":
-		return []string{"Configuration >", "Connect", "Move", "Delete"}
+		return []string{"Configuration >", "Connect", "Move"}
 	default:
 		return nil
 	}
+}
+
+func contextMenuRootItemsForInspector(node Node, inspectorVisible bool) []string {
+	items := contextMenuItems(node, "")
+	if !inspectorVisible {
+		return items
+	}
+	filtered := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "Configuration >" || item == "Permissions >" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func hostInterfaceMenuItems() []string {

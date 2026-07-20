@@ -2,15 +2,15 @@ package topologyui
 
 import "foxlab-cli/internal/topology"
 
-func (a *App) vmCreate(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().VMCreate(id, args))
+func (a *App) vmCreate(request topology.VMCreateRequest) {
+	a.setOperationResult(a.ensureService().CreateVM(request))
 	a.syncAfterServiceMutation()
 }
 
-func (a *App) vmSet(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().VMSet(id, args))
+func (a *App) vmSet(id string, update topology.VMUpdate) {
+	a.setOperationResult(a.ensureService().UpdateVM(id, update))
 	a.syncAfterServiceMutation()
-	if _, ok := args["vnc"]; ok && a.shouldRefreshRuntimeAfterMutation() {
+	if update.VNC.Set && a.shouldRefreshRuntimeAfterMutation() {
 		a.refreshWorkloadStates()
 	}
 }
@@ -72,13 +72,13 @@ func (a *App) externalDelete(id string) {
 	a.syncAfterServiceMutation()
 }
 
-func (a *App) containerCreate(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().ContainerCreate(id, args))
+func (a *App) containerCreate(request topology.ContainerCreateRequest) {
+	a.setOperationResult(a.ensureService().CreateContainer(request))
 	a.syncAfterServiceMutation()
 }
 
-func (a *App) containerSet(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().ContainerSet(id, args))
+func (a *App) containerSet(id string, update topology.ContainerUpdate) {
+	a.setOperationResult(a.ensureService().UpdateContainer(id, update))
 	a.syncAfterServiceMutation()
 }
 

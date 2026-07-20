@@ -22,6 +22,7 @@
 - Connect and NIC flows must preserve explicit NIC indexes, including direct workload-to-workload links.
 - Route rendering and move mode should remain smooth; route caches must be reset when topology/layout/runtime display inputs change.
 - User-visible command names, menu labels, and help text are stable UI contracts.
+- Parse VM/container `key=value` syntax into typed topology requests immediately; maps remain a command-parser detail and must not cross the workload service boundary.
 
 ## Work Guidance
 

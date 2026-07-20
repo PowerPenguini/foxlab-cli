@@ -225,7 +225,7 @@ func menuRowAt(column menuColumnLayout, x, y int) (int, bool) {
 	return row, true
 }
 
-func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, bounds rect) (menuLayout, Node, bool, bool) {
+func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, bounds rect, inspectorVisible bool) (menuLayout, Node, bool, bool) {
 	nodeRect := rect{X: bounds.X + 2, Y: bounds.Y + 1, W: 0, H: 0}
 	hasNode := false
 	node := Node{}
@@ -236,7 +236,7 @@ func contextMenuLayoutFor(m Model, state ViewState, nodeRects map[string]rect, b
 		hasNode = true
 		if r, ok := nodeRects[node.Key()]; ok {
 			nodeRect = r
-			rootLabels = contextMenuItems(node, "")
+			rootLabels = contextMenuRootItemsForInspector(node, inspectorVisible)
 		}
 	}
 	rootItems := menuItemsFromLabels(rootLabels)

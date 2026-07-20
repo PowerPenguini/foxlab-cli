@@ -641,7 +641,6 @@ func TestRenderContextMenuForSelectedNode(t *testing.T) {
 		" NIC ",
 		" Disk ",
 		" Move",
-		" Delete",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("render missing context menu item %q:\n%s", want, out)
@@ -655,6 +654,9 @@ func TestRenderContextMenuForSelectedNode(t *testing.T) {
 	}
 	if strings.Contains(out, " create >") {
 		t.Fatalf("render contains removed node create item:\n%s", out)
+	}
+	if strings.Contains(out, " Delete") {
+		t.Fatalf("render kept Delete in context menu instead of inspector action:\n%s", out)
 	}
 }
 
@@ -780,22 +782,120 @@ func TestRenderWideInspectorShowsSelectedNodeDetails(t *testing.T) {
 	out := RenderString(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
 	for _, want := range []string{
 		"[VM] router",
-		"State",
-		"state ● running",
-		"Identity",
-		"id router",
-		"Configuration",
-		"cpu 2",
-		"mem 2G",
+		"● running",
+		"▾ WORKLOAD",
+		"CPU         2",
+		"Memory      2048",
+		"VNC         [X]",
+		"■  Stop",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("wide render missing inspector detail %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "id router") {
+		t.Fatalf("wide render exposed internal node id:\n%s", out)
+	}
 	for _, notWant := range []string{"actions Space menu", ": actions"} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("wide render still shows inspector action hint %q:\n%s", notWant, out)
 		}
+	}
+}
+
+func TestInspectorUsesWiderBlenderStyleDock(t *testing.T) {
+	if got := inspectorBounds(120, 30).W; got != 40 {
+		t.Fatalf("120-column inspector width = %d, want 40", got)
+	}
+	if got := inspectorBounds(160, 30).W; got != 44 {
+		t.Fatalf("160-column inspector width = %d, want capped width 44", got)
+	}
+	m := ModelFromLab(&lab.Lab{ID: "demo", Containers: []lab.Container{{ID: "kali", Image: "kali"}}})
+	state := ViewState{Focus: FocusInspector, InspectorSelected: 7}
+	panel := inspectorBounds(120, 30)
+	g := renderGrid(m, state, 120, 30)
+	fields := inspectorFields(m.Nodes[0])
+	y, ok := inspectorFieldY(panel, state, fields, state.InspectorSelected)
+	if !ok {
+		t.Fatal("selected capabilities field is not visible")
+	}
+	if got := g.Cells[y*g.Width+panel.X].Style; got != themePanelInspectorActive {
+		t.Fatalf("active inspector row style = %q, want %q", got, themePanelInspectorActive)
+	}
+
+	plainState := ViewState{Focus: FocusGraph, InspectorSelected: 3}
+	plainG := renderGrid(m, plainState, 120, 30)
+	imageY, ok := inspectorFieldY(panel, plainState, fields, 3)
+	if !ok {
+		t.Fatal("Image field is not visible")
+	}
+	valueX := panel.X + 4 + min(14, max(10, (panel.W-8)/3)) + 1
+	if got := plainG.Cells[imageY*plainG.Width+valueX+1].Style; got != themePanelInspector {
+		t.Fatalf("plain value style = %q, want panel background %q", got, themePanelInspector)
+	}
+
+	vm := MockModel()
+	vmPanel := inspectorBounds(120, 30)
+	vmG := renderGrid(vm, ViewState{Selected: 0, Focus: FocusGraph}, 120, 30)
+	button := inspectorPowerButtonRect(vmPanel)
+	if got := vmG.Cells[(button.Y+1)*vmG.Width+button.X].Style; got != inspectorButtonRedStyle {
+		t.Fatalf("stop button style = %q, want solid red action button", got)
+	}
+	if top, bottom := vmG.Cells[button.Y*vmG.Width+button.X].Ch, vmG.Cells[(button.Y+2)*vmG.Width+button.X].Ch; top != '▀' || bottom != '▄' {
+		t.Fatalf("stop button half-row padding = %q/%q, want panel cutouts over solid button background", top, bottom)
+	}
+	if got := vmG.Cells[button.Y*vmG.Width+button.X].Style; got != inspectorButtonRedStyle+inspectorPanelForeground {
+		t.Fatalf("stop button edge style = %q, want button RGB background behind panel cutout", got)
+	}
+	gap := vmG.Cells[(button.Y+button.H)*vmG.Width+button.X]
+	if gap.Ch != ' ' || gap.Style != themePanelInspector {
+		t.Fatalf("top action gap = %q style %q, want one blank Inspector row", gap.Ch, gap.Style)
+	}
+	shellButton := inspectorShellButtonRect(vmPanel)
+	if shellButton.X != button.X+button.W+1 {
+		t.Fatalf("shell button x = %d, want directly beside power button at %d", shellButton.X, button.X+button.W+1)
+	}
+	if got := vmG.Cells[(shellButton.Y+1)*vmG.Width+shellButton.X].Style; got != inspectorButtonCyanStyle {
+		t.Fatalf("shell button style = %q, want solid cyan action button", got)
+	}
+	activeG := renderGrid(vm, ViewState{Selected: 0, Focus: FocusInspector, InspectorSelected: 0}, 120, 30)
+	activeCell := activeG.Cells[(button.Y+1)*activeG.Width+button.X]
+	if activeCell.Ch == '›' {
+		t.Fatal("active action button still renders an arrow marker")
+	}
+	if activeCell.Style != inspectorButtonRedActiveStyle {
+		t.Fatalf("active stop button style = %q, want subtle red color shift", activeCell.Style)
+	}
+	for _, row := range inspectorPanelRowsFor(inspectorFields(vm.Nodes[0])) {
+		if row.fieldIndex == 0 || row.fieldIndex == 1 {
+			t.Fatal("top action button still rendered as a WORKLOAD property row")
+		}
+	}
+}
+
+func TestInspectorTextViewportShowsTailAndFollowsCursor(t *testing.T) {
+	const path = "/home/user/images/router.iso"
+	if got := inspectorTailViewport(path, 12); got != "…/router.iso" {
+		t.Fatalf("tail viewport = %q, want %q", got, "…/router.iso")
+	}
+	if got := inspectorEditViewport("abcdefghijklmnop", 16, 8); got != "jklmnop|" {
+		t.Fatalf("end edit viewport = %q, want jklmnop|", got)
+	}
+	if got := inspectorEditViewport("abcdefghijklmnop", 12, 8); got != "jkl|mnop" {
+		t.Fatalf("middle edit viewport = %q, want jkl|mnop", got)
+	}
+	if got := inspectorEditViewport("abcdefghijklmnop", 0, 8); got != "|abcdefg" {
+		t.Fatalf("start edit viewport = %q, want |abcdefg", got)
+	}
+
+	m := ModelFromLab(&lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "router", CPUs: 2, MemoryMB: 2048, ISO: path}}})
+	out := RenderString(m, ViewState{Selected: 0, Focus: FocusGraph}, 120, 30, false)
+	if !strings.Contains(out, "…") || !strings.Contains(out, "router.iso") {
+		t.Fatalf("non-editing inspector did not show path tail:\n%s", out)
+	}
+	editing := RenderString(m, ViewState{Selected: 0, Focus: FocusInspector, InspectorSelected: 6, InspectorEditing: true, InspectorEditValue: path, InspectorEditCursor: runeLen(path)}, 120, 30, false)
+	if !strings.Contains(editing, "router.iso|") {
+		t.Fatalf("editing inspector did not keep end cursor visible:\n%s", editing)
 	}
 }
 
@@ -1066,8 +1166,8 @@ func TestRenderContextSubmenuHidesForRootAction(t *testing.T) {
 		ContextMenu:     true,
 		ContextSelected: 3,
 	}, 100, 30, false)
-	if !strings.Contains(out, " Delete") {
-		t.Fatalf("expected delete root item:\n%s", out)
+	if !strings.Contains(out, " Move") {
+		t.Fatalf("expected move root item:\n%s", out)
 	}
 	if strings.Contains(out, "add vm") || strings.Contains(out, "create-vm") {
 		t.Fatalf("render shows removed node create submenu:\n%s", out)
@@ -1497,7 +1597,7 @@ func TestRenderDisabledPaletteActionKeepsPaletteBackground(t *testing.T) {
 	}
 }
 
-func TestRenderInspectorUsesColorPanelWithoutFrame(t *testing.T) {
+func TestRenderInspectorUsesPaddedPropertiesPanel(t *testing.T) {
 	width, height := 120, 30
 	panel := inspectorBounds(width, height)
 	if panel.W <= 0 {
@@ -1506,36 +1606,50 @@ func TestRenderInspectorUsesColorPanelWithoutFrame(t *testing.T) {
 	g := renderGrid(MockModel(), ViewState{Selected: 0, Focus: FocusGraph}, width, height)
 
 	topLeft := g.Cells[panel.Y*g.Width+panel.X]
-	if topLeft.Ch == '╭' {
-		t.Fatalf("inspector still renders a frame corner:\n%s", g.String(false))
+	if topLeft.Ch != ' ' {
+		t.Fatalf("inspector top-left = %q, want empty padding:\n%s", topLeft.Ch, g.String(false))
 	}
 	if topLeft.Style != themePanelInspector {
-		t.Fatalf("inspector corner style = %q, want %q", topLeft.Style, themePanelInspector)
+		t.Fatalf("inspector top padding style = %q, want %q", topLeft.Style, themePanelInspector)
 	}
-	header := g.Cells[(panel.Y+1)*g.Width+panel.X+2]
+	header := g.Cells[(panel.Y+1)*g.Width+panel.X+3]
 	if header.Style != themePanelInspectorHeader+nodeBadgeStyle(NodeVM) {
 		t.Fatalf("inspector header style = %q, want %q", header.Style, themePanelInspectorHeader+nodeBadgeStyle(NodeVM))
 	}
-	body := g.Cells[(panel.Y+2)*g.Width+panel.X]
+	body := g.Cells[(panel.Y+2)*g.Width+panel.X+1]
 	if body.Style != themePanelInspector {
 		t.Fatalf("inspector body style = %q, want %q", body.Style, themePanelInspector)
 	}
 	bottomRight := g.Cells[(height-1)*g.Width+panel.X+panel.W-1]
-	if bottomRight.Style != themePanelInspector {
-		t.Fatalf("inspector bottom-right style = %q, want %q", bottomRight.Style, themePanelInspector)
+	if bottomRight.Style != themePanelInspectorHeader {
+		t.Fatalf("inspector full-width footer style = %q, want %q", bottomRight.Style, themePanelInspectorHeader)
 	}
-	brandX := panel.X + 2
-	brandY := height - 1
-	for offset, want := range []rune("// FoxLab") {
-		if got := g.Cells[brandY*g.Width+brandX+offset].Ch; got != want {
-			t.Fatalf("brand char at offset %d = %q, want %q", offset, got, want)
+	deleteButton, ok := inspectorDeleteButtonRect(panel, ViewState{Selected: 0, Focus: FocusGraph}, inspectorFields(MockModel().Nodes[0]))
+	if !ok {
+		t.Fatal("inspector Delete button is not visible after property sections")
+	}
+	for _, y := range []int{deleteButton.Y - 2, deleteButton.Y - 1} {
+		cell := g.Cells[y*g.Width+deleteButton.X]
+		if cell.Ch != ' ' || cell.Style != themePanelInspector {
+			t.Fatalf("Delete gap row %d = %q style %q, want blank Inspector row", y, cell.Ch, cell.Style)
 		}
 	}
-	if got := g.Cells[brandY*g.Width+brandX+3].Style; got != themePanelInspector+ansiOrange+ansiBold {
-		t.Fatalf("brand Fox style = %q, want orange", got)
+	if got := g.Cells[(deleteButton.Y+1)*g.Width+deleteButton.X].Style; got != inspectorButtonRedStyle {
+		t.Fatalf("inspector Delete button style = %q, want solid red action button", got)
 	}
-	if got := g.Cells[brandY*g.Width+brandX+6].Style; got != themePanelInspector+ansiWhite+ansiBold {
-		t.Fatalf("brand Lab style = %q, want white", got)
+	if top, bottom := g.Cells[deleteButton.Y*g.Width+deleteButton.X].Ch, g.Cells[(deleteButton.Y+2)*g.Width+deleteButton.X].Ch; top != '▀' || bottom != '▄' {
+		t.Fatalf("Delete button half-row padding = %q/%q, want panel cutouts over solid button background", top, bottom)
+	}
+	if !strings.Contains(g.String(false), "×  Delete") {
+		t.Fatalf("inspector missing bottom Delete button:\n%s", g.String(false))
+	}
+	if strings.Contains(g.String(false), "FOXLAB / PROPERTIES") {
+		t.Fatalf("inspector kept removed top bar:\n%s", g.String(false))
+	}
+	for y := panel.Y; y < panel.Y+panel.H; y++ {
+		if got := g.Cells[y*g.Width+panel.X].Ch; got == '│' {
+			t.Fatalf("inspector kept left divider at row %d:\n%s", y, g.String(false))
+		}
 	}
 }
 
@@ -1697,7 +1811,7 @@ func TestContextMenuLayoutClampsSubmenuInsideBounds(t *testing.T) {
 		ContextInSubmenu: true,
 	}
 	bounds := rect{X: 0, Y: 0, W: 100, H: 20}
-	layout, _, _, ok := contextMenuLayoutFor(m, state, layoutNodeRects(m, bounds), bounds)
+	layout, _, _, ok := contextMenuLayoutFor(m, state, layoutNodeRects(m, bounds), bounds, false)
 	if !ok || !layout.hasSub {
 		t.Fatalf("context submenu layout missing: ok=%t layout=%#v", ok, layout)
 	}
@@ -1816,6 +1930,32 @@ func TestRenderConfiguredUplinkUsesInfoNotification(t *testing.T) {
 	}
 	if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
 		t.Fatalf("info notification body style = %q, want %q", got, themeNotification)
+	}
+}
+
+func TestRenderDaemonActionUsesInfoNotification(t *testing.T) {
+	const width, height = 100, 30
+	message := "foxlabd: started container:kali"
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: message}, width, height)
+	textY := height - 2
+	if got := g.Cells[textY*g.Width+1].Style; got != themeNotificationInfoBar {
+		t.Fatalf("daemon action notification accent style = %q, want %q", got, themeNotificationInfoBar)
+	}
+	if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
+		t.Fatalf("daemon action notification body style = %q, want %q", got, themeNotification)
+	}
+}
+
+func TestRenderDaemonErrorUsesErrorNotification(t *testing.T) {
+	const width, height = 100, 30
+	message := "foxlabd status: container:kali: operation not permitted"
+	g := renderGrid(MockModel(), ViewState{Focus: FocusGraph, Message: message}, width, height)
+	textY := height - 2
+	if got := g.Cells[textY*g.Width+1].Style; got != themeNotificationBar {
+		t.Fatalf("daemon error notification accent style = %q, want %q", got, themeNotificationBar)
+	}
+	if got := g.Cells[textY*g.Width+2].Style; got != themeNotification {
+		t.Fatalf("daemon error notification body style = %q, want %q", got, themeNotification)
 	}
 }
 

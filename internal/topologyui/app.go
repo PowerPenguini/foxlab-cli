@@ -734,7 +734,7 @@ func (a *App) contextMenuRootItems(node Node, ok bool) []string {
 	if !ok {
 		return globalContextMenuItems("")
 	}
-	return contextMenuItems(node, "")
+	return contextMenuRootItemsForInspector(node, inspectorBounds(a.ViewWidth, a.contentHeight()).W > 0)
 }
 
 func (a *App) contextMenuSubmenuItems(node Node, ok bool) []string {

@@ -89,7 +89,7 @@ func normalizeAppKey(a *App, key string) string {
 	if a.tabs != nil && a.tabs.activeRunningShell() {
 		return key
 	}
-	if a.State.ContextEdit || a.State.DiskExplorerOpen || a.State.PaletteOpen {
+	if a.State.ContextEdit || a.State.DiskExplorerOpen || a.State.PaletteOpen || a.State.InspectorEditing || a.State.InspectorCapOpen {
 		return key
 	}
 	switch key {
@@ -411,6 +411,10 @@ func decodeEscapeKey(seq string) (string, int) {
 		return "end", len("\x1b[4~")
 	case strings.HasPrefix(seq, "\x1b[3~"):
 		return "delete", len("\x1b[3~")
+	case strings.HasPrefix(seq, "\x1b[5~"):
+		return "pageup", len("\x1b[5~")
+	case strings.HasPrefix(seq, "\x1b[6~"):
+		return "pagedown", len("\x1b[6~")
 	case strings.HasPrefix(seq, "\x1b[I"):
 		return "focus-in", len("\x1b[I")
 	case strings.HasPrefix(seq, "\x1b[O"):

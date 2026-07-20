@@ -27,8 +27,13 @@ func TestServiceMutationsPersistAndRefreshLab(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	if got, want := service.VMCreate("vm1", map[string]string{"switch": "sw1", "memory": "4096"}).Message, "created vm:vm1"; got != want {
-		t.Fatalf("VMCreate() = %q, want %q", got, want)
+	request := VMCreateRequest{
+		Name:     "vm1",
+		MemoryMB: SetField(4096),
+		Network:  WorkloadNetworkInput{Switch: "sw1"},
+	}
+	if got, want := service.CreateVM(request).Message, "created vm:vm1"; got != want {
+		t.Fatalf("CreateVM() = %q, want %q", got, want)
 	}
 	vm, ok := service.LabVM("vm1")
 	if !ok {
@@ -68,19 +73,19 @@ func TestWorkloadMutationResultsCarryOutcomeMetadata(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 
-	failed := service.VMCreate("", nil)
+	failed := service.CreateVM(VMCreateRequest{})
 	if failed.OK() || failed.Err == nil || failed.Kind != ResultError || failed.Changed {
 		t.Fatalf("failed result = %#v", failed)
 	}
-	info := service.VMSet("vm1", nil)
+	info := service.UpdateVM("vm1", VMUpdate{})
 	if !info.OK() || info.Err != nil || info.Kind != ResultInfo || info.Changed {
 		t.Fatalf("info result = %#v", info)
 	}
-	changedInfo := service.VMSet("vm1", map[string]string{"cpus": "2"})
+	changedInfo := service.UpdateVM("vm1", VMUpdate{CPUs: SetField(2)})
 	if !changedInfo.OK() || changedInfo.Err != nil || changedInfo.Kind != ResultInfo || !changedInfo.Changed {
 		t.Fatalf("changed info result = %#v", changedInfo)
 	}
-	success := service.VMCreate("vm2", nil)
+	success := service.CreateVM(VMCreateRequest{Name: "vm2"})
 	if !success.OK() || success.Err != nil || success.Kind != ResultSuccess || !success.Changed {
 		t.Fatalf("success result = %#v", success)
 	}
@@ -258,13 +263,14 @@ func TestServiceContainerNICDelete(t *testing.T) {
 	}
 }
 
-func TestServiceContainerSetClearsEnv(t *testing.T) {
+func TestServiceContainerSetUpdatesShellAndClearsEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	initial := &lab.Lab{
 		ID: "demo",
 		Containers: []lab.Container{{
 			ID:    "web",
 			Image: "nginx",
+			Shell: "/bin/sh",
 			Env: map[string]string{
 				"FOO": "bar",
 				"BAZ": "qux",
@@ -280,8 +286,9 @@ func TestServiceContainerSetClearsEnv(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	if got, want := service.ContainerSet("web", map[string]string{"env": ""}).Message, "configured container:web"; got != want {
-		t.Fatalf("ContainerSet() = %q, want %q", got, want)
+	update := ContainerUpdate{Env: SetField(map[string]string(nil)), Shell: SetField("/bin/bash")}
+	if got, want := service.UpdateContainer("web", update).Message, "configured container:web"; got != want {
+		t.Fatalf("UpdateContainer() = %q, want %q", got, want)
 	}
 	ct, ok := service.LabContainer("web")
 	if !ok {
@@ -290,12 +297,18 @@ func TestServiceContainerSetClearsEnv(t *testing.T) {
 	if len(ct.Env) != 0 {
 		t.Fatalf("service env = %#v, want empty", ct.Env)
 	}
+	if ct.Shell != "/bin/bash" {
+		t.Fatalf("service shell = %q, want /bin/bash", ct.Shell)
+	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatalf("reload lab: %v", err)
 	}
 	if len(reloaded.Containers[0].Env) != 0 {
 		t.Fatalf("persisted env = %#v, want empty", reloaded.Containers[0].Env)
+	}
+	if reloaded.Containers[0].Shell != "/bin/bash" {
+		t.Fatalf("persisted shell = %q, want /bin/bash", reloaded.Containers[0].Shell)
 	}
 }
 
@@ -366,22 +379,22 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 	}{
 		{
 			name: "vm",
-			run:  func() string { return service.VMCreate("", map[string]string{}).Message },
+			run:  func() string { return service.CreateVM(VMCreateRequest{}).Message },
 			want: "usage: vm create <name> [cpus=N] [memory=N] [switch=NAME|uplink=NAME]",
 		},
 		{
 			name: "vm duplicate name",
-			run:  func() string { return service.VMCreate("existing", map[string]string{}).Message },
+			run:  func() string { return service.CreateVM(VMCreateRequest{Name: "existing"}).Message },
 			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "container",
-			run:  func() string { return service.ContainerCreate("", map[string]string{}).Message },
+			run:  func() string { return service.CreateContainer(ContainerCreateRequest{}).Message },
 			want: "usage: container create <name> [image=REF] [command=CMD] [switch=NAME|uplink=NAME]",
 		},
 		{
 			name: "container duplicate name",
-			run:  func() string { return service.ContainerCreate("existing", map[string]string{}).Message },
+			run:  func() string { return service.CreateContainer(ContainerCreateRequest{Name: "existing"}).Message },
 			want: "node id already exists as switch: existing",
 		},
 		{
@@ -426,16 +439,6 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 	}
 	if len(service.Lab.Layout.Nodes) != 1 {
 		t.Fatalf("empty-id create mutated layout: %#v", service.Lab.Layout.Nodes)
-	}
-}
-
-func TestUnsupportedArgumentErrorsAreDeterministic(t *testing.T) {
-	service := NewService(&lab.Lab{ID: "demo"}, "")
-	args := map[string]string{"zzz": "1", "aaa": "2", "mmm": "3"}
-	for i := 0; i < 100; i++ {
-		if got, want := service.VMCreate("vm1", args).Message, "unsupported vm create argument: aaa"; got != want {
-			t.Fatalf("VMCreate unsupported argument error = %q, want %q", got, want)
-		}
 	}
 }
 
@@ -530,45 +533,32 @@ func TestServiceVMRejectsInvalidTypedArgsWithoutMutatingLab(t *testing.T) {
 	}{
 		{
 			name: "create cpus",
-			run:  func() string { return service.VMCreate("bad-cpus", map[string]string{"cpus": "zero"}).Message },
-			want: "invalid vm cpus: zero",
+			run: func() string {
+				return service.CreateVM(VMCreateRequest{Name: "bad-cpus", CPUs: SetField(0)}).Message
+			},
+			want: "invalid vm cpus: 0",
 		},
 		{
 			name: "create memory",
-			run:  func() string { return service.VMCreate("bad-memory", map[string]string{"memory": "0"}).Message },
+			run: func() string {
+				return service.CreateVM(VMCreateRequest{Name: "bad-memory", MemoryMB: SetField(0)}).Message
+			},
 			want: "invalid vm memory: 0",
-		},
-		{
-			name: "create mem",
-			run:  func() string { return service.VMCreate("bad-mem", map[string]string{"mem": "-1"}).Message },
-			want: "invalid vm memory: -1",
 		},
 		{
 			name: "set cpus",
-			run:  func() string { return service.VMSet("vm1", map[string]string{"cpus": "zero"}).Message },
-			want: "invalid vm cpus: zero",
+			run:  func() string { return service.UpdateVM("vm1", VMUpdate{CPUs: SetField(0)}).Message },
+			want: "invalid vm cpus: 0",
 		},
 		{
 			name: "set memory",
-			run:  func() string { return service.VMSet("vm1", map[string]string{"memory": "0"}).Message },
+			run:  func() string { return service.UpdateVM("vm1", VMUpdate{MemoryMB: SetField(0)}).Message },
 			want: "invalid vm memory: 0",
 		},
 		{
-			name: "set mem",
-			run:  func() string { return service.VMSet("vm1", map[string]string{"mem": "-1"}).Message },
+			name: "set negative memory",
+			run:  func() string { return service.UpdateVM("vm1", VMUpdate{MemoryMB: SetField(-1)}).Message },
 			want: "invalid vm memory: -1",
-		},
-		{
-			name: "set vnc",
-			run:  func() string { return service.VMSet("vm1", map[string]string{"vnc": "maybe"}).Message },
-			want: "invalid vm vnc: maybe",
-		},
-		{
-			name: "set mixed before invalid vnc",
-			run: func() string {
-				return service.VMSet("vm1", map[string]string{"name": "changed", "disk": "changed.qcow2", "vnc": "maybe"}).Message
-			},
-			want: "invalid vm vnc: maybe",
 		},
 	}
 
@@ -648,45 +638,54 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		},
 		{
 			name: "vm create missing switch",
-			run:  func(s *Service) string { return s.VMCreate("vm2", map[string]string{"switch": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.CreateVM(VMCreateRequest{Name: "vm2", Network: WorkloadNetworkInput{Switch: "missing"}}).Message
+			},
 			want: `create failed: switch not found: missing`,
 		},
 		{
 			name: "vm set switch and external",
 			run: func(s *Service) string {
-				return s.VMSet("vm1", map[string]string{"switch": "lan", "external": "uplink"}).Message
+				return s.UpdateVM("vm1", VMUpdate{Network: WorkloadNetworkInput{Switch: "lan", Uplink: "uplink"}}).Message
 			},
 			want: `config failed: vm "vm1" network must not reference both switch and externalLink`,
 		},
 		{
 			name: "vm set missing external",
-			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateVM("vm1", VMUpdate{Network: WorkloadNetworkInput{Uplink: "missing"}}).Message
+			},
 			want: `config failed: uplink not found: missing`,
 		},
 		{
 			name: "container create switch and external",
 			run: func(s *Service) string {
-				return s.ContainerCreate("api", map[string]string{"image": "alpine", "switch": "lan", "external": "uplink"}).Message
+				request := ContainerCreateRequest{Name: "api", Image: "alpine"}
+				request.Network = WorkloadNetworkInput{Switch: "lan", Uplink: "uplink"}
+				return s.CreateContainer(request).Message
 			},
 			want: `container create failed: container "api" network must not reference both switch and externalLink`,
 		},
 		{
 			name: "container create missing external",
 			run: func(s *Service) string {
-				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"}).Message
+				request := ContainerCreateRequest{Name: "api", Image: "alpine", Network: WorkloadNetworkInput{Uplink: "missing"}}
+				return s.CreateContainer(request).Message
 			},
 			want: `container create failed: uplink not found: missing`,
 		},
 		{
 			name: "container set switch and external",
 			run: func(s *Service) string {
-				return s.ContainerSet("web", map[string]string{"switch": "lan", "external": "uplink"}).Message
+				return s.UpdateContainer("web", ContainerUpdate{Network: WorkloadNetworkInput{Switch: "lan", Uplink: "uplink"}}).Message
 			},
 			want: `container config failed: container "web" network must not reference both switch and externalLink`,
 		},
 		{
 			name: "container set missing switch",
-			run:  func(s *Service) string { return s.ContainerSet("web", map[string]string{"switch": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateContainer("web", ContainerUpdate{Network: WorkloadNetworkInput{Switch: "missing"}}).Message
+			},
 			want: `container config failed: switch not found: missing`,
 		},
 	}
@@ -783,13 +782,20 @@ func TestServiceRollsBackWhenSaveFailsForNewPath(t *testing.T) {
 	}{
 		{name: "vm desired", run: func(s *Service) string { return s.VMDesiredState("vm1", lab.DesiredStateRunning).Message }},
 		{name: "container desired", run: func(s *Service) string { return s.ContainerDesiredState("web", lab.DesiredStateRunning).Message }},
-		{name: "vm create", run: func(s *Service) string { return s.VMCreate("vm3", map[string]string{"switch": "lan"}).Message }},
-		{name: "vm set", run: func(s *Service) string { return s.VMSet("vm1", map[string]string{"name": "changed"}).Message }},
+		{name: "vm create", run: func(s *Service) string {
+			return s.CreateVM(VMCreateRequest{Name: "vm3", Network: WorkloadNetworkInput{Switch: "lan"}}).Message
+		}},
+		{name: "vm set", run: func(s *Service) string {
+			return s.UpdateVM("vm1", VMUpdate{Name: SetField("changed")}).Message
+		}},
 		{name: "vm delete", run: func(s *Service) string { return s.VMDelete("vm2").Message }},
 		{name: "container create", run: func(s *Service) string {
-			return s.ContainerCreate("db", map[string]string{"image": "postgres", "switch": "lan"}).Message
+			request := ContainerCreateRequest{Name: "db", Image: "postgres", Network: WorkloadNetworkInput{Switch: "lan"}}
+			return s.CreateContainer(request).Message
 		}},
-		{name: "container set", run: func(s *Service) string { return s.ContainerSet("web", map[string]string{"image": "redis"}).Message }},
+		{name: "container set", run: func(s *Service) string {
+			return s.UpdateContainer("web", ContainerUpdate{Image: SetField("redis")}).Message
+		}},
 		{name: "container delete", run: func(s *Service) string { return s.ContainerDelete("api").Message }},
 		{name: "switch create", run: func(s *Service) string { return s.SwitchCreate("wan", map[string]string{"mode": "bridge"}).Message }},
 		{name: "switch set", run: func(s *Service) string { return s.SwitchSet("lan", map[string]string{"name": "LAN"}).Message }},
@@ -861,7 +867,7 @@ func TestServiceMutationsRequireSavePathBeforeMutatingLab(t *testing.T) {
 	}{
 		{
 			name: "vm set",
-			run:  func() string { return service.VMSet("vm1", map[string]string{"cpus": "2"}).Message },
+			run:  func() string { return service.UpdateVM("vm1", VMUpdate{CPUs: SetField(2)}).Message },
 			want: "config failed: missing lab path",
 		},
 		{
@@ -1000,24 +1006,31 @@ func TestWorkloadNetworkRefsValidateBeforeSavePath(t *testing.T) {
 	}{
 		{
 			name: "vm create",
-			run:  func(s *Service) string { return s.VMCreate("vm2", map[string]string{"switch": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.CreateVM(VMCreateRequest{Name: "vm2", Network: WorkloadNetworkInput{Switch: "missing"}}).Message
+			},
 			want: `create failed: switch not found: missing`,
 		},
 		{
 			name: "vm set",
-			run:  func(s *Service) string { return s.VMSet("vm1", map[string]string{"external": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateVM("vm1", VMUpdate{Network: WorkloadNetworkInput{Uplink: "missing"}}).Message
+			},
 			want: `config failed: uplink not found: missing`,
 		},
 		{
 			name: "container create",
 			run: func(s *Service) string {
-				return s.ContainerCreate("api", map[string]string{"image": "alpine", "external": "missing"}).Message
+				request := ContainerCreateRequest{Name: "api", Image: "alpine", Network: WorkloadNetworkInput{Uplink: "missing"}}
+				return s.CreateContainer(request).Message
 			},
 			want: `container create failed: uplink not found: missing`,
 		},
 		{
 			name: "container set",
-			run:  func(s *Service) string { return s.ContainerSet("web", map[string]string{"switch": "missing"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateContainer("web", ContainerUpdate{Network: WorkloadNetworkInput{Switch: "missing"}}).Message
+			},
 			want: `container config failed: switch not found: missing`,
 		},
 	}
@@ -1070,14 +1083,17 @@ func TestNICMACArgsValidateBeforeSavePath(t *testing.T) {
 		{
 			name: "container create",
 			run: func(s *Service) string {
-				return s.ContainerCreate("api", map[string]string{"image": "alpine", "switch": "lan", "mac": "not-a-mac"}).Message
+				request := ContainerCreateRequest{Name: "api", Image: "alpine"}
+				request.Network = WorkloadNetworkInput{Switch: "lan", MAC: "not-a-mac"}
+				return s.CreateContainer(request).Message
 			},
 			want: "invalid container nic mac: not-a-mac",
 		},
 		{
 			name: "container set",
 			run: func(s *Service) string {
-				return s.ContainerSet("web", map[string]string{"switch": "lan", "mac": "not-a-mac"}).Message
+				update := ContainerUpdate{Network: WorkloadNetworkInput{Switch: "lan", MAC: "not-a-mac"}}
+				return s.UpdateContainer("web", update).Message
 			},
 			want: "invalid container nic mac: not-a-mac",
 		},
@@ -1134,12 +1150,14 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 	}{
 		{
 			name: "vm collides with container",
-			run:  func(s *Service) string { return s.VMCreate("web", nil).Message },
+			run:  func(s *Service) string { return s.CreateVM(VMCreateRequest{Name: "web"}).Message },
 			want: "node id already exists as container: web",
 		},
 		{
 			name: "container collides with vm",
-			run:  func(s *Service) string { return s.ContainerCreate("vm1", map[string]string{"image": "alpine"}).Message },
+			run: func(s *Service) string {
+				return s.CreateContainer(ContainerCreateRequest{Name: "vm1", Image: "alpine"}).Message
+			},
 			want: "node id already exists as vm: vm1",
 		},
 		{
@@ -1246,12 +1264,12 @@ func TestServiceEmptySetArgsAreNoOpBeforeSavePath(t *testing.T) {
 	}{
 		{
 			name: "vm set",
-			run:  func(s *Service) string { return s.VMSet("vm1", nil).Message },
+			run:  func(s *Service) string { return s.UpdateVM("vm1", VMUpdate{}).Message },
 			want: "configured vm:VM 1",
 		},
 		{
 			name: "container set",
-			run:  func(s *Service) string { return s.ContainerSet("web", nil).Message },
+			run:  func(s *Service) string { return s.UpdateContainer("web", ContainerUpdate{}).Message },
 			want: "configured container:Web",
 		},
 		{
@@ -1377,8 +1395,8 @@ func TestNodeRenameRewritesAllMnemonicReferences(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 	for label, got := range map[string]string{
-		"vm":        service.VMSet("vm-old", map[string]string{"name": "vm-new"}).Message,
-		"container": service.ContainerSet("ct-old", map[string]string{"name": "ct-new"}).Message,
+		"vm":        service.UpdateVM("vm-old", VMUpdate{Name: SetField("vm-new")}).Message,
+		"container": service.UpdateContainer("ct-old", ContainerUpdate{Name: SetField("ct-new")}).Message,
 		"switch":    service.SwitchSet("sw-old", map[string]string{"name": "sw-new"}).Message,
 		"external":  service.ExternalSet("up-old", map[string]string{"name": "up-new"}).Message,
 	} {

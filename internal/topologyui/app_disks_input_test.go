@@ -1046,9 +1046,9 @@ func TestCommandHelpTopics(t *testing.T) {
 		want    string
 	}{
 		{"help add", "global add menu"},
-		{"help vm", "Configuration edits"},
-		{"help switch", "switch: Configuration"},
-		{"help external", "uplink: Configuration"},
+		{"help vm", "right inspector"},
+		{"help switch", "switch: edit name"},
+		{"help external", "uplink: edit name"},
 		{"help wat", "unknown help topic: wat"},
 	}
 
@@ -1875,8 +1875,8 @@ func TestMouseClickNodeMovesFocusToGraph(t *testing.T) {
 	if app.State.Selected != 1 {
 		t.Fatalf("selected after node click = %d, want client01 index 1", app.State.Selected)
 	}
-	if !app.State.ContextMenu {
-		t.Fatal("node click did not open context menu")
+	if app.State.ContextMenu {
+		t.Fatal("node click opened the operations menu instead of only selecting the node")
 	}
 }
 

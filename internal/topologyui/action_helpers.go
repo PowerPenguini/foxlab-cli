@@ -1,6 +1,9 @@
 package topologyui
 
-import "foxlab-cli/internal/lab"
+import (
+	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
+)
 
 func (a *App) hasVM(id string) bool {
 	return a.ensureService().HasVM(id)
@@ -88,21 +91,21 @@ func (a *App) createContainerHint(node Node) string {
 	}
 }
 
-func (a *App) createVMArgs(node Node) map[string]string {
-	args := map[string]string{}
+func (a *App) createVMRequest(node Node) topology.VMCreateRequest {
+	request := topology.VMCreateRequest{Name: a.nextVMID()}
 	switch node.Type {
 	case NodeSwitch:
-		args["switch"] = node.ID
+		request.Network.Switch = node.ID
 	case NodeExternal:
-		args["external"] = node.ID
+		request.Network.Uplink = node.ID
 	}
-	return args
+	return request
 }
 
-func (a *App) createContainerArgs(node Node) map[string]string {
-	args := map[string]string{}
+func (a *App) createContainerRequest(node Node) topology.ContainerCreateRequest {
+	request := topology.ContainerCreateRequest{Name: a.nextContainerID()}
 	if node.Type == NodeSwitch {
-		args["switch"] = node.ID
+		request.Network.Switch = node.ID
 	}
-	return args
+	return request
 }

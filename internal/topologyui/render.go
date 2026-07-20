@@ -124,7 +124,7 @@ func inspectorBounds(width, height int) rect {
 	if width < 112 || height < 18 {
 		return rect{}
 	}
-	panelW := min(32, max(28, width/4))
+	panelW := min(44, max(38, width/3))
 	return rect{X: width - panelW, Y: 0, W: panelW, H: height}
 }
 

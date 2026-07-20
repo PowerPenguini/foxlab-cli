@@ -146,7 +146,7 @@ func drawContextMenu(g *grid, m Model, state ViewState, nodeRects map[string]rec
 	if !state.ContextMenu {
 		return
 	}
-	layout, _, _, ok := contextMenuLayoutFor(m, state, nodeRects, bounds)
+	layout, _, _, ok := contextMenuLayoutFor(m, state, nodeRects, bounds, inspectorBounds(g.Width, g.Height).W > 0)
 	if !ok {
 		return
 	}
@@ -578,7 +578,8 @@ func notificationThemeFor(notification Notification, line string) notificationTh
 
 func isInfoNotification(line string) bool {
 	line = strings.TrimSpace(strings.ToLower(line))
-	return strings.HasPrefix(line, "configured ")
+	return strings.HasPrefix(line, "configured ") ||
+		strings.HasPrefix(line, "foxlabd:")
 }
 
 func isSuccessNotification(line string) bool {

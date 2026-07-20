@@ -154,9 +154,19 @@ func (a *App) applyContextEdit(node Node, item, value string) {
 	}
 	switch node.Type {
 	case NodeVM:
-		a.vmSet(node.ID, args)
+		update, err := vmUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.vmSet(node.ID, update)
 	case NodeContainer:
-		a.containerSet(node.ID, args)
+		update, err := containerUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerSet(node.ID, update)
 	case NodeSwitch:
 		a.switchSet(node.ID, args)
 	case NodeExternal:

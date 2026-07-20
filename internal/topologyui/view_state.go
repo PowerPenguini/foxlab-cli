@@ -1,8 +1,9 @@
 package topologyui
 
 const (
-	FocusGraph = 0
-	FocusTop   = 1
+	FocusGraph     = 0
+	FocusTop       = 1
+	FocusInspector = 2
 )
 
 type ViewState struct {
@@ -67,6 +68,13 @@ type ViewState struct {
 	DiskMenuItems          []string
 	DiskMenuActions        []string
 	DiskMenuKinds          []string
+	InspectorSelected      int
+	InspectorEditing       bool
+	InspectorEditValue     string
+	InspectorEditCursor    int
+	InspectorCapOpen       bool
+	InspectorCapQuery      string
+	InspectorCapSelected   int
 	CommandMode            bool
 	Command                string
 	Console                []string

@@ -169,11 +169,21 @@ func (a *App) executeAddCommand(fields []string) {
 	}
 	switch fields[1] {
 	case "vm":
-		a.vmCreate(fields[2], args)
+		request, err := vmCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.vmCreate(request)
 	case "sw", "switch":
 		a.switchCreate(fields[2], args)
 	case "cont", "container", "ct":
-		a.containerCreate(fields[2], args)
+		request, err := containerCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerCreate(request)
 	default:
 		a.State.Message = "usage: add <vm|sw|cont> <id> ..."
 	}
@@ -270,10 +280,15 @@ func (a *App) executeContainerCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.containerCreate(fields[2], args)
+		request, err := containerCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerCreate(request)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
-			a.State.Message = "usage: container set <id> image=REF command=CMD switch=ID|uplink=ID"
+			a.State.Message = "usage: container set <id> image=REF command=CMD shell=PATH env=K=V switch=ID|uplink=ID"
 			return
 		}
 		args, err := parseArgs(fields[3:])
@@ -281,7 +296,12 @@ func (a *App) executeContainerCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.containerSet(fields[2], args)
+		update, err := containerUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.containerSet(fields[2], update)
 	case "start", "run":
 		if !a.requireExactCommandArgs(fields, 3, "usage: container start <id>") {
 			return
@@ -430,7 +450,12 @@ func (a *App) executeVMCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.vmCreate(fields[2], args)
+		request, err := vmCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.vmCreate(request)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
 			a.State.Message = "usage: vm set <id> cpus=N memory=N name=NAME"
@@ -441,7 +466,12 @@ func (a *App) executeVMCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.vmSet(fields[2], args)
+		update, err := vmUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.vmSet(fields[2], update)
 	case "start", "run":
 		if !a.requireExactCommandArgs(fields, 3, "usage: vm start <id>") {
 			return

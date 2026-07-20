@@ -126,9 +126,9 @@ func (a *App) detachDiskFromNode(node Node) {
 	if result.Code == topology.ResultCodeDiskNotAttached {
 		switch node.Type {
 		case NodeVM:
-			a.setOperationResult(a.ensureService().VMSet(node.ID, map[string]string{"disk": ""}))
+			a.setOperationResult(a.ensureService().UpdateVM(node.ID, topology.VMUpdate{Disk: topology.SetField("")}))
 		case NodeContainer:
-			a.setOperationResult(a.ensureService().ContainerSet(node.ID, map[string]string{"disk": ""}))
+			a.setOperationResult(a.ensureService().UpdateContainer(node.ID, topology.ContainerUpdate{Disk: topology.SetField("")}))
 		}
 	}
 	a.syncAfterServiceMutation()

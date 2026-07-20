@@ -11,30 +11,30 @@ func helpLines(topic string) []string {
 			"tabs: gt/gT from Lab or Disks; Alt+g then t/T or Alt+1..9 works globally",
 			"closing: q or quit closes one card; qa silently aliases quit all",
 			"shell: Ctrl-] returns to Lab; Shift+PageUp/PageDown scrolls session history",
-			"editing: choose Configuration fields and type inline",
+			"editing: Tab opens the right inspector; arrows select, Enter edits or toggles",
 			"links: use NIC menu and connect mode to create direct links",
 			"disks: open the Disks card from the palette for global disk management",
 		}
 	case "add":
 		return []string{
 			"add: open the global add menu, then click VM, container, switch, disk, or uplink",
-			"defaults: new nodes get generated ids and can be edited from Configuration",
+			"defaults: new nodes get generated ids and can be edited in the right inspector",
 			"node add: click add actions from a switch/uplink to preconnect where supported",
 		}
 	case "vm", "vms":
 		return []string{
-			"vm: Configuration edits name, CPU, memory, VNC, ISO, and power state",
+			"vm: edit name, CPU, memory, VNC, ISO, and power state in the right inspector",
 			"vm nic: NIC menu adds, deletes, or connects NICs",
 			"vm disk: Disk menu creates, attaches, detaches, deletes, and manages layers",
-			"vm actions: Console, VNC, Move, and Delete are root menu actions",
+			"vm actions: Shell and Delete are in the right inspector; VNC and Move are root menu actions",
 		}
 	case "container", "containers", "ct":
 		return []string{
-			"container: Configuration edits name, image, command, and power state",
-			"container permissions: Permissions toggles Linux capabilities; NET_ADMIN enables advanced network tools",
+			"container: edit name, image, command, shell, environment, power, and permissions in the right panel",
+			"container permissions: open the searchable capabilities picker; NET_ADMIN enables advanced network tools",
 			"container nic: NIC menu adds, deletes, or connects NICs",
 			"container disk: Disk menu creates, attaches, detaches, and deletes rootfs layers",
-			"container actions: Shell, Move, and Delete are root menu actions",
+			"container actions: Shell and Delete are in the right inspector; Move is a root menu action",
 		}
 	case "disk", "disks":
 		return []string{
@@ -60,12 +60,12 @@ func helpLines(topic string) []string {
 		}
 	case "switch", "switches":
 		return []string{
-			"switch: Configuration edits name and mode",
+			"switch: edit name and mode in the right inspector",
 			"switch actions: Uplink menu attaches/detaches uplinks; Move and Delete are menu actions",
 		}
 	case "uplink", "external":
 		return []string{
-			"uplink: Configuration edits name, interface, and mode",
+			"uplink: edit name, interface, and mode in the right inspector",
 			"uplink actions: Connect, Add Switch, Move, and Delete are menu actions",
 		}
 	default:

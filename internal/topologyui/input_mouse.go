@@ -65,6 +65,15 @@ func (a *App) handleMouseKey(key string) bool {
 		return false
 	}
 	if event.button != 0 {
+		if a.State.InspectorCapOpen && (event.button == 64 || event.button == 65) {
+			panel := inspectorBounds(a.ViewWidth, a.contentHeight())
+			if xyInRect(event.x, event.y, panel) {
+				node, nodeOK := selectedNode(a.Model, a.State.Selected)
+				if nodeOK && a.handleInspectorPickerMouse(event, panel, node, inspectorFields(node)) {
+					return false
+				}
+			}
+		}
 		return false
 	}
 	if notification, ok := notificationBoundsForState(a.State, a.ViewWidth, a.contentHeight()); ok && xyInRect(event.x, event.y, notification) {
@@ -96,6 +105,12 @@ func (a *App) handleMouseKey(key string) bool {
 		}
 		a.State.closeContextMenu()
 	}
+	if panel := inspectorBounds(a.ViewWidth, a.contentHeight()); xyInRect(event.x, event.y, panel) {
+		return a.handleInspectorMouse(event, panel)
+	}
+	if a.State.InspectorCapOpen {
+		a.closeInspectorCapabilityPicker()
+	}
 	if a.State.ConnectMode {
 		if index, ok := a.nodeIndexAt(event.x, event.y); ok {
 			a.State.Focus = FocusGraph
@@ -107,13 +122,12 @@ func (a *App) handleMouseKey(key string) bool {
 	if index, ok := a.nodeIndexAt(event.x, event.y); ok {
 		a.recordMouseNodePress(index, event)
 		a.State.Focus = FocusGraph
+		if a.State.Selected != index {
+			a.clearInspectorEdit()
+			a.closeInspectorCapabilityPicker()
+			a.State.InspectorSelected = 0
+		}
 		a.State.Selected = index
-		a.State.openOverlay(overlayContextMenu)
-		a.State.ContextGroup = ""
-		a.State.ContextInSubmenu = false
-		a.State.ContextSelected = 0
-		a.State.ContextSubSelected = 0
-		a.State.closeContextSelectMenu()
 		return false
 	}
 	if xyInRect(event.x, event.y, a.graphBounds()) {
@@ -448,7 +462,7 @@ func xyInRect(x, y int, r rect) bool {
 func (a *App) currentContextMenuLayout() (menuLayout, Node, bool, bool) {
 	bounds := a.graphBounds()
 	nodeRects := layoutNodeRectsWithPan(a.Model, bounds, a.State.PanX, a.State.PanY)
-	return contextMenuLayoutFor(a.Model, a.State, nodeRects, bounds)
+	return contextMenuLayoutFor(a.Model, a.State, nodeRects, bounds, inspectorBounds(a.ViewWidth, a.contentHeight()).W > 0)
 }
 
 func (a *App) mouseInContextMenu(event mouseEvent) bool {

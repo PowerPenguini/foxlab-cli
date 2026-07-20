@@ -118,11 +118,11 @@ func (a *App) runMenuAction(node Node, action string) {
 }
 
 func (a *App) openCreateVMCommand(node Node) {
-	a.vmCreate(a.nextVMID(), a.createVMArgs(node))
+	a.vmCreate(a.createVMRequest(node))
 }
 
 func (a *App) openCreateContainerCommand(node Node) {
-	a.containerCreate(a.nextContainerID(), a.createContainerArgs(node))
+	a.containerCreate(a.createContainerRequest(node))
 }
 
 func (a *App) openCreateSwitchCommand(node Node) {

@@ -722,32 +722,29 @@ func TestContextMenuMouseSwitchesInlineEditFieldsWithoutCopyingValue(t *testing.
 	}
 }
 
-func TestContextMenuIncludesConsoleForVMsAndShellForContainers(t *testing.T) {
-	foundVM := false
+func TestContextMenuKeepsShellInInspectorOnly(t *testing.T) {
+	foundVMConsole := false
 	foundVNC := false
 	for _, item := range contextMenuItems(Node{ID: "vm1", Type: NodeVM}, "") {
-		if item == "Console" {
-			foundVM = true
+		if item == "Console" || item == "Shell" {
+			foundVMConsole = true
 		}
 		if item == "VNC" {
 			foundVNC = true
 		}
 	}
-	if !foundVM {
-		t.Fatalf("vm context menu missing Console: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
+	if foundVMConsole {
+		t.Fatalf("vm context menu still contains shell action: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
 	}
 	if !foundVNC {
 		t.Fatalf("vm context menu missing VNC: %#v", contextMenuItems(Node{ID: "vm1", Type: NodeVM}, ""))
 	}
-	if action := contextMenuAction("Console"); action != "shell" {
-		t.Fatalf("Console action = %q, want shell", action)
-	}
-	found := false
+	foundContainerShell := false
 	foundContainerVNC := false
 	foundPermissions := false
 	for _, item := range contextMenuItems(Node{ID: "web", Type: NodeContainer}, "") {
 		if item == "Shell" {
-			found = true
+			foundContainerShell = true
 		}
 		if item == "VNC" {
 			foundContainerVNC = true
@@ -756,14 +753,19 @@ func TestContextMenuIncludesConsoleForVMsAndShellForContainers(t *testing.T) {
 			foundPermissions = true
 		}
 	}
-	if !found {
-		t.Fatalf("container context menu missing Shell: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
+	if foundContainerShell {
+		t.Fatalf("container context menu still contains Shell: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
 	}
 	if foundContainerVNC {
 		t.Fatalf("container context menu unexpectedly contains VNC: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
 	}
 	if !foundPermissions {
 		t.Fatalf("container context menu missing Permissions: %#v", contextMenuItems(Node{ID: "web", Type: NodeContainer}, ""))
+	}
+	for _, nodeType := range []string{NodeVM, NodeContainer, NodeSwitch, NodeExternal} {
+		if containsString(contextMenuItems(Node{ID: "node", Type: nodeType}, ""), "Delete") {
+			t.Fatalf("%s context menu still contains Delete: %#v", nodeType, contextMenuItems(Node{ID: "node", Type: nodeType}, ""))
+		}
 	}
 }
 

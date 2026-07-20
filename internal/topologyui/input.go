@@ -34,6 +34,9 @@ func (a *App) handleKey(key string) bool {
 	if a.State.Focus == FocusTop {
 		return a.handleTopMenuKey(key)
 	}
+	if a.State.Focus == FocusInspector {
+		return a.handleInspectorKey(key)
+	}
 	switch key {
 	case "quit":
 		return true
@@ -46,7 +49,13 @@ func (a *App) handleKey(key string) bool {
 	case "shift-down":
 		a.panGraph(0, -keyboardPanStepY)
 	case "down", "up", "left", "right", "char:j", "char:k", "char:h", "char:l":
-		a.State.Selected = MoveSelection(a.Model, a.State.Selected, navigationDirection(key))
+		selected := MoveSelection(a.Model, a.State.Selected, navigationDirection(key))
+		if selected != a.State.Selected {
+			a.clearInspectorEdit()
+			a.closeInspectorCapabilityPicker()
+			a.State.InspectorSelected = 0
+		}
+		a.State.Selected = selected
 	case "tab":
 		a.State.Focus = NextFocus(a.State.Focus)
 	case "char:m":
@@ -97,7 +106,24 @@ func (a *App) handleTabKey() bool {
 	if a.State.ContextMenu {
 		a.State.closeContextMenu()
 	}
-	a.State.Focus = NextFocus(a.State.Focus)
+	if a.State.InspectorEditing {
+		a.applyInspectorEdit()
+	}
+	if a.State.InspectorCapOpen {
+		a.closeInspectorCapabilityPicker()
+	}
+	if inspectorBounds(a.ViewWidth, a.contentHeight()).W > 0 {
+		switch a.State.Focus {
+		case FocusGraph:
+			a.State.Focus = FocusInspector
+		case FocusInspector:
+			a.State.Focus = FocusGraph
+		default:
+			a.State.Focus = FocusGraph
+		}
+	} else {
+		a.State.Focus = FocusGraph
+	}
 	return false
 }
 

@@ -41,14 +41,16 @@ const (
 	themePaletteActive          = ansiBgPanelMenuActive + ansiWhite + ansiBold
 	themePaletteDisabled        = ansiBgPanelMenu + ansiBrightBlack
 
-	themePanelInspector       = ansiBgPanelInspector + ansiWhite
-	themePanelInspectorHeader = ansiBgPanelInspectorHeader + ansiWhite + ansiBold
-	themePanelInspectorMuted  = ansiBgPanelInspector + ansiBrightBlack
-	themePanelDisk            = themePalette
-	themePanelDiskHeader      = themePaletteHeader
-	themePanelDiskMuted       = themePaletteHint
-	themePanelDiskSelected    = themePaletteActive
-	themePanelDiskActions     = themePaletteInput
+	themePanelInspector        = ansiBgPanelInspector + ansiWhite
+	themePanelInspectorHeader  = ansiBgPanelInspectorHeader + ansiWhite + ansiBold
+	themePanelInspectorMuted   = ansiBgPanelInspector + ansiBrightBlack
+	themePanelInspectorSection = ansiBgPanelTop + ansiWhite + ansiBold
+	themePanelInspectorActive  = ansiBgPanelMenuActive + ansiWhite + ansiBold
+	themePanelDisk             = themePalette
+	themePanelDiskHeader       = themePaletteHeader
+	themePanelDiskMuted        = themePaletteHint
+	themePanelDiskSelected     = themePaletteActive
+	themePanelDiskActions      = themePaletteInput
 )
 
 func nodePanelStyle(_ string, selected bool) string {

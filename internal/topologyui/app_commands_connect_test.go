@@ -1142,7 +1142,7 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 
 	uplinkMenu := contextMenuItems(Node{ID: "uplink1", Type: NodeExternal}, "")
-	if !reflect.DeepEqual(uplinkMenu, []string{"Configuration >", "Connect", "Move", "Delete"}) {
+	if !reflect.DeepEqual(uplinkMenu, []string{"Configuration >", "Connect", "Move"}) {
 		t.Fatalf("uplink context menu = %#v", uplinkMenu)
 	}
 

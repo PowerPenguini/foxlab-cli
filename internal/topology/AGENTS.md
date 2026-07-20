@@ -19,10 +19,11 @@
 - Removing workloads or NICs must also remove stale direct network links and detach managed disk layers where applicable.
 - Disk attachment activates the selected disk only: a base disk is attached directly, an existing layer is attached directly, and new qcow2 layers are created only by explicit layer actions.
 - Command result strings are user-visible; keep names and wording stable once introduced.
+- VM and container create/update entrypoints accept the typed requests from `workload_requests.go`; do not reintroduce `map[string]string` command arguments at this boundary.
 
 ## Work Guidance
 
-- Put lab-changing command behavior here, then keep `internal/topologyui` as a thin parser/wiring layer.
+- Put lab-changing command behavior here, then keep `internal/topologyui` as a thin parser/wiring layer that converts command text into typed requests.
 - Prefer small helpers that preserve existing command grammar over broad abstractions.
 - When adding arguments, reject unsupported keys explicitly and update command tests.
 - Keep filesystem writes for managed disks under paths returned by `internal/lab`.

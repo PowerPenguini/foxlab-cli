@@ -1,47 +1,41 @@
 package topology
 
 import (
+	"maps"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"foxlab-cli/internal/lab"
 )
 
-func (s *Service) VMCreate(name string, args map[string]string) Result {
+func (s *Service) CreateVM(request VMCreateRequest) Result {
 	if s.Lab == nil {
 		return Failure("vm create needs a loaded .lab file")
 	}
-	name = firstNonEmpty(args["name"], name)
+	name := request.Name
 	if name == "" {
 		return Failure("usage: vm create <name> [cpus=N] [memory=N] [switch=NAME|uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
 		return Failure(err)
 	}
-	if invalid := unexpectedVMCreateArgs(args); len(invalid) > 0 {
-		return Failure("unsupported vm create argument: " + invalid[0])
-	}
 	cpus := 2
-	if value, present, ok := positiveIntField(args, "cpus"); present {
-		if !ok {
-			return Failure("invalid vm cpus: " + args["cpus"])
+	if request.CPUs.Set {
+		if request.CPUs.Value <= 0 {
+			return Failure("invalid vm cpus: " + strconv.Itoa(request.CPUs.Value))
 		}
-		cpus = value
+		cpus = request.CPUs.Value
 	}
 	memory := 2048
-	if value, present, ok := positiveIntField(args, "memory"); present {
-		if !ok {
-			return Failure("invalid vm memory: " + args["memory"])
+	if request.MemoryMB.Set {
+		if request.MemoryMB.Value <= 0 {
+			return Failure("invalid vm memory: " + strconv.Itoa(request.MemoryMB.Value))
 		}
-		memory = value
-	}
-	if value, present, ok := positiveIntField(args, "mem"); present {
-		if !ok {
-			return Failure("invalid vm memory: " + args["mem"])
-		}
-		memory = value
+		memory = request.MemoryMB.Value
 	}
 	switchRef := ""
-	if value := args["switch"]; value != "" {
+	if value := request.Network.Switch; value != "" {
 		var ok bool
 		switchRef, ok = s.resolveSwitchID(value)
 		if !ok {
@@ -49,7 +43,7 @@ func (s *Service) VMCreate(name string, args map[string]string) Result {
 		}
 	}
 	externalRef := ""
-	if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
+	if value := request.Network.Uplink; value != "" {
 		var ok bool
 		externalRef, ok = s.resolveExternalID(value)
 		if !ok {
@@ -71,7 +65,7 @@ func (s *Service) VMCreate(name string, args map[string]string) Result {
 		ID:       id,
 		MemoryMB: memory,
 		CPUs:     cpus,
-		Disk:     filepath.ToSlash(args["disk"]),
+		Disk:     filepath.ToSlash(request.Disk),
 	}
 	if switchRef != "" {
 		vm.Networks = append(vm.Networks, lab.VMNetwork{Switch: switchRef})
@@ -90,7 +84,7 @@ func (s *Service) VMCreate(name string, args map[string]string) Result {
 	return Success("created vm:" + name)
 }
 
-func (s *Service) VMSet(ref string, args map[string]string) Result {
+func (s *Service) UpdateVM(ref string, update VMUpdate) Result {
 	if s.Lab == nil {
 		return Failure("vm set needs a loaded .lab file")
 	}
@@ -102,42 +96,17 @@ func (s *Service) VMSet(ref string, args map[string]string) Result {
 		if s.Lab.VMs[i].ID != id {
 			continue
 		}
-		if invalid := unexpectedVMSetArgs(args); len(invalid) > 0 {
-			return Failure("unsupported vm set argument: " + invalid[0])
-		}
-		if len(args) == 0 {
+		if !vmUpdateRequested(update) {
 			return Info("configured " + s.workloadDisplayRef("vm", id))
 		}
-		vncEnabled := false
-		if value, ok := args["vnc"]; ok {
-			var valid bool
-			vncEnabled, valid = parseBool(value)
-			if !valid {
-				return Failure("invalid vm vnc: " + value)
-			}
+		if update.CPUs.Set && update.CPUs.Value <= 0 {
+			return Failure("invalid vm cpus: " + strconv.Itoa(update.CPUs.Value))
 		}
-		cpus := 0
-		if value, present, ok := positiveIntField(args, "cpus"); present {
-			if !ok {
-				return Failure("invalid vm cpus: " + args["cpus"])
-			}
-			cpus = value
-		}
-		memory := 0
-		if value, present, ok := positiveIntField(args, "memory"); present {
-			if !ok {
-				return Failure("invalid vm memory: " + args["memory"])
-			}
-			memory = value
-		}
-		if value, present, ok := positiveIntField(args, "mem"); present {
-			if !ok {
-				return Failure("invalid vm memory: " + args["mem"])
-			}
-			memory = value
+		if update.MemoryMB.Set && update.MemoryMB.Value <= 0 {
+			return Failure("invalid vm memory: " + strconv.Itoa(update.MemoryMB.Value))
 		}
 		switchRef := ""
-		if value := args["switch"]; value != "" {
+		if value := update.Network.Switch; value != "" {
 			var ok bool
 			switchRef, ok = s.resolveSwitchID(value)
 			if !ok {
@@ -145,7 +114,7 @@ func (s *Service) VMSet(ref string, args map[string]string) Result {
 			}
 		}
 		externalRef := ""
-		if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
+		if value := update.Network.Uplink; value != "" {
 			var ok bool
 			externalRef, ok = s.resolveExternalID(value)
 			if !ok {
@@ -160,27 +129,27 @@ func (s *Service) VMSet(ref string, args map[string]string) Result {
 		}
 		mutation := s.beginLabMutation()
 		renamed := false
-		if value := args["name"]; value != "" {
+		if value := update.Name.Value; update.Name.Set && value != "" {
 			if err := s.renameNodeID("vm", id, value); err != nil {
 				return FailureWithCause("vm rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
 		}
-		if value, ok := args["disk"]; ok {
-			s.Lab.VMs[i].Disk = value
+		if update.Disk.Set {
+			s.Lab.VMs[i].Disk = update.Disk.Value
 		}
-		if value, ok := args["iso"]; ok {
-			s.Lab.VMs[i].ISO = value
+		if update.ISO.Set {
+			s.Lab.VMs[i].ISO = update.ISO.Value
 		}
-		if _, ok := args["vnc"]; ok {
-			s.Lab.VMs[i].VNC = vncEnabled
+		if update.VNC.Set {
+			s.Lab.VMs[i].VNC = update.VNC.Value
 		}
-		if cpus > 0 {
-			s.Lab.VMs[i].CPUs = cpus
+		if update.CPUs.Set {
+			s.Lab.VMs[i].CPUs = update.CPUs.Value
 		}
-		if memory > 0 {
-			s.Lab.VMs[i].MemoryMB = memory
+		if update.MemoryMB.Set {
+			s.Lab.VMs[i].MemoryMB = update.MemoryMB.Value
 		}
 		if switchRef != "" {
 			s.removeNetworkLinksForNode("vm", id)
@@ -232,25 +201,22 @@ func (s *Service) VMDelete(ref string) Result {
 	return Success("deleted " + s.workloadDisplayRef("vm", id))
 }
 
-func (s *Service) ContainerCreate(name string, args map[string]string) Result {
+func (s *Service) CreateContainer(request ContainerCreateRequest) Result {
 	if s.Lab == nil {
 		return Failure("container create needs a loaded .lab file")
 	}
-	name = firstNonEmpty(args["name"], name)
+	name := request.Name
 	if name == "" {
 		return Failure("usage: container create <name> [image=REF] [command=CMD] [switch=NAME|uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
 		return Failure(err)
 	}
-	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
-		return Failure("unsupported container create argument: " + invalid[0])
-	}
-	if err := validateNICMACArg("container nic", args["mac"]); err != nil {
+	if err := validateNICMACArg("container nic", request.Network.MAC); err != nil {
 		return FailureWithCause(err.Error(), err)
 	}
 	switchRef := ""
-	if value := args["switch"]; value != "" {
+	if value := request.Network.Switch; value != "" {
 		var ok bool
 		switchRef, ok = s.resolveSwitchID(value)
 		if !ok {
@@ -258,7 +224,7 @@ func (s *Service) ContainerCreate(name string, args map[string]string) Result {
 		}
 	}
 	externalRef := ""
-	if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
+	if value := request.Network.Uplink; value != "" {
 		var ok bool
 		externalRef, ok = s.resolveExternalID(value)
 		if !ok {
@@ -278,16 +244,17 @@ func (s *Service) ContainerCreate(name string, args map[string]string) Result {
 	mutation := s.beginLabMutation()
 	ct := lab.Container{
 		ID:      id,
-		Image:   firstNonEmpty(args["image"], "?"),
-		Disk:    args["disk"],
-		Command: splitCommand(args["command"]),
-		Env:     parseEnv(args["env"]),
+		Image:   firstNonEmpty(request.Image, "?"),
+		Disk:    request.Disk,
+		Command: append([]string(nil), request.Command...),
+		Shell:   strings.TrimSpace(request.Shell),
+		Env:     maps.Clone(request.Env),
 	}
 	if switchRef != "" {
-		ct.Networks = append(ct.Networks, lab.ContainerNetwork{Switch: switchRef, MAC: args["mac"]})
+		ct.Networks = append(ct.Networks, lab.ContainerNetwork{Switch: switchRef, MAC: request.Network.MAC})
 	}
 	if externalRef != "" {
-		ct.Networks = append(ct.Networks, lab.ContainerNetwork{ExternalLink: externalRef, MAC: args["mac"]})
+		ct.Networks = append(ct.Networks, lab.ContainerNetwork{ExternalLink: externalRef, MAC: request.Network.MAC})
 	}
 	s.Lab.Containers = append(s.Lab.Containers, ct)
 	if s.Lab.Layout.Nodes == nil {
@@ -300,12 +267,9 @@ func (s *Service) ContainerCreate(name string, args map[string]string) Result {
 	return Success("created container:" + name)
 }
 
-func (s *Service) ContainerSet(ref string, args map[string]string) Result {
+func (s *Service) UpdateContainer(ref string, update ContainerUpdate) Result {
 	if s.Lab == nil {
 		return Failure("container set needs a loaded .lab file")
-	}
-	if invalid := unexpectedContainerArgs(args); len(invalid) > 0 {
-		return Failure("unsupported container set argument: " + invalid[0])
 	}
 	id, ok := s.resolveContainerID(ref)
 	if !ok {
@@ -315,14 +279,14 @@ func (s *Service) ContainerSet(ref string, args map[string]string) Result {
 		if s.Lab.Containers[i].ID != id {
 			continue
 		}
-		if len(args) == 0 {
+		if !containerUpdateRequested(update) {
 			return Info("configured " + s.workloadDisplayRef("container", id))
 		}
-		if err := validateNICMACArg("container nic", args["mac"]); err != nil {
+		if err := validateNICMACArg("container nic", update.Network.MAC); err != nil {
 			return FailureWithCause(err.Error(), err)
 		}
 		switchRef := ""
-		if value := args["switch"]; value != "" {
+		if value := update.Network.Switch; value != "" {
 			var ok bool
 			switchRef, ok = s.resolveSwitchID(value)
 			if !ok {
@@ -330,7 +294,7 @@ func (s *Service) ContainerSet(ref string, args map[string]string) Result {
 			}
 		}
 		externalRef := ""
-		if value := firstNonEmpty(args["uplink"], args["external"]); value != "" {
+		if value := update.Network.Uplink; value != "" {
 			var ok bool
 			externalRef, ok = s.resolveExternalID(value)
 			if !ok {
@@ -345,33 +309,36 @@ func (s *Service) ContainerSet(ref string, args map[string]string) Result {
 		}
 		mutation := s.beginLabMutation()
 		renamed := false
-		if value := args["name"]; value != "" {
+		if value := update.Name.Value; update.Name.Set && value != "" {
 			if err := s.renameNodeID("container", id, value); err != nil {
 				return FailureWithCause("container rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
 		}
-		if value := args["image"]; value != "" {
+		if value := update.Image.Value; update.Image.Set && value != "" {
 			s.Lab.Containers[i].Image = value
 		}
-		if value, ok := args["disk"]; ok {
-			s.Lab.Containers[i].Disk = value
+		if update.Disk.Set {
+			s.Lab.Containers[i].Disk = update.Disk.Value
 		}
-		if value, ok := args["command"]; ok {
-			s.Lab.Containers[i].Command = splitCommand(value)
+		if update.Command.Set {
+			s.Lab.Containers[i].Command = append([]string(nil), update.Command.Value...)
 		}
-		if value, ok := args["env"]; ok {
-			s.Lab.Containers[i].Env = parseEnv(value)
+		if update.Shell.Set {
+			s.Lab.Containers[i].Shell = strings.TrimSpace(update.Shell.Value)
+		}
+		if update.Env.Set {
+			s.Lab.Containers[i].Env = maps.Clone(update.Env.Value)
 		}
 		if switchRef != "" {
 			s.removeNetworkLinksForNode("container", id)
-			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: switchRef, MAC: args["mac"]}}
+			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: switchRef, MAC: update.Network.MAC}}
 		}
 		if externalRef != "" {
 			s.removeNetworkLinksForNode("container", id)
-			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: externalRef, MAC: args["mac"]}}
-		} else if value := args["mac"]; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
+			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: externalRef, MAC: update.Network.MAC}}
+		} else if value := update.Network.MAC; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
 			s.Lab.Containers[i].Networks[0].MAC = value
 		}
 		if err := mutation.Commit(); err != nil {
@@ -384,6 +351,16 @@ func (s *Service) ContainerSet(ref string, args map[string]string) Result {
 		return ChangedInfo(message)
 	}
 	return Failure("container not found: " + id)
+}
+
+func vmUpdateRequested(update VMUpdate) bool {
+	return update.Name.Set || update.CPUs.Set || update.MemoryMB.Set || update.Disk.Set || update.ISO.Set || update.VNC.Set ||
+		update.Network.Switch != "" || update.Network.Uplink != ""
+}
+
+func containerUpdateRequested(update ContainerUpdate) bool {
+	return update.Name.Set || update.Image.Set || update.Disk.Set || update.Command.Set || update.Shell.Set || update.Env.Set ||
+		update.Network.Switch != "" || update.Network.Uplink != "" || update.Network.MAC != ""
 }
 
 func (s *Service) ContainerDelete(ref string) Result {

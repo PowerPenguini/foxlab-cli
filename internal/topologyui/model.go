@@ -114,6 +114,9 @@ func ModelFromLab(l *lab.Lab) Model {
 		if len(ct.Command) > 0 {
 			details = append(details, "command="+strings.Join(ct.Command, " "))
 		}
+		if ct.Shell != "" {
+			details = append(details, "shell="+ct.Shell)
+		}
 		for key, value := range ct.Env {
 			details = append(details, "env."+key+"="+value)
 		}
