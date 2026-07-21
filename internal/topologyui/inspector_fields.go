@@ -154,13 +154,13 @@ func inspectorDiskFields(node Node, state ViewState) []inspectorField {
 		if kind == "layer" {
 			label = "Layer"
 		}
-		status := "attach"
+		value := strings.TrimSpace(item)
 		if action == diskMenuActionNone {
-			status = "attached"
+			value += " · attached"
 			hasAttached = true
 		}
 		fields = append(fields, inspectorField{
-			id: "disk:" + diskID, label: label, value: strings.TrimSpace(item) + " · " + status,
+			id: "disk:" + diskID, label: label, value: value,
 			kind: inspectorFieldDisk, nodeID: node.ID, nodeType: node.Type,
 			diskID: diskID, diskAction: action, diskKind: kind,
 		})

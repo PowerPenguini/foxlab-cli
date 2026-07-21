@@ -310,6 +310,14 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 		a.deleteInspectorResource(fields[index])
 		return false
 	}
+	if button, hasButton := inspectorDiskAttachButtonRect(fields[index], panel, event.y); hasButton {
+		a.State.Focus = FocusInspector
+		a.State.InspectorSelected = index
+		if xyInRect(event.x, event.y, button) {
+			a.activateInspectorField(fields[index])
+		}
+		return false
+	}
 	a.State.Focus = FocusInspector
 	a.State.InspectorSelected = index
 	a.activateInspectorField(fields[index])

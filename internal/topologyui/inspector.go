@@ -237,29 +237,36 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		g.Text(x, y, fit(field.label, keyWidth), labelStyle)
 		valueX := x + keyWidth + 1
 		valueRight := panel.X + panel.W - 3
+		attachButton, hasAttachButton := inspectorDiskAttachButtonRect(field, panel, y)
+		if hasAttachButton {
+			valueRight = attachButton.X - 1
+		}
 		valueWidth := valueRight - valueX
-		if valueWidth <= 0 {
-			continue
-		}
-		valueStyle := inspectorFieldValueStyle(field, active)
-		value := inspectorFieldDisplayValue(field)
-		displayWidth := valueWidth - 1
-		switch {
-		case active && state.InspectorEditing && inspectorFieldSupportsInlineEdit(field):
-			value = inspectorEditViewport(state.InspectorEditValue, state.InspectorEditCursor, displayWidth)
-		case value == "":
-			value = contextEditPlaceholder
-			if !active {
-				valueStyle = themePanelInspectorMuted
+		if valueWidth > 0 {
+			valueStyle := inspectorFieldValueStyle(field, active)
+			value := inspectorFieldDisplayValue(field)
+			displayWidth := valueWidth - 1
+			switch {
+			case active && state.InspectorEditing && inspectorFieldSupportsInlineEdit(field):
+				value = inspectorEditViewport(state.InspectorEditValue, state.InspectorEditCursor, displayWidth)
+			case value == "":
+				value = contextEditPlaceholder
+				if !active {
+					valueStyle = themePanelInspectorMuted
+				}
+				value = fit(value, displayWidth)
+			case field.kind == inspectorFieldText || field.kind == inspectorFieldDisk:
+				value = inspectorTailViewport(value, displayWidth)
+			default:
+				value = fit(value, displayWidth)
 			}
-			value = fit(value, displayWidth)
-		case field.kind == inspectorFieldText || field.kind == inspectorFieldDisk:
-			value = inspectorTailViewport(value, displayWidth)
-		default:
-			value = fit(value, displayWidth)
+			g.Text(valueX+1, y, value, valueStyle)
 		}
-		g.Text(valueX+1, y, value, valueStyle)
+		if hasAttachButton {
+			drawInspectorInlineButton(g, attachButton, "Attach", inspectorButtonCyanStyle, active)
+		}
 		if field.kind == inspectorFieldNIC {
+			valueStyle := inspectorFieldValueStyle(field, active)
 			g.Set(panel.X+panel.W-4, y, '×', valueStyle)
 		}
 	}
@@ -278,6 +285,27 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 			drawInspectorInterfacePicker(g, node, state, panel, fields)
 		}
 	}
+}
+
+func inspectorDiskAttachButtonRect(field inspectorField, panel rect, y int) (rect, bool) {
+	if field.kind != inspectorFieldDisk || field.diskAction != diskMenuActionAttach || field.diskID == "" {
+		return rect{}, false
+	}
+	const width = 10
+	right := panel.X + panel.W - 3
+	return rect{X: right - width, Y: y, W: width, H: 1}, true
+}
+
+func drawInspectorInlineButton(g *grid, button rect, label, style string, selected bool) {
+	if button.W <= 0 || button.H <= 0 {
+		return
+	}
+	if selected {
+		style = inspectorActiveActionButtonStyle(style)
+	}
+	fillRow(g, button.X, button.Y, button.W, style)
+	labelX := button.X + max(0, (button.W-runeLen(label))/2)
+	g.Text(labelX, button.Y, fit(label, button.W), style)
 }
 
 func inspectorTailViewport(value string, width int) string {

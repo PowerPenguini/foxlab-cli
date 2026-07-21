@@ -416,6 +416,91 @@ func TestInspectorBuildsNICAndDiskSectionsFromTypedMetadata(t *testing.T) {
 	if layer.diskKind != "layer" || layer.diskAction != diskMenuActionAttach || layer.diskID != "layer-a" {
 		t.Fatalf("layer disk inspector field = %#v", layer)
 	}
+	if layer.value != "| layer-a" {
+		t.Fatalf("attachable layer value = %q, want disk label without inline attach text", layer.value)
+	}
+	if base.value != "base-a 10G · attached" {
+		t.Fatalf("attached base value = %q, want attached status", base.value)
+	}
+}
+
+func TestInspectorDiskAttachIsRightAlignedButton(t *testing.T) {
+	m := ModelFromLab(&lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", CPUs: 2, MemoryMB: 2048}}})
+	state := ViewState{
+		Focus:                FocusInspector,
+		InspectorDiskItems:   []string{"Add Disk", "data 10G"},
+		InspectorDiskActions: []string{diskMenuActionCreate, diskMenuActionAttach},
+		InspectorDiskKinds:   []string{"", "base"},
+		InspectorDiskIDs:     []string{"", "data"},
+	}
+	fields := inspectorFieldsForState(m.Nodes[0], state)
+	diskIndex := inspectorFieldIndex(t, fields, "disk:data", "")
+	state.InspectorSelected = diskIndex
+	panel := inspectorBounds(120, 30)
+	y, ok := inspectorFieldY(panel, state, fields, diskIndex)
+	if !ok {
+		t.Fatal("attachable disk row is not visible")
+	}
+	button, ok := inspectorDiskAttachButtonRect(fields[diskIndex], panel, y)
+	if !ok {
+		t.Fatal("attachable disk has no button rect")
+	}
+	if button.X+button.W != panel.X+panel.W-3 {
+		t.Fatalf("Attach button right edge = %d, want %d", button.X+button.W, panel.X+panel.W-3)
+	}
+	g := renderGrid(m, state, 120, 30)
+	if got := g.Cells[y*g.Width+button.X].Style; got != inspectorButtonCyanActiveStyle {
+		t.Fatalf("selected Attach button style = %q, want %q", got, inspectorButtonCyanActiveStyle)
+	}
+	if out := g.String(false); !strings.Contains(out, "Attach") || strings.Contains(out, "data 10G · attach") {
+		t.Fatalf("Attach button did not replace inline status:\n%s", out)
+	}
+}
+
+func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
+	dir := t.TempDir()
+	labPath := filepath.Join(dir, "demo.lab")
+	diskPath := filepath.Join(dir, "data.qcow2")
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "vm1", CPUs: 2, MemoryMB: 2048}},
+		Disks: []lab.Disk{{
+			ID: "data", Path: diskPath, SizeGB: 10, Format: "qcow2", Kind: "base",
+		}},
+	}
+	if err := lab.SaveFile(labPath, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(labPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
+		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+	}
+	fields := app.selectedInspectorFields()
+	diskIndex := inspectorFieldIndex(t, fields, "disk:data", "")
+	app.State.InspectorSelected = diskIndex
+	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
+	y, ok := inspectorFieldY(panel, app.State, fields, diskIndex)
+	if !ok {
+		t.Fatal("attachable disk row is not visible")
+	}
+
+	app.handleInspectorMouse(mouseEvent{x: panel.X + 5, y: y, button: 0}, panel)
+	if got := app.Lab.Disks[0].AttachedTo; got != "" {
+		t.Fatalf("clicking disk label attached it to %q, want selection only", got)
+	}
+
+	button, ok := inspectorDiskAttachButtonRect(fields[diskIndex], panel, y)
+	if !ok {
+		t.Fatal("attachable disk has no mouse button rect")
+	}
+	app.handleInspectorMouse(mouseEvent{x: button.X + 1, y: y, button: 0}, panel)
+	if got := app.Lab.Disks[0].AttachedTo; got != "vm1" {
+		t.Fatalf("clicking Attach attached disk to %q, want vm1; message=%q", got, app.State.Message)
+	}
 }
 
 func TestInspectorAddDiskShowsInlineCursorAndWorksFromMouse(t *testing.T) {
