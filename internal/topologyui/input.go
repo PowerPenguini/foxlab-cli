@@ -62,17 +62,6 @@ func (a *App) handleKey(key string) bool {
 		if node, ok := selectedNode(a.Model, a.State.Selected); ok {
 			a.startMove(node)
 		}
-	case "space":
-		if a.State.Focus == FocusGraph {
-			if _, ok := selectedNode(a.Model, a.State.Selected); !ok {
-				return false
-			}
-			a.State.openOverlay(overlayContextMenu)
-			a.State.ContextGroup = ""
-			a.State.ContextInSubmenu = false
-			a.State.ContextSelected = 0
-			a.State.closeContextSelectMenu()
-		}
 	}
 	return false
 }

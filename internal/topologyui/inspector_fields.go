@@ -16,11 +16,17 @@ const (
 	inspectorFieldInterfacePicker  = "interface-picker"
 	inspectorFieldPower            = "power"
 	inspectorFieldShellAction      = "shell-action"
+	inspectorFieldVNCAction        = "vnc-action"
+	inspectorFieldNICAdd           = "nic-add"
+	inspectorFieldNIC              = "nic"
+	inspectorFieldDiskAdd          = "disk-add"
+	inspectorFieldDisk             = "disk"
+	inspectorFieldMoveAction       = "move-action"
 	inspectorFieldDeleteAction     = "delete-action"
 )
 
 const (
-	inspectorFieldListY = 8
+	inspectorFieldListY = 11
 	inspectorFooterRows = 1
 )
 
@@ -32,6 +38,10 @@ type inspectorField struct {
 	nodeID     string
 	nodeType   string
 	capability string
+	nicIndex   string
+	diskID     string
+	diskAction string
+	diskKind   string
 	choices    []string
 }
 
@@ -43,6 +53,10 @@ type inspectorPanelRow struct {
 }
 
 func inspectorFields(node Node) []inspectorField {
+	return inspectorFieldsForState(node, ViewState{})
+}
+
+func inspectorFieldsForState(node Node, state ViewState) []inspectorField {
 	field := func(id, label, value, kind string) inspectorField {
 		return inspectorField{id: id, label: label, value: value, kind: kind, nodeID: node.ID, nodeType: node.Type}
 	}
@@ -56,6 +70,9 @@ func inspectorFields(node Node) []inspectorField {
 			field("desiredState", "Power", power, inspectorFieldPower),
 			field("shellAction", "Shell", node.State, inspectorFieldShellAction),
 		)
+		if node.Type == NodeVM {
+			fields = append(fields, field("vncAction", "VNC", node.State, inspectorFieldVNCAction))
+		}
 	}
 	switch node.Type {
 	case NodeVM:
@@ -88,10 +105,82 @@ func inspectorFields(node Node) []inspectorField {
 			inspectorField{id: "mode", label: "Mode", value: nodeDetailRawValue(node, "mode"), kind: inspectorFieldChoice, nodeID: node.ID, nodeType: node.Type, choices: []string{"nat", "direct", "macnat"}},
 		)
 	}
+	if node.Type == NodeVM || node.Type == NodeContainer {
+		fields = append(fields, field("addNIC", "Add NIC", "+", inspectorFieldNICAdd))
+		for _, detail := range nicDetails(node.Details) {
+			index, ok := nicDetailIndex(detail)
+			if !ok {
+				continue
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(detail), "nic"+index))
+			value = strings.TrimSpace(strings.TrimLeft(value, "→↔-"))
+			if value == "" {
+				value = "Disconnected"
+			}
+			fields = append(fields, inspectorField{
+				id: "nic" + index, label: "NIC " + index, value: value, kind: inspectorFieldNIC,
+				nodeID: node.ID, nodeType: node.Type, nicIndex: index,
+			})
+		}
+		fields = append(fields, field("addDisk", "Add Disk", "+", inspectorFieldDiskAdd))
+		fields = append(fields, inspectorDiskFields(node, state)...)
+	}
 	if node.Type == NodeVM || node.Type == NodeContainer || node.Type == NodeSwitch || node.Type == NodeExternal {
-		fields = append(fields, field("deleteAction", "Delete", "", inspectorFieldDeleteAction))
+		fields = append(fields,
+			field("moveAction", "Move", "", inspectorFieldMoveAction),
+			field("deleteAction", "Delete", "", inspectorFieldDeleteAction),
+		)
 	}
 	return fields
+}
+
+func inspectorDiskFields(node Node, state ViewState) []inspectorField {
+	if state.InspectorDiskItems == nil {
+		if value := nodeDetailRawValue(node, "disk"); value != "" {
+			return []inspectorField{{id: "disk", label: "Disk", value: value, kind: inspectorFieldDisk, nodeID: node.ID, nodeType: node.Type, diskAction: diskMenuActionNone}}
+		}
+		return nil
+	}
+	fields := []inspectorField{}
+	hasAttached := false
+	for index, item := range state.InspectorDiskItems {
+		if index == 0 || strings.EqualFold(strings.TrimSpace(item), "No disks") {
+			continue
+		}
+		action := sliceString(state.InspectorDiskActions, index)
+		kind := sliceString(state.InspectorDiskKinds, index)
+		diskID := sliceString(state.InspectorDiskIDs, index)
+		label := "Disk"
+		if kind == "layer" {
+			label = "Layer"
+		}
+		status := "attach"
+		if action == diskMenuActionNone {
+			status = "attached"
+			hasAttached = true
+		}
+		fields = append(fields, inspectorField{
+			id: "disk:" + diskID, label: label, value: strings.TrimSpace(item) + " · " + status,
+			kind: inspectorFieldDisk, nodeID: node.ID, nodeType: node.Type,
+			diskID: diskID, diskAction: action, diskKind: kind,
+		})
+	}
+	if !hasAttached {
+		if value := nodeDetailRawValue(node, "disk"); value != "" {
+			fields = append(fields, inspectorField{
+				id: "disk", label: "Disk", value: value + " · attached", kind: inspectorFieldDisk,
+				nodeID: node.ID, nodeType: node.Type, diskAction: diskMenuActionNone,
+			})
+		}
+	}
+	return fields
+}
+
+func sliceString(values []string, index int) string {
+	if index < 0 || index >= len(values) {
+		return ""
+	}
+	return values[index]
 }
 
 func containerEnvValue(node Node) string {
@@ -115,13 +204,21 @@ func inspectorPanelRowsFor(fields []inspectorField) []inspectorPanelRow {
 	rows := make([]inspectorPanelRow, 0, len(fields)+2)
 	lastSection := ""
 	for index, field := range fields {
-		if field.kind == inspectorFieldPower || field.kind == inspectorFieldShellAction {
+		if field.kind == inspectorFieldPower || field.kind == inspectorFieldShellAction || field.kind == inspectorFieldVNCAction {
+			continue
+		}
+		if field.kind == inspectorFieldMoveAction {
+			rows = append(rows,
+				inspectorPanelRow{fieldIndex: -1, spacer: true},
+				inspectorPanelRow{fieldIndex: -1, spacer: true},
+				inspectorPanelRow{fieldIndex: index, buttonPart: -1},
+				inspectorPanelRow{fieldIndex: index},
+				inspectorPanelRow{fieldIndex: index, buttonPart: 1},
+			)
 			continue
 		}
 		if field.kind == inspectorFieldDeleteAction {
 			rows = append(rows,
-				inspectorPanelRow{fieldIndex: -1, spacer: true},
-				inspectorPanelRow{fieldIndex: -1, spacer: true},
 				inspectorPanelRow{fieldIndex: index, buttonPart: -1},
 				inspectorPanelRow{fieldIndex: index},
 				inspectorPanelRow{fieldIndex: index, buttonPart: 1},
@@ -141,6 +238,12 @@ func inspectorPanelRowsFor(fields []inspectorField) []inspectorPanelRow {
 func inspectorFieldSection(field inspectorField) string {
 	if field.kind == inspectorFieldCapabilityPicker {
 		return "LINUX CAPABILITIES"
+	}
+	switch field.kind {
+	case inspectorFieldNICAdd, inspectorFieldNIC:
+		return "NIC"
+	case inspectorFieldDiskAdd, inspectorFieldDisk:
+		return "DISK"
 	}
 	switch field.nodeType {
 	case NodeVM, NodeContainer:
@@ -173,7 +276,6 @@ func inspectorFieldWindow(panel rect, state ViewState, fields []inspectorField) 
 	for index, row := range rows {
 		if row.fieldIndex == selectedField {
 			selectedRow = index
-			break
 		}
 	}
 	return rows, contextMenuStart(selectedRow, len(rows), visible), visible

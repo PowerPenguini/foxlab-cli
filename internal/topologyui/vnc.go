@@ -2,14 +2,32 @@ package topologyui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
 	"strconv"
+	"syscall"
+	"time"
 )
 
+type managedVNCViewer struct {
+	id      string
+	command *exec.Cmd
+	done    chan error
+}
+
 func (a *App) startVNC(node Node) {
+	if a.vncViewerRunning(node.ID) {
+		if err := a.stopVNCViewer(node.ID); err != nil {
+			a.State.Message = "vnc stop failed: " + err.Error()
+		} else {
+			a.State.Message = "vnc stopped"
+		}
+		return
+	}
 	a.queueVNC(node)
 }
 
@@ -68,7 +86,9 @@ func (a *App) vncCommand(node Node) (shellCommand, error) {
 	}
 	target := "127.0.0.1::" + strconv.Itoa(port)
 	return shellCommand{
-		Display: "vnc " + target,
+		Display:      "vnc " + target,
+		WorkloadType: NodeVM,
+		WorkloadID:   node.ID,
 		NativeRun: func(a *App) error {
 			cmd := vncViewerCommand(viewer, target)
 			cmd.Stdin = a.In
@@ -76,7 +96,125 @@ func (a *App) vncCommand(node Node) (shellCommand, error) {
 			cmd.Stderr = a.Out
 			return cmd.Run()
 		},
+		BackgroundCommand: func(_ *App) *exec.Cmd {
+			return vncViewerCommand(viewer, target)
+		},
 	}, nil
+}
+
+func (a *App) startVNCViewer(command shellCommand) error {
+	if command.WorkloadID == "" || command.BackgroundCommand == nil {
+		return fmt.Errorf("vnc command has no background runner")
+	}
+	if a.vncViewerRunning(command.WorkloadID) {
+		return nil
+	}
+	cmd := command.BackgroundCommand(a)
+	if cmd == nil {
+		return fmt.Errorf("vnc command is empty")
+	}
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	viewer := &managedVNCViewer{id: command.WorkloadID, command: cmd, done: make(chan error, 1)}
+	if a.vncViewers == nil {
+		a.vncViewers = map[string]*managedVNCViewer{}
+	}
+	key := NodeKey(NodeVM, command.WorkloadID)
+	a.vncViewers[key] = viewer
+	a.setVNCViewerActive(command.WorkloadID, true)
+	go func() {
+		viewer.done <- cmd.Wait()
+		if a.tabs != nil {
+			a.tabs.notify()
+		}
+	}()
+	return nil
+}
+
+func (a *App) vncViewerRunning(id string) bool {
+	key := NodeKey(NodeVM, id)
+	viewer, ok := a.vncViewers[key]
+	if !ok || viewer == nil {
+		a.setVNCViewerActive(id, false)
+		return false
+	}
+	select {
+	case <-viewer.done:
+		delete(a.vncViewers, key)
+		a.setVNCViewerActive(id, false)
+		return false
+	default:
+		a.setVNCViewerActive(id, true)
+		return true
+	}
+}
+
+func (a *App) setVNCViewerActive(id string, active bool) {
+	if a.State.VNCViewerActive == nil {
+		if !active {
+			return
+		}
+		a.State.VNCViewerActive = map[string]bool{}
+	}
+	key := NodeKey(NodeVM, id)
+	if active {
+		a.State.VNCViewerActive[key] = true
+		return
+	}
+	delete(a.State.VNCViewerActive, key)
+}
+
+func (a *App) stopVNCViewer(id string) error {
+	key := NodeKey(NodeVM, id)
+	viewer, ok := a.vncViewers[key]
+	if !ok || viewer == nil {
+		a.setVNCViewerActive(id, false)
+		return nil
+	}
+	err := signalVNCViewer(viewer, syscall.SIGTERM)
+	if err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	delete(a.vncViewers, key)
+	a.setVNCViewerActive(id, false)
+	return nil
+}
+
+func signalVNCViewer(viewer *managedVNCViewer, signal syscall.Signal) error {
+	if viewer == nil || viewer.command == nil || viewer.command.Process == nil {
+		return nil
+	}
+	return syscall.Kill(-viewer.command.Process.Pid, signal)
+}
+
+func (a *App) refreshVNCViewerProcesses() {
+	for _, viewer := range a.vncViewers {
+		a.vncViewerRunning(viewer.id)
+	}
+}
+
+func (a *App) stopAllVNCViewers() {
+	viewers := make([]*managedVNCViewer, 0, len(a.vncViewers))
+	for _, viewer := range a.vncViewers {
+		viewers = append(viewers, viewer)
+		_ = a.stopVNCViewer(viewer.id)
+	}
+	for _, viewer := range viewers {
+		select {
+		case <-viewer.done:
+		case <-time.After(500 * time.Millisecond):
+			_ = signalVNCViewer(viewer, syscall.SIGKILL)
+			select {
+			case <-viewer.done:
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
 }
 
 func vncViewerCommand(viewer, target string) *exec.Cmd {

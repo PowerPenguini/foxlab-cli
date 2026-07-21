@@ -65,11 +65,14 @@ func (a *App) handleMouseKey(key string) bool {
 		return false
 	}
 	if event.button != 0 {
+		if a.State.DiskExplorerOpen && (event.button == 64 || event.button == 65) && a.handleDiskImportBrowserScroll(event) {
+			return false
+		}
 		if a.State.InspectorCapOpen && (event.button == 64 || event.button == 65) {
 			panel := inspectorBounds(a.ViewWidth, a.contentHeight())
 			if xyInRect(event.x, event.y, panel) {
 				node, nodeOK := selectedNode(a.Model, a.State.Selected)
-				if nodeOK && a.handleInspectorPickerMouse(event, panel, node, inspectorFields(node)) {
+				if nodeOK && a.handleInspectorPickerMouse(event, panel, node, a.inspectorFields(node)) {
 					return false
 				}
 			}

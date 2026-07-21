@@ -471,6 +471,13 @@ func (a *App) diskCreate(id string, args map[string]string) {
 	a.syncAfterServiceMutation()
 }
 
+func (a *App) diskImport(source string) topology.Result {
+	result := a.ensureService().DiskImport(source)
+	a.setOperationResult(result)
+	a.syncAfterServiceMutation()
+	return result
+}
+
 func (a *App) diskAttach(id string, args map[string]string) {
 	a.setOperationResult(a.ensureService().DiskAttach(id, args))
 	a.syncAfterServiceMutation()

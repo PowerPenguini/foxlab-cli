@@ -27,6 +27,7 @@ type domainXMLData struct {
 	ISO        string
 	HasISO     bool
 	HasVNC     bool
+	HasTablet  bool   `json:",omitempty"`
 	ConfigHash string `json:"-"`
 	Networks   []domainNetworkXMLData
 }
@@ -75,14 +76,15 @@ func domainXMLWithUUID(l *lab.Lab, vm lab.VM, uuid string) (string, error) {
 
 func desiredDomainXMLData(l *lab.Lab, vm lab.VM) (domainXMLData, error) {
 	data := domainXMLData{
-		LabID:    l.ID,
-		VMID:     vm.ID,
-		Name:     l.ManagedDomainName(vm),
-		MemoryMB: vm.MemoryMB,
-		CPUs:     vm.CPUs,
-		ISO:      l.ResolvePath(vm.ISO),
-		HasISO:   vm.ISO != "",
-		HasVNC:   vm.VNC,
+		LabID:     l.ID,
+		VMID:      vm.ID,
+		Name:      l.ManagedDomainName(vm),
+		MemoryMB:  vm.MemoryMB,
+		CPUs:      vm.CPUs,
+		ISO:       l.ResolvePath(vm.ISO),
+		HasISO:    vm.ISO != "",
+		HasVNC:    vm.VNC,
+		HasTablet: vm.VNC,
 	}
 	if diskPath, ok := resolveExistingDisk(l, vm.Disk); ok {
 		data.HasDisk = true

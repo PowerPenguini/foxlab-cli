@@ -42,6 +42,7 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		`<source bridge="` + l.ManagedSwitchBridgeName(l.Switches[0]) + `"/>`,
 		`<graphics type="vnc"`,
 		`<model type="virtio" heads="1" primary="yes"/>`,
+		`<input type="tablet" bus="usb"/>`,
 		`<serial type="pty">`,
 		`<target type="isa-serial" port="0"/>`,
 		`<console type="pty">`,
@@ -55,6 +56,46 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 	}
 	if strings.Contains(xmlText, `<source network="`+l.ManagedNetworkName(l.Switches[0])+`"/>`) {
 		t.Fatalf("domain XML still uses libvirt network for switch NIC:\n%s", xmlText)
+	}
+}
+
+func TestDomainXMLAddsAbsoluteTabletOnlyWithVNC(t *testing.T) {
+	l := &lab.Lab{ID: "demo"}
+	withVNC := lab.VM{ID: "with-vnc", MemoryMB: 2048, CPUs: 2, VNC: true}
+	withoutVNC := lab.VM{ID: "without-vnc", MemoryMB: 2048, CPUs: 2}
+
+	vncXML, err := domainXML(l, withVNC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(vncXML, `<input type="tablet" bus="usb"/>`) {
+		t.Fatalf("VNC domain XML does not contain an absolute tablet:\n%s", vncXML)
+	}
+	plainXML, err := domainXML(l, withoutVNC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plainXML, `<input type="tablet"`) {
+		t.Fatalf("non-VNC domain XML unexpectedly contains a tablet:\n%s", plainXML)
+	}
+}
+
+func TestDomainConfigRejectsVNCXMLWithoutAbsoluteTablet(t *testing.T) {
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}}}
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutTablet := strings.Replace(xmlText, `<input type="tablet" bus="usb"/>`, "", 1)
+	if withoutTablet == xmlText {
+		t.Fatal("test XML did not contain a tablet")
+	}
+	matches, err := domainConfigMatches(l, l.VMs[0], withoutTablet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches {
+		t.Fatal("VNC domain without absolute tablet matched desired configuration")
 	}
 }
 

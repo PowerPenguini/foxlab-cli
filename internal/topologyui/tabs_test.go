@@ -92,6 +92,15 @@ func TestDiskExplorerOpensAsReusableApplicationTab(t *testing.T) {
 	if out := rendered.String(); !strings.Contains(out, "Disks ×") || !strings.Contains(out, "data") {
 		t.Fatalf("disk card render missing tab or row:\n%s", out)
 	}
+	layout, ok := diskExplorerLayout(80, 20-tabBarHeight)
+	if !ok || layout != (rect{X: 0, Y: 0, W: 80, H: 19}) {
+		t.Fatalf("disk card content layout = %#v ok=%t, want full tab content", layout, ok)
+	}
+	card := rendered.String()
+	lines := strings.Split(strings.TrimSuffix(card, "\n"), "\n")
+	if len(lines) < 2 || !strings.Contains(lines[1], "DISK") {
+		t.Fatalf("disk card content did not start directly below tab bar:\n%s", card)
+	}
 
 	app.activateTab(0)
 	if app.State.DiskExplorerOpen {

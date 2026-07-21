@@ -529,6 +529,7 @@ func drawContextPlaceholder(g *grid, x, y int, item, rowStyle string) {
 }
 
 func drawConsole(g *grid, state ViewState, width, height int) {
+	height = notificationHeightForState(state, height)
 	notification, ok := notificationFromState(state)
 	if !ok {
 		return
@@ -538,6 +539,13 @@ func drawConsole(g *grid, state ViewState, width, height int) {
 		return
 	}
 	drawNotification(g, notificationDisplayLine(line), notificationThemeFor(notification, line), width, height)
+}
+
+func notificationHeightForState(state ViewState, height int) int {
+	if state.DiskExplorerOpen {
+		return max(0, height-1)
+	}
+	return height
 }
 
 func consoleLine(state ViewState) string {
@@ -596,6 +604,7 @@ func isSuccessNotification(line string) bool {
 		"applied lab ",
 		"attached disk:",
 		"created disk:",
+		"imported disk:",
 		"created disk layer:",
 		"deleted disk:",
 		"detached disk from ",
@@ -621,6 +630,8 @@ func notificationDisplayLine(line string) string {
 		return "Disk layer created: " + strings.TrimSpace(strings.TrimPrefix(line, "created disk layer:"))
 	case strings.HasPrefix(line, "created disk:"):
 		return "Disk created: " + strings.TrimSpace(strings.TrimPrefix(line, "created disk:"))
+	case strings.HasPrefix(line, "imported disk:"):
+		return "Disk imported: " + strings.TrimSpace(strings.TrimPrefix(line, "imported disk:"))
 	case strings.HasPrefix(line, "deleted disk:"):
 		return "Disk deleted: " + strings.TrimSpace(strings.TrimPrefix(line, "deleted disk:"))
 	case strings.HasPrefix(line, "resized disk:"):
@@ -733,6 +744,7 @@ func notificationLayoutFor(line string, width, height int) (notificationLayout, 
 }
 
 func notificationBoundsForState(state ViewState, width, height int) (rect, bool) {
+	height = notificationHeightForState(state, height)
 	line := consoleLine(state)
 	if line == "" {
 		return rect{}, false

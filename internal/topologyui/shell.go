@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -18,11 +19,13 @@ import (
 var errConsoleExit = errors.New("console exit")
 
 type shellCommand struct {
-	Display      string
-	WorkloadType string
-	Session      workload.TerminalSession
-	OpenSession  func(context.Context) (workload.OpenedTerminalSession, error)
-	NativeRun    func(*App) error
+	Display           string
+	WorkloadType      string
+	WorkloadID        string
+	Session           workload.TerminalSession
+	OpenSession       func(context.Context) (workload.OpenedTerminalSession, error)
+	NativeRun         func(*App) error
+	BackgroundCommand func(*App) *exec.Cmd
 }
 
 func (a *App) startShell(node Node) {

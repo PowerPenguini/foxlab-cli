@@ -64,6 +64,7 @@ type App struct {
 	HistoryIndex          int
 	PendingShell          *shellCommand
 	PendingVNC            *shellCommand
+	vncViewers            map[string]*managedVNCViewer
 	PendingStarts         map[string]bool
 	In                    *os.File
 	Out                   *os.File
@@ -147,6 +148,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() {
+		a.stopAllVNCViewers()
 		a.closeTabs()
 		if cleanup != nil {
 			cleanup()
@@ -249,16 +251,10 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		if a.PendingVNC != nil {
 			command := *a.PendingVNC
 			a.PendingVNC = nil
-			cleanup()
-			cleanup = nil
-			if err := a.runShell(command); err != nil {
+			if err := a.startVNCViewer(command); err != nil {
 				a.State.Message = "vnc failed: " + err.Error()
 			} else {
-				a.State.Message = "vnc closed"
-			}
-			cleanup, err = start(a)
-			if err != nil {
-				return err
+				a.State.Message = "vnc started: " + command.Display
 			}
 			dirty = true
 			continue

@@ -11,6 +11,7 @@ import (
 const (
 	diskExplorerTabKey       = "disks"
 	diskExplorerActionCreate = "create"
+	diskExplorerActionImport = "import"
 	diskExplorerActionLayer  = "layer"
 	diskExplorerActionRename = "rename"
 	diskExplorerActionResize = "resize"
@@ -78,6 +79,12 @@ func (a *App) clearDiskExplorerEdit() {
 	a.State.DiskExplorerEdit = ""
 	a.State.DiskExplorerEditValue = ""
 	a.State.DiskExplorerEditCursor = 0
+	a.State.DiskImportPath = ""
+	a.State.DiskImportPathEditing = false
+	a.State.DiskImportSelected = 0
+	a.State.DiskImportScroll = 0
+	a.State.DiskImportEntries = nil
+	a.State.DiskImportError = ""
 }
 
 func (a *App) diskExplorerRows() []diskExplorerRow {
@@ -149,6 +156,9 @@ func (a *App) clampDiskExplorerSelection() {
 }
 
 func (a *App) handleDiskExplorerKey(key string) bool {
+	if a.State.DiskExplorerEdit == diskExplorerActionImport {
+		return a.handleDiskImportBrowserKey(key)
+	}
 	if a.State.DiskExplorerEdit != "" {
 		a.handleDiskExplorerEditKey(key)
 		return false
@@ -168,6 +178,8 @@ func (a *App) handleDiskExplorerKey(key string) bool {
 		a.State.DiskExplorerSelected = min(max(0, len(rows)-1), a.State.DiskExplorerSelected+1)
 	case "char:n", "char:N":
 		a.runDiskExplorerAction(diskExplorerActionCreate)
+	case "char:i", "char:I":
+		a.runDiskExplorerAction(diskExplorerActionImport)
 	case "char:l", "char:L":
 		a.runDiskExplorerAction(diskExplorerActionLayer)
 	case "char:e", "char:E":
@@ -202,16 +214,28 @@ func (a *App) handleDiskExplorerEditKey(key string) {
 		a.State.DiskExplorerEditCursor = max(0, a.State.DiskExplorerEditCursor-1)
 	case "right":
 		a.State.DiskExplorerEditCursor = min(runeLen(a.State.DiskExplorerEditValue), a.State.DiskExplorerEditCursor+1)
+	case "home":
+		a.State.DiskExplorerEditCursor = 0
+	case "end":
+		a.State.DiskExplorerEditCursor = runeLen(a.State.DiskExplorerEditValue)
+	case "delete":
+		a.State.DiskExplorerEditValue = deleteRuneAt(a.State.DiskExplorerEditValue, a.State.DiskExplorerEditCursor)
+	case "space":
+		a.insertDiskExplorerEditText(" ")
 	default:
 		if value, ok := strings.CutPrefix(key, "char:"); ok {
-			runes := []rune(a.State.DiskExplorerEditValue)
-			cursor := clamp(a.State.DiskExplorerEditCursor, 0, len(runes))
-			insert := []rune(value)
-			runes = append(runes[:cursor], append(insert, runes[cursor:]...)...)
-			a.State.DiskExplorerEditValue = string(runes)
-			a.State.DiskExplorerEditCursor += len(insert)
+			a.insertDiskExplorerEditText(value)
 		}
 	}
+}
+
+func (a *App) insertDiskExplorerEditText(value string) {
+	runes := []rune(a.State.DiskExplorerEditValue)
+	cursor := clamp(a.State.DiskExplorerEditCursor, 0, len(runes))
+	insert := []rune(value)
+	runes = append(runes[:cursor], append(insert, runes[cursor:]...)...)
+	a.State.DiskExplorerEditValue = string(runes)
+	a.State.DiskExplorerEditCursor = cursor + len(insert)
 }
 
 func (a *App) commitDiskExplorerEdit() {
@@ -241,6 +265,8 @@ func (a *App) runDiskExplorerAction(action string) {
 		id := a.nextDiskIDForNode("")
 		a.diskCreate(id, map[string]string{"size": "10", "format": "qcow2"})
 		a.selectDiskExplorerID(id)
+	case diskExplorerActionImport:
+		a.openDiskImportBrowser()
 	case diskExplorerActionLayer:
 		row, ok := a.selectedDiskExplorerRow()
 		if !ok {
@@ -332,8 +358,22 @@ func (a *App) ensureDiskExplorerSelectionVisible() {
 }
 
 func (a *App) diskExplorerRenderState() ViewState {
-	state := a.State
+	state := a.inspectorRenderState()
 	if !state.DiskExplorerOpen {
+		return state
+	}
+	if state.DiskExplorerEdit == diskExplorerActionImport {
+		entries, err := a.diskImportBrowserEntries()
+		state.DiskImportEntries = make([]DiskImportEntryView, 0, len(entries))
+		if err != nil {
+			state.DiskImportError = err.Error()
+			return state
+		}
+		for _, entry := range entries {
+			state.DiskImportEntries = append(state.DiskImportEntries, DiskImportEntryView{
+				Name: entry.Name, Directory: entry.Directory, Size: formatDiskImportSize(entry.Size),
+			})
+		}
 		return state
 	}
 	rows := a.diskExplorerRows()
@@ -348,27 +388,64 @@ func (a *App) diskExplorerRenderState() ViewState {
 	return state
 }
 
+func (a *App) inspectorRenderState() ViewState {
+	a.refreshVNCViewerProcesses()
+	state := a.State
+	state.InspectorDiskItems = nil
+	state.InspectorDiskActions = nil
+	state.InspectorDiskKinds = nil
+	state.InspectorDiskIDs = nil
+	node, ok := selectedNode(a.Model, a.State.Selected)
+	if !ok || (node.Type != NodeVM && node.Type != NodeContainer) {
+		return state
+	}
+	entries := a.diskMenuEntries(node)
+	state.InspectorDiskItems = make([]string, 0, len(entries))
+	state.InspectorDiskActions = make([]string, 0, len(entries))
+	state.InspectorDiskKinds = make([]string, 0, len(entries))
+	state.InspectorDiskIDs = make([]string, 0, len(entries))
+	for _, entry := range entries {
+		state.InspectorDiskItems = append(state.InspectorDiskItems, entry.label)
+		state.InspectorDiskActions = append(state.InspectorDiskActions, entry.action)
+		state.InspectorDiskKinds = append(state.InspectorDiskKinds, a.diskMenuEntryKind(node, entry))
+		state.InspectorDiskIDs = append(state.InspectorDiskIDs, entry.diskID)
+	}
+	return state
+}
+
 func diskExplorerLayout(width, height int) (rect, bool) {
 	if width < minWidth || height < minHeight {
 		return rect{}, false
 	}
-	w := min(width-4, max(52, width*3/4))
-	h := min(height-4, max(10, height-6))
-	if w < 40 || h < 8 {
-		return rect{}, false
-	}
-	x := (width - w) / 2
-	y := 2
-	return rect{X: x, Y: y, W: w, H: h}, true
+	return rect{X: 0, Y: 0, W: width, H: height}, true
 }
 
 func diskExplorerVisibleRows(layout rect) int {
-	return max(0, layout.H-4)
+	return max(0, layout.H-3)
 }
 
 func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
 	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
+		return false
+	}
+	if a.State.DiskExplorerEdit == diskExplorerActionImport {
+		if event.y == layout.Y+1 {
+			a.beginDiskImportPathEdit("")
+			return false
+		}
+		if a.State.DiskImportPathEditing {
+			return false
+		}
+		entries, err := a.diskImportBrowserEntries()
+		if err != nil {
+			a.setDiskImportBrowserError(err)
+			return false
+		}
+		if row, ok := diskExplorerRowAt(layout, a.State.DiskImportScroll, event.x, event.y, len(entries), diskExplorerVisibleRows(layout)); ok {
+			a.State.DiskImportSelected = row
+			a.ensureDiskImportSelectionVisible()
+		}
 		return false
 	}
 	if action, ok := diskExplorerActionAt(layout, event.x, event.y); ok {
@@ -387,6 +464,22 @@ func (a *App) handleDiskExplorerMouse(event mouseEvent) bool {
 func (a *App) diskExplorerFeedbackRect(event mouseEvent) (rect, bool) {
 	layout, ok := diskExplorerLayout(a.ViewWidth, a.contentHeight())
 	if !ok || !xyInRect(event.x, event.y, layout) {
+		return rect{}, false
+	}
+	if a.State.DiskExplorerEdit == diskExplorerActionImport {
+		if event.y == layout.Y+1 {
+			return rect{X: layout.X + 1, Y: event.y, W: layout.W - 2, H: 1}, true
+		}
+		if a.State.DiskImportPathEditing {
+			return rect{}, false
+		}
+		entries, err := a.diskImportBrowserEntries()
+		if err != nil {
+			return rect{}, false
+		}
+		if _, ok := diskExplorerRowAt(layout, a.State.DiskImportScroll, event.x, event.y, len(entries), diskExplorerVisibleRows(layout)); ok {
+			return rect{X: layout.X + 1, Y: event.y, W: layout.W - 2, H: 1}, true
+		}
 		return rect{}, false
 	}
 	if r, ok := diskExplorerActionRectAt(layout, event.x, event.y); ok {
@@ -412,7 +505,7 @@ func diskExplorerRowAt(layout rect, scroll, x, y, count, visibleRows int) (int, 
 }
 
 func diskExplorerRowsY(layout rect) int {
-	return layout.Y + 3
+	return layout.Y + 2
 }
 
 func diskExplorerActionAt(layout rect, x, y int) (string, bool) {

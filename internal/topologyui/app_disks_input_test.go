@@ -1305,7 +1305,7 @@ func TestPaletteDisksOpensDiskExplorer(t *testing.T) {
 	}
 	message := app.State.Message
 	console := append([]string(nil), app.State.Console...)
-	app.handleKey("char:I")
+	app.handleKey("char:z")
 	app.handleKey("enter")
 	if app.State.Message != message || !reflect.DeepEqual(app.State.Console, console) {
 		t.Fatalf("disk explorer info keys changed state: %#v", app.State)
@@ -1411,6 +1411,170 @@ func TestDiskExplorerKeyboardResize(t *testing.T) {
 	}
 	if reloaded.Disks[0].SizeGB != 12 {
 		t.Fatalf("sizeGB = %d, want 12", reloaded.Disks[0].SizeGB)
+	}
+}
+
+func TestDiskExplorerImportsExistingImageIntoLab(t *testing.T) {
+	fakeQemuImgScript(t, "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{\"virtual-size\":3221225472,\"format\":\"qcow2\"}'; fi\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	if err := lab.SaveFile(path, &lab.Lab{ID: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := filepath.Join(home, "images")
+	if err := os.Mkdir(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDir, "victim.qcow2")
+	if err := os.WriteFile(source, []byte("existing-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
+		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 100, ViewHeight: 30,
+	}
+
+	app.handleKey("char:i")
+	if app.State.DiskExplorerEdit != diskExplorerActionImport {
+		t.Fatalf("import action did not open file browser: %#v", app.State)
+	}
+	if app.State.DiskImportPath != home {
+		t.Fatalf("browser path = %q, want home %q", app.State.DiskImportPath, home)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), 100, 30, false)
+	for _, want := range []string{"IMPORT DISK IMAGE", "Path", "images/", "Enter open/import", "Backspace parent", "Esc cancel"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("disk import browser missing %q:\n%s", want, out)
+		}
+	}
+	app.handleKey("down")
+	app.handleKey("enter")
+	if app.State.DiskImportPath != sourceDir {
+		t.Fatalf("browser did not open image directory: %#v", app.State)
+	}
+	app.handleKey("down")
+	app.handleKey("enter")
+	if app.State.Message != "imported disk:victim" {
+		t.Fatalf("import message = %q", app.State.Message)
+	}
+	if _, err := os.Stat(source); !os.IsNotExist(err) {
+		t.Fatalf("source still exists after import: %v", err)
+	}
+	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "victim" || app.Lab.Disks[0].SizeGB != 3 {
+		t.Fatalf("imported disk = %#v", app.Lab.Disks)
+	}
+	if app.State.DiskExplorerEdit != "" || app.State.DiskImportPath != "" {
+		t.Fatalf("file browser stayed open after import: %#v", app.State)
+	}
+}
+
+func TestDiskImportBrowserBackspaceReturnsToParentAndEscapeCancels(t *testing.T) {
+	home := t.TempDir()
+	child := filepath.Join(home, "images")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 80, ViewHeight: 20,
+	}
+	app.openDiskImportBrowserAt(child)
+
+	app.handleKey("backspace")
+	if app.State.DiskImportPath != home {
+		t.Fatalf("browser path after backspace = %q, want %q", app.State.DiskImportPath, home)
+	}
+	app.handleKey("escape")
+	if app.State.DiskExplorerEdit != "" || app.State.DiskImportPath != "" {
+		t.Fatalf("escape did not return to disk list: %#v", app.State)
+	}
+}
+
+func TestDiskImportBrowserImportsTypedPath(t *testing.T) {
+	fakeQemuImgScript(t, "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{\"virtual-size\":2147483648,\"format\":\"raw\"}'; fi\n")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	labPath := filepath.Join(t.TempDir(), "demo.lab")
+	if err := lab.SaveFile(labPath, &lab.Lab{ID: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(labPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "typed image.raw")
+	if err := os.WriteFile(source, []byte("raw-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
+		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 80, ViewHeight: 20,
+	}
+	app.openDiskImportBrowserAt(home)
+	app.handleKey("char:p")
+	if !app.State.DiskImportPathEditing {
+		t.Fatal("P did not focus the import path")
+	}
+	for _, char := range source {
+		key := "char:" + string(char)
+		if char == ' ' {
+			key = "space"
+		}
+		app.handleKey(key)
+	}
+	out := RenderString(app.Model, app.diskExplorerRenderState(), app.ViewWidth, app.ViewHeight, false)
+	if !strings.Contains(out, "typed image.raw|") || !strings.Contains(out, "Esc cancel input") {
+		t.Fatalf("typed path editor did not render value/cursor:\n%s", out)
+	}
+	app.handleKey("enter")
+
+	if app.State.Message != "imported disk:typed-image" {
+		t.Fatalf("typed path import message = %q", app.State.Message)
+	}
+	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "typed-image" || app.Lab.Disks[0].Format != "raw" {
+		t.Fatalf("typed path imported disk = %#v", app.Lab.Disks)
+	}
+	if _, err := os.Stat(source); !os.IsNotExist(err) {
+		t.Fatalf("typed source still exists after import: %v", err)
+	}
+}
+
+func TestDiskImportBrowserMouseSelectsFileWithoutImportingIt(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.qcow2")
+	if err := os.WriteFile(first, []byte("disk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 80, ViewHeight: 20,
+	}
+	app.openDiskImportBrowserAt(dir)
+	layout, ok := diskExplorerLayout(app.ViewWidth, app.contentHeight())
+	if !ok {
+		t.Fatal("disk import browser layout unavailable")
+	}
+	fileY := diskExplorerRowsY(layout) + 1
+	app.handleDiskExplorerMouse(mouseEvent{x: layout.X + 4, y: fileY, button: 0})
+
+	if app.State.DiskImportSelected != 1 {
+		t.Fatalf("selected import row = %d, want file row", app.State.DiskImportSelected)
+	}
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("mouse selection unexpectedly imported file: %v", err)
+	}
+	app.handleDiskExplorerMouse(mouseEvent{x: layout.X + 12, y: layout.Y + 1, button: 0})
+	if !app.State.DiskImportPathEditing {
+		t.Fatal("clicking Path did not focus path input")
+	}
+	app.handleKey("escape")
+	if app.State.DiskImportPathEditing || app.State.DiskExplorerEdit != diskExplorerActionImport {
+		t.Fatalf("escape did not cancel only path input: %#v", app.State)
 	}
 }
 
@@ -1701,7 +1865,7 @@ func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
 	if !ok {
 		t.Fatal("disk explorer layout unavailable")
 	}
-	layerX := layout.X + 1 + runeLen(" N create ") + 1
+	layerX := layout.X + 1 + runeLen(" N create ") + runeLen(" I import ") + 1
 	layerY := layout.Y + layout.H - 1
 
 	app.handleKey("mouse:" + strconv.Itoa(layerX) + ":" + strconv.Itoa(layerY) + ":0")
@@ -1730,7 +1894,7 @@ func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 	if !ok {
 		t.Fatal("disk explorer layout unavailable")
 	}
-	layerX := layout.X + 1 + runeLen(" N create ") + 1
+	layerX := layout.X + 1 + runeLen(" N create ") + runeLen(" I import ") + 1
 	layerY := layout.Y + layout.H - 1
 
 	r, ok := app.diskExplorerFeedbackRect(mouseEvent{x: layerX, y: layerY, button: 0})

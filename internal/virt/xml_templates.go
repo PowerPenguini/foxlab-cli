@@ -101,6 +101,9 @@ var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs
       <model type="virtio" heads="1" primary="yes"/>
     </video>
     {{- end }}
+    {{- if .HasTablet }}
+    <input type="tablet" bus="usb"/>
+    {{- end }}
     <serial type="pty">
       <target type="isa-serial" port="0"/>
     </serial>

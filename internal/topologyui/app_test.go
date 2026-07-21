@@ -325,49 +325,24 @@ func copyIntMap(in map[string]int) map[string]int {
 	return out
 }
 
-func TestHandleKeyContextMenuFlow(t *testing.T) {
+func TestSpaceDoesNotOpenLegacyContextMenu(t *testing.T) {
 	app := App{
 		Model: MockModel(),
 		State: ViewState{Focus: FocusGraph, Selected: 1},
 	}
 
 	app.handleKey("space")
-	if !app.State.ContextMenu {
-		t.Fatal("space did not open context menu")
-	}
-	app.handleKey("enter")
-	if app.State.ContextGroup != "config-menu" {
-		t.Fatalf("context group = %q, want config-menu", app.State.ContextGroup)
-	}
-	if !app.State.ContextInSubmenu {
-		t.Fatalf("expected submenu column to be focused")
-	}
-
-	node, _ := selectedNode(app.Model, app.State.Selected)
-	items := contextMenuItems(node, app.State.ContextGroup)
-	for i, item := range items {
-		if contextItemKey(item) == "name" {
-			app.State.ContextSubSelected = i
-			break
-		}
-	}
-	app.handleKey("enter")
-	if !app.State.ContextEdit {
-		t.Fatal("enter on config value did not start inline edit")
-	}
-	if app.State.ContextEditValue != "client01" {
-		t.Fatalf("inline edit value = %q, want client01", app.State.ContextEditValue)
+	if app.State.ContextMenu || app.State.ContextGroup != "" || app.State.ContextInSubmenu {
+		t.Fatalf("Space opened legacy context menu: %#v", app.State)
 	}
 }
 
 func TestContextMenuInlineEditQuestionFallbackStartsEmpty(t *testing.T) {
 	app := App{
 		Model: MockModel(),
-		State: ViewState{Focus: FocusGraph, Selected: 2},
+		State: ViewState{Focus: FocusGraph, Selected: 2, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true},
 	}
 
-	app.handleKey("space")
-	app.handleKey("enter")
 	node, _ := selectedNode(app.Model, app.State.Selected)
 	items := contextMenuItems(node, app.State.ContextGroup)
 	for i, item := range items {
@@ -568,10 +543,9 @@ func TestSwitchModeFieldOpensThirdMenuAndAppliesChoice(t *testing.T) {
 func TestContextMenuGroupRequiresRootConfirmation(t *testing.T) {
 	app := App{
 		Model: MockModel(),
-		State: ViewState{Focus: FocusGraph, Selected: 1},
+		State: ViewState{Focus: FocusGraph, Selected: 1, ContextMenu: true},
 	}
 
-	app.handleKey("space")
 	app.handleKey("down")
 	app.handleKey("down")
 	if app.State.ContextGroup != "" || app.State.ContextInSubmenu {
@@ -1193,11 +1167,9 @@ func TestContextMenuInlineEditVMName(t *testing.T) {
 		Model:   ModelFromLab(loaded),
 		Lab:     loaded,
 		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		State:   ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true},
 	}
 
-	app.handleKey("space")
-	app.handleKey("enter")
 	app.State.ContextSubSelected = 1
 	app.handleKey("enter")
 	if !app.State.ContextEdit {
@@ -1226,7 +1198,7 @@ func TestContextMenuInlineEditVMName(t *testing.T) {
 	}
 }
 
-func TestContextMenuMoveSavesLayout(t *testing.T) {
+func TestInspectorMoveSavesLayout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	loaded := &lab.Lab{
 		ID:  "demo",
@@ -1243,31 +1215,20 @@ func TestContextMenuMoveSavesLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
+		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
 	}
 
-	app.handleKey("space")
-	node, ok := selectedNode(app.Model, app.State.Selected)
-	if !ok {
-		t.Fatal("no selected node")
+	fields := app.selectedInspectorFields()
+	moveIndex := inspectorFieldIndex(t, fields, "moveAction", "")
+	deleteIndex := inspectorFieldIndex(t, fields, "deleteAction", "")
+	if moveIndex+1 != deleteIndex {
+		t.Fatalf("Move index = %d Delete index = %d, want Move directly before Delete", moveIndex, deleteIndex)
 	}
-	moveIndex := -1
-	for i, item := range app.contextMenuRootItems(node, ok) {
-		if contextMenuAction(item) == "move" {
-			moveIndex = i
-			break
-		}
-	}
-	if moveIndex < 0 {
-		t.Fatal("Move menu item not found")
-	}
-	app.State.ContextSelected = moveIndex
+	app.State.InspectorSelected = moveIndex
 	app.handleKey("enter")
 	if !app.State.MoveMode {
-		t.Fatal("Move menu action did not enter move mode")
+		t.Fatal("Move inspector action did not enter move mode")
 	}
 	app.handleKey("right")
 	app.handleKey("down")

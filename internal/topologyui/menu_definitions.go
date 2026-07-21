@@ -130,14 +130,7 @@ func contextMenuRootItemsForInspector(node Node, inspectorVisible bool) []string
 	if !inspectorVisible {
 		return items
 	}
-	filtered := make([]string, 0, len(items))
-	for _, item := range items {
-		if item == "Configuration >" || item == "Permissions >" {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	return filtered
+	return nil
 }
 
 func hostInterfaceMenuItems() []string {

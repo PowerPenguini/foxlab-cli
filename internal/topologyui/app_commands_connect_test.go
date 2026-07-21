@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1246,6 +1247,60 @@ func TestRunVNCDirectUsesExistingRuntimePort(t *testing.T) {
 	}
 	if app.PendingVNC != nil {
 		t.Fatalf("RunVNC left pending vnc: %#v", app.PendingVNC)
+	}
+}
+
+func TestVNCViewerRunsInBackgroundAndSameActionStopsIt(t *testing.T) {
+	dir := t.TempDir()
+	viewerPath := filepath.Join(dir, "viewer")
+	if err := os.WriteFile(viewerPath, []byte("#!/bin/sh\nprintf 'viewer stdout\\n'\nprintf 'viewer stderr\\n' >&2\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loaded := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}}}
+	key := NodeKey(NodeVM, "vm1")
+	outputReader, outputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputReader.Close()
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded,
+		VNCPorts: map[string]int{key: 5905}, VNCViewer: viewerPath, Out: outputWriter,
+	}
+	command, err := app.vncCommand(Node{ID: "vm1", Type: NodeVM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now()
+	if err := app.startVNCViewer(command); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(startedAt) > time.Second {
+		t.Fatal("background VNC launch blocked the TUI")
+	}
+	viewer := app.vncViewers[key]
+	if viewer == nil || !app.vncViewerRunning("vm1") || !app.State.VNCViewerActive[key] {
+		t.Fatalf("VNC viewer was not tracked as active: viewers=%#v state=%#v", app.vncViewers, app.State.VNCViewerActive)
+	}
+
+	app.startVNC(Node{ID: "vm1", Type: NodeVM})
+	if app.State.Message != "vnc stopped" || app.State.VNCViewerActive[key] || app.PendingVNC != nil {
+		t.Fatalf("second VNC action did not stop viewer: message=%q state=%#v pending=%#v", app.State.Message, app.State.VNCViewerActive, app.PendingVNC)
+	}
+	select {
+	case <-viewer.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopped VNC viewer process did not exit")
+	}
+	if err := outputWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(outputReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output) != 0 {
+		t.Fatalf("background VNC viewer wrote over the TUI: %q", output)
 	}
 }
 

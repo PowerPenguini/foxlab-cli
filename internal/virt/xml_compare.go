@@ -16,6 +16,7 @@ type comparableDomain struct {
 	Disk      comparableDisk
 	ISO       comparableDisk
 	VNC       bool
+	Tablet    bool
 	Networks  []comparableNetwork
 }
 
@@ -71,6 +72,9 @@ type parsedDomainXML struct {
 		Graphics []struct {
 			Type string `xml:"type,attr"`
 		} `xml:"graphics"`
+		Inputs []struct {
+			Type string `xml:"type,attr"`
+		} `xml:"input"`
 	} `xml:"devices"`
 }
 
@@ -114,7 +118,7 @@ func parseDomainXML(value string) (parsedDomainXML, error) {
 }
 
 func comparableDomainFromDesired(data domainXMLData) comparableDomain {
-	out := comparableDomain{MemoryKiB: int64(data.MemoryMB) * 1024, CPUs: data.CPUs, VNC: data.HasVNC}
+	out := comparableDomain{MemoryKiB: int64(data.MemoryMB) * 1024, CPUs: data.CPUs, VNC: data.HasVNC, Tablet: data.HasTablet}
 	if data.HasDisk {
 		out.Disk = comparableDisk{Present: true, Path: filepath.Clean(data.DiskPath), Format: data.DiskType}
 	}
@@ -132,6 +136,12 @@ func comparableDomainFromLive(parsed parsedDomainXML, desired domainXMLData) com
 	for _, graphics := range parsed.Devices.Graphics {
 		if graphics.Type == "vnc" {
 			out.VNC = true
+			break
+		}
+	}
+	for _, input := range parsed.Devices.Inputs {
+		if input.Type == "tablet" {
+			out.Tablet = true
 			break
 		}
 	}

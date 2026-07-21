@@ -57,6 +57,13 @@ type ViewState struct {
 	DiskExplorerRows       []string
 	DiskExplorerKinds      []string
 	DiskExplorerRowViews   []DiskExplorerRowView
+	DiskImportPath         string
+	DiskImportPathEditing  bool
+	DiskImportSelected     int
+	DiskImportScroll       int
+	DiskImportEntries      []DiskImportEntryView
+	DiskImportError        string
+	VNCViewerActive        map[string]bool
 	ApplyLabDisabled       bool
 	StatusRefreshing       bool
 	AnimationFrame         int
@@ -75,6 +82,12 @@ type ViewState struct {
 	InspectorCapOpen       bool
 	InspectorCapQuery      string
 	InspectorCapSelected   int
+	InspectorDiskItems     []string
+	InspectorDiskActions   []string
+	InspectorDiskKinds     []string
+	InspectorDiskIDs       []string
+	InspectorEditAction    string
+	InspectorEditTarget    string
 	CommandMode            bool
 	Command                string
 	Console                []string
@@ -89,4 +102,10 @@ type DiskExplorerRowView struct {
 	Path     string
 	Depth    int
 	Missing  bool
+}
+
+type DiskImportEntryView struct {
+	Name      string
+	Directory bool
+	Size      string
 }

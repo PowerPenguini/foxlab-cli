@@ -1,6 +1,7 @@
 package topologyui
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -114,6 +115,56 @@ func TestInspectorShellButtonOpensContainerShell(t *testing.T) {
 	g := renderGrid(app.Model, app.State, app.ViewWidth, app.contentHeight())
 	if got := g.Cells[(button.Y+1)*g.Width+button.X].Style; got != inspectorButtonCyanActiveStyle {
 		t.Fatalf("clicked Shell button style = %q, want persistent active style %q", got, inspectorButtonCyanActiveStyle)
+	}
+	fullButton := inspectorShellButtonRectForFields(panel, fields)
+	if fullButton.W != panel.W-6 {
+		t.Fatalf("container Shell button width = %d, want full content width %d", fullButton.W, panel.W-6)
+	}
+}
+
+func TestInspectorVNCButtonOpensVMViewer(t *testing.T) {
+	loaded := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "router", CPUs: 2, MemoryMB: 2048, VNC: true}}}
+	key := NodeKey(NodeVM, "router")
+	app := App{
+		Model:      ModelFromLab(loaded),
+		Lab:        loaded,
+		VNCPorts:   map[string]int{key: 5905},
+		VNCViewer:  "/bin/true",
+		State:      ViewState{Focus: FocusInspector},
+		ViewWidth:  120,
+		ViewHeight: 30,
+	}
+	app.Model.Nodes[0].State = "running"
+	fields := app.selectedInspectorFields()
+	vncIndex := inspectorFieldIndex(t, fields, "vncAction", "")
+	app.State.InspectorSelected = vncIndex
+
+	app.handleKey("enter")
+	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5905" {
+		t.Fatalf("keyboard VNC action did not queue viewer: %#v", app.PendingVNC)
+	}
+
+	app.PendingVNC = nil
+	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
+	button := inspectorVNCButtonRect(panel)
+	app.handleKey("mouse:" + strconv.Itoa(button.X+button.W/2) + ":" + strconv.Itoa(button.Y) + ":0")
+	if app.PendingVNC == nil || app.PendingVNC.Display != "vnc 127.0.0.1::5905" {
+		t.Fatalf("mouse VNC action did not queue viewer: %#v", app.PendingVNC)
+	}
+	if app.State.Focus != FocusInspector || app.State.InspectorSelected != vncIndex {
+		t.Fatalf("VNC button selection = focus %d index %d, want inspector index %d", app.State.Focus, app.State.InspectorSelected, vncIndex)
+	}
+	g := renderGrid(app.Model, app.State, app.ViewWidth, app.contentHeight())
+	if got := g.Cells[(button.Y+1)*g.Width+button.X].Style; got != inspectorButtonCyanActiveStyle {
+		t.Fatalf("clicked VNC button style = %q, want persistent active style %q", got, inspectorButtonCyanActiveStyle)
+	}
+	app.State.VNCViewerActive = map[string]bool{key: true}
+	stopGrid := renderGrid(app.Model, app.State, app.ViewWidth, app.contentHeight())
+	if !strings.Contains(stopGrid.String(false), "Stop VNC") {
+		t.Fatalf("active VNC viewer did not change button label:\n%s", stopGrid.String(false))
+	}
+	if got := stopGrid.Cells[(button.Y+1)*stopGrid.Width+button.X].Style; got != inspectorButtonRedActiveStyle {
+		t.Fatalf("active Stop VNC button style = %q, want %q", got, inspectorButtonRedActiveStyle)
 	}
 }
 
@@ -326,20 +377,151 @@ func TestContextMenuMovesConfigurationToVisibleInspector(t *testing.T) {
 	node := Node{ID: "kali", Type: NodeContainer}
 	wide := App{ViewWidth: 120, ViewHeight: 30}
 	wideItems := wide.contextMenuRootItems(node, true)
-	if containsString(wideItems, "Configuration >") || containsString(wideItems, "Permissions >") {
+	if containsString(wideItems, "Configuration >") || containsString(wideItems, "Permissions >") || containsString(wideItems, "NIC >") || containsString(wideItems, "Disk >") {
 		t.Fatalf("wide operations menu duplicated inspector fields: %#v", wideItems)
 	}
 	narrow := App{ViewWidth: 100, ViewHeight: 30}
 	narrowItems := narrow.contextMenuRootItems(node, true)
-	if !containsString(narrowItems, "Configuration >") || !containsString(narrowItems, "Permissions >") {
+	if !containsString(narrowItems, "Configuration >") || !containsString(narrowItems, "Permissions >") || !containsString(narrowItems, "NIC >") || !containsString(narrowItems, "Disk >") {
 		t.Fatalf("narrow operations menu lost configuration fallback: %#v", narrowItems)
+	}
+}
+
+func TestInspectorBuildsNICAndDiskSectionsFromTypedMetadata(t *testing.T) {
+	node := Node{ID: "vm1", Type: NodeVM, Details: []string{"nic3 → lan"}}
+	state := ViewState{
+		InspectorDiskItems:   []string{"Add Disk", "base-a 10G", "  | layer-a"},
+		InspectorDiskActions: []string{diskMenuActionCreate, diskMenuActionNone, diskMenuActionAttach},
+		InspectorDiskKinds:   []string{"", "base", "layer"},
+		InspectorDiskIDs:     []string{"", "base-a", "layer-a"},
+	}
+	fields := inspectorFieldsForState(node, state)
+	var nic, base, layer inspectorField
+	for _, field := range fields {
+		switch field.id {
+		case "nic3":
+			nic = field
+		case "disk:base-a":
+			base = field
+		case "disk:layer-a":
+			layer = field
+		}
+	}
+	if nic.kind != inspectorFieldNIC || nic.nicIndex != "3" || nic.value != "lan" {
+		t.Fatalf("NIC inspector field = %#v", nic)
+	}
+	if base.diskKind != "base" || base.diskAction != diskMenuActionNone || inspectorFieldSection(base) != "DISK" {
+		t.Fatalf("base disk inspector field = %#v", base)
+	}
+	if layer.diskKind != "layer" || layer.diskAction != diskMenuActionAttach || layer.diskID != "layer-a" {
+		t.Fatalf("layer disk inspector field = %#v", layer)
+	}
+}
+
+func TestInspectorAddDiskShowsInlineCursorAndWorksFromMouse(t *testing.T) {
+	fakeQemuImg(t)
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	loaded := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", CPUs: 2, MemoryMB: 2048}}}
+	if err := lab.SaveFile(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
+		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+	}
+	fields := app.selectedInspectorFields()
+	addDisk := inspectorFieldIndex(t, fields, "addDisk", "")
+	app.State.InspectorSelected = addDisk
+	app.handleKey("enter")
+	if !app.State.InspectorEditing || app.State.InspectorEditAction != "add-disk" {
+		t.Fatalf("Add Disk keyboard activation state = %#v", app.State)
+	}
+	rendered := RenderString(app.Model, app.inspectorRenderState(), app.ViewWidth, app.contentHeight(), false)
+	if !strings.Contains(rendered, "disk|") || !strings.Contains(rendered, "Enter save · Esc cancel") {
+		t.Fatalf("Add Disk editor did not render its cursor and edit hint:\n%s", rendered)
+	}
+
+	app.handleKey("escape")
+	fields = app.selectedInspectorFields()
+	addDisk = inspectorFieldIndex(t, fields, "addDisk", "")
+	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
+	y, ok := inspectorFieldY(panel, app.State, fields, addDisk)
+	if !ok {
+		t.Fatal("Add Disk row is not visible")
+	}
+	app.handleKey("mouse:" + strconv.Itoa(panel.X+5) + ":" + strconv.Itoa(y) + ":0")
+	if !app.State.InspectorEditing || app.State.InspectorEditAction != "add-disk" {
+		t.Fatalf("Add Disk mouse activation state = %#v", app.State)
+	}
+	app.handleKey("enter")
+	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "disk" {
+		t.Fatalf("disks after Inspector Add Disk = %#v, message=%q notification=%#v", app.Lab.Disks, app.State.Message, app.State.Notification)
+	}
+}
+
+func TestInspectorDoesNotDeleteDisksWithKeyboardOrMouse(t *testing.T) {
+	dir := t.TempDir()
+	labPath := filepath.Join(dir, "demo.lab")
+	diskPath := filepath.Join(dir, "data.qcow2")
+	if err := os.WriteFile(diskPath, []byte("disk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "router", CPUs: 2, MemoryMB: 2048, Disk: diskPath}},
+		Disks: []lab.Disk{{
+			ID: "data", Path: diskPath, Format: "qcow2", Kind: "base", AttachedType: NodeVM, AttachedTo: "router",
+		}},
+	}
+	if err := lab.SaveFile(labPath, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(labPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{
+		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
+		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+	}
+	fields := app.selectedInspectorFields()
+	diskIndex := inspectorFieldIndex(t, fields, "disk:data", "")
+	app.State.InspectorSelected = diskIndex
+	app.handleKey("char:x")
+	if len(app.Lab.Disks) != 1 {
+		t.Fatalf("keyboard X deleted Inspector disk: %#v", app.Lab.Disks)
+	}
+
+	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
+	y, ok := inspectorFieldY(panel, app.State, fields, diskIndex)
+	if !ok {
+		t.Fatal("selected disk row is not visible")
+	}
+	g := renderGrid(app.Model, app.inspectorRenderState(), app.ViewWidth, app.contentHeight())
+	if got := g.Cells[y*g.Width+panel.X+panel.W-4].Ch; got == '×' {
+		t.Fatalf("Inspector disk row still renders delete control:\n%s", g.String(false))
+	}
+	app.handleKey("mouse:" + strconv.Itoa(panel.X+panel.W-4) + ":" + strconv.Itoa(y) + ":0")
+	if len(app.Lab.Disks) != 1 {
+		t.Fatalf("mouse click deleted Inspector disk: %#v", app.Lab.Disks)
+	}
+	if _, err := os.Stat(diskPath); err != nil {
+		t.Fatalf("Inspector removed disk file: %v", err)
+	}
+	if hint := inspectorDiskFooterHint(fields[diskIndex]); strings.Contains(hint, "delete") || strings.Contains(hint, "X") {
+		t.Fatalf("Inspector disk footer still advertises deletion: %q", hint)
 	}
 }
 
 func TestRenderContainerInspectorShowsEditableCapabilities(t *testing.T) {
 	m := ModelFromLab(&lab.Lab{ID: "demo", Containers: []lab.Container{{ID: "kali", Image: "kali"}}})
 	closed := RenderString(m, ViewState{Focus: FocusInspector, InspectorSelected: 7}, 120, 30, false)
-	for _, want := range []string{"▾ WORKLOAD", "▾ LINUX CAPABILITIES", "Capabilities", "[14 selected ▾]", "›", "▶  Run", ">_ Shell", "×  Delete"} {
+	for _, want := range []string{"▾ WORKLOAD", "▾ LINUX CAPABILITIES", "Capabilities", "[14 selected ▾]", "›", "▶  Start", ">_ Shell", "↔  Move"} {
 		if !strings.Contains(closed, want) {
 			t.Fatalf("closed container capability picker missing %q:\n%s", want, closed)
 		}
@@ -347,8 +529,11 @@ func TestRenderContainerInspectorShowsEditableCapabilities(t *testing.T) {
 	if strings.Contains(closed, "NET_ADMIN") {
 		t.Fatalf("closed picker rendered inline capability rows:\n%s", closed)
 	}
-	if deleteAt, capabilitiesAt := strings.Index(closed, "×  Delete"), strings.Index(closed, "Capabilities"); deleteAt <= capabilitiesAt {
-		t.Fatalf("Delete button is not rendered after all Inspector sections:\n%s", closed)
+	fields := inspectorFields(m.Nodes[0])
+	deleteIndex := inspectorFieldIndex(t, fields, "deleteAction", "")
+	actions := RenderString(m, ViewState{Focus: FocusInspector, InspectorSelected: deleteIndex}, 120, 30, false)
+	if moveAt, deleteAt := strings.Index(actions, "↔  Move"), strings.Index(actions, "×  Delete"); moveAt < 0 || deleteAt <= moveAt {
+		t.Fatalf("Move/Delete buttons are not ordered after all Inspector sections:\n%s", actions)
 	}
 	if strings.Count(closed, "▾ WORKLOAD") != 1 {
 		t.Fatalf("Delete button introduced an extra WORKLOAD section:\n%s", closed)

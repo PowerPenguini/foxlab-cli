@@ -43,10 +43,10 @@ func drawInspector(g *grid, m Model, state ViewState, panel rect) {
 }
 
 func drawInspectorActionButtons(g *grid, node Node, state ViewState, panel rect) {
-	fields := inspectorFields(node)
+	fields := inspectorFieldsForState(node, state)
 	if index, field, ok := inspectorPowerField(fields); ok {
 		style := inspectorButtonGreenStyle
-		label := "▶  Run"
+		label := "▶  Start"
 		if field.value == "stop" {
 			style = inspectorButtonRedStyle
 			label = "■  Stop"
@@ -58,7 +58,19 @@ func drawInspectorActionButtons(g *grid, node Node, state ViewState, panel rect)
 		if normalizeRuntimeState(node.State) == "running" {
 			style = inspectorButtonCyanStyle
 		}
-		drawInspectorActionButton(g, inspectorShellButtonRect(panel), ">_ Shell", style, state.Focus == FocusInspector && normalizedMenuSelection(state.InspectorSelected, len(fields)) == index)
+		drawInspectorActionButton(g, inspectorShellButtonRectForFields(panel, fields), ">_ Shell", style, state.Focus == FocusInspector && normalizedMenuSelection(state.InspectorSelected, len(fields)) == index)
+	}
+	if index, _, ok := inspectorVNCField(fields); ok {
+		viewerActive := state.VNCViewerActive[NodeKey(NodeVM, node.ID)]
+		style := inspectorButtonMutedStyle
+		label := "▣  VNC"
+		if viewerActive {
+			style = inspectorButtonRedStyle
+			label = "■  Stop VNC"
+		} else if normalizeRuntimeState(node.State) == "running" && strings.EqualFold(nodeDetailRawValue(node, "vnc"), "true") {
+			style = inspectorButtonCyanStyle
+		}
+		drawInspectorActionButton(g, inspectorVNCButtonRect(panel), label, style, state.Focus == FocusInspector && normalizedMenuSelection(state.InspectorSelected, len(fields)) == index)
 	}
 }
 
@@ -103,8 +115,16 @@ func inspectorShellField(fields []inspectorField) (int, inspectorField, bool) {
 	return inspectorFieldByKind(fields, inspectorFieldShellAction)
 }
 
+func inspectorVNCField(fields []inspectorField) (int, inspectorField, bool) {
+	return inspectorFieldByKind(fields, inspectorFieldVNCAction)
+}
+
 func inspectorDeleteField(fields []inspectorField) (int, inspectorField, bool) {
 	return inspectorFieldByKind(fields, inspectorFieldDeleteAction)
+}
+
+func inspectorMoveField(fields []inspectorField) (int, inspectorField, bool) {
+	return inspectorFieldByKind(fields, inspectorFieldMoveAction)
 }
 
 func inspectorFieldByKind(fields []inspectorField, kind string) (int, inspectorField, bool) {
@@ -117,15 +137,26 @@ func inspectorFieldByKind(fields []inspectorField, kind string) (int, inspectorF
 }
 
 func inspectorPowerButtonRect(panel rect) rect {
-	contentWidth := max(0, panel.W-7)
-	return rect{X: panel.X + 3, Y: panel.Y + 4, W: contentWidth / 2, H: 3}
+	return rect{X: panel.X + 3, Y: panel.Y + 4, W: max(0, panel.W-6), H: 3}
 }
 
 func inspectorShellButtonRect(panel rect) rect {
-	power := inspectorPowerButtonRect(panel)
+	contentWidth := max(0, panel.W-6)
+	return rect{X: panel.X + 3, Y: panel.Y + 7, W: max(0, (contentWidth-1)/2), H: 3}
+}
+
+func inspectorShellButtonRectForFields(panel rect, fields []inspectorField) rect {
+	if _, _, ok := inspectorVNCField(fields); ok {
+		return inspectorShellButtonRect(panel)
+	}
+	return rect{X: panel.X + 3, Y: panel.Y + 7, W: max(0, panel.W-6), H: 3}
+}
+
+func inspectorVNCButtonRect(panel rect) rect {
+	shell := inspectorShellButtonRect(panel)
 	contentRight := panel.X + panel.W - 3
-	x := power.X + power.W + 1
-	return rect{X: x, Y: power.Y, W: max(0, contentRight-x), H: power.H}
+	x := shell.X + shell.W + 1
+	return rect{X: x, Y: shell.Y, W: max(0, contentRight-x), H: shell.H}
 }
 
 func inspectorDeleteButtonRect(panel rect, state ViewState, fields []inspectorField) (rect, bool) {
@@ -140,8 +171,20 @@ func inspectorDeleteButtonRect(panel rect, state ViewState, fields []inspectorFi
 	return rect{X: panel.X + 3, Y: y, W: max(0, panel.W-6), H: 3}, true
 }
 
+func inspectorMoveButtonRect(panel rect, state ViewState, fields []inspectorField) (rect, bool) {
+	index, _, ok := inspectorMoveField(fields)
+	if !ok {
+		return rect{}, false
+	}
+	y, ok := inspectorFieldY(panel, state, fields, index)
+	if !ok {
+		return rect{}, false
+	}
+	return rect{X: panel.X + 3, Y: y, W: max(0, panel.W-6), H: 3}, true
+}
+
 func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
-	fields := inspectorFields(node)
+	fields := inspectorFieldsForState(node, state)
 	if len(fields) == 0 {
 		return
 	}
@@ -159,8 +202,15 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		index := row.fieldIndex
 		field := fields[index]
 		active := state.Focus == FocusInspector && index == selected
+		if field.kind == inspectorFieldMoveAction {
+			if row.buttonPart == -1 && visibleRow+2 < visible {
+				button := rect{X: panel.X + 3, Y: y, W: max(0, panel.W-6), H: 3}
+				drawInspectorActionButton(g, button, "↔  Move", inspectorButtonMutedStyle, active)
+			}
+			continue
+		}
 		if field.kind == inspectorFieldDeleteAction {
-			if row.buttonPart == -1 {
+			if row.buttonPart == -1 && visibleRow+2 < visible {
 				button := rect{X: panel.X + 3, Y: y, W: max(0, panel.W-6), H: 3}
 				drawInspectorActionButton(g, button, "×  Delete", inspectorButtonRedStyle, active)
 			}
@@ -195,7 +245,7 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		value := inspectorFieldDisplayValue(field)
 		displayWidth := valueWidth - 1
 		switch {
-		case active && state.InspectorEditing && field.kind == inspectorFieldText:
+		case active && state.InspectorEditing && inspectorFieldSupportsInlineEdit(field):
 			value = inspectorEditViewport(state.InspectorEditValue, state.InspectorEditCursor, displayWidth)
 		case value == "":
 			value = contextEditPlaceholder
@@ -203,12 +253,15 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 				valueStyle = themePanelInspectorMuted
 			}
 			value = fit(value, displayWidth)
-		case field.kind == inspectorFieldText:
+		case field.kind == inspectorFieldText || field.kind == inspectorFieldDisk:
 			value = inspectorTailViewport(value, displayWidth)
 		default:
 			value = fit(value, displayWidth)
 		}
 		g.Text(valueX+1, y, value, valueStyle)
+		if field.kind == inspectorFieldNIC {
+			g.Set(panel.X+panel.W-4, y, '×', valueStyle)
+		}
 	}
 	if start > 0 {
 		g.Set(panel.X+panel.W-3, panel.Y+inspectorFieldListY, '↑', themePanelInspectorSection)
@@ -239,6 +292,10 @@ func inspectorTailViewport(value string, width int) string {
 		return "…"
 	}
 	return "…" + string(runes[len(runes)-width+1:])
+}
+
+func inspectorFieldSupportsInlineEdit(field inspectorField) bool {
+	return field.kind == inspectorFieldText || field.kind == inspectorFieldDiskAdd || field.kind == inspectorFieldDisk
 }
 
 func inspectorEditViewport(value string, cursor, width int) string {
@@ -280,6 +337,8 @@ func inspectorFieldValueStyle(field inspectorField, active bool) string {
 		return themePanelInspector + ansiBrightCyan
 	case inspectorFieldInterfacePicker:
 		return themePanelInspector + ansiBrightCyan
+	case inspectorFieldNICAdd, inspectorFieldDiskAdd:
+		return themePanelInspector + ansiBrightCyan + ansiBold
 	case inspectorFieldPower:
 		if field.value == "stop" {
 			return themePanelInspector + ansiOrange + ansiBold
@@ -299,22 +358,64 @@ func drawInspectorFooter(g *grid, node Node, state ViewState, panel rect) {
 	y := panel.Y + panel.H - 1
 	fillRow(g, panel.X, y, panel.W, themePanelInspectorHeader)
 	hint := "TAB  edit properties"
-	if state.InspectorCapOpen {
+	if state.InspectorEditing {
+		hint = "Enter save · Esc cancel"
+	} else if state.InspectorCapOpen {
 		hint = "type search · Enter select · Esc"
-		fields := inspectorFields(node)
+		fields := inspectorFieldsForState(node, state)
 		selected := normalizedMenuSelection(state.InspectorSelected, len(fields))
 		if len(fields) > 0 && fields[selected].kind == inspectorFieldCapabilityPicker {
 			hint = "type search · Space toggle · Esc"
 		}
 	} else if state.Focus == FocusInspector {
 		hint = "↑↓ select · Enter edit · Tab back"
-		fields := inspectorFields(node)
+		fields := inspectorFieldsForState(node, state)
 		selected := normalizedMenuSelection(state.InspectorSelected, len(fields))
-		if len(fields) > 0 && fields[selected].kind == inspectorFieldDeleteAction {
-			hint = "Enter delete · Tab back"
+		if len(fields) > 0 {
+			field := fields[selected]
+			switch field.kind {
+			case inspectorFieldPower:
+				hint = "Enter start/stop · Tab back"
+			case inspectorFieldShellAction:
+				hint = "Enter open Shell · Tab back"
+			case inspectorFieldVNCAction:
+				if state.VNCViewerActive[NodeKey(NodeVM, node.ID)] {
+					hint = "Enter stop VNC · Tab back"
+				} else {
+					hint = "Enter open VNC · Tab back"
+				}
+			case inspectorFieldNICAdd:
+				hint = "Enter add NIC · Tab back"
+			case inspectorFieldNIC:
+				hint = "Enter connect · X delete · Tab back"
+			case inspectorFieldDiskAdd:
+				hint = "Enter add disk · Tab back"
+			case inspectorFieldDisk:
+				hint = inspectorDiskFooterHint(field)
+			case inspectorFieldMoveAction:
+				hint = "Enter move · arrows position · Esc"
+			case inspectorFieldDeleteAction:
+				hint = "Enter delete · Tab back"
+			}
 		}
 	}
 	g.Text(panel.X+3, y, fit(hint, panel.W-6), themePanelInspectorHeader)
+}
+
+func inspectorDiskFooterHint(field inspectorField) string {
+	if field.diskAction == diskMenuActionNone {
+		if field.diskKind == "layer" {
+			return "M merge · D detach · Tab back"
+		}
+		return "D detach · Tab back"
+	}
+	if field.diskKind == "base" {
+		return "Enter attach · A layer · Tab back"
+	}
+	if field.diskKind == "layer" {
+		return "Enter attach · M merge · Tab back"
+	}
+	return "Enter attach · Tab back"
 }
 
 func inspectorFieldDisplayValue(field inspectorField) string {
@@ -328,6 +429,8 @@ func inspectorFieldDisplayValue(field inspectorField) string {
 		return "[" + modeDisplayLabel(field.value) + "]"
 	case inspectorFieldCapabilityPicker, inspectorFieldInterfacePicker:
 		return "[" + field.value + " ▾]"
+	case inspectorFieldNICAdd, inspectorFieldDiskAdd:
+		return "[+]"
 	case inspectorFieldPower:
 		if field.value == "stop" {
 			return "[Stop]"

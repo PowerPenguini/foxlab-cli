@@ -70,6 +70,82 @@ func TestDiskCreateAttachDetachDelete(t *testing.T) {
 	}
 }
 
+func TestDiskImportMovesImageIntoLabStorage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	calls := []string{}
+	path := filepath.Join(t.TempDir(), "demo.lab")
+	if err := lab.SaveFile(path, &lab.Lab{ID: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "router disk.qcow2")
+	if err := os.WriteFile(source, []byte("image-data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(loaded, path)
+	service.DiskCommands = stubDiskCommandsWithCalls(t, &calls)
+
+	result := service.DiskImport(source)
+	if !result.OK() || result.Message != "imported disk:router-disk" {
+		t.Fatalf("DiskImport = %#v", result)
+	}
+	if _, err := os.Stat(source); !os.IsNotExist(err) {
+		t.Fatalf("source still exists after import: %v", err)
+	}
+	reloaded, err := lab.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Disks) != 1 {
+		t.Fatalf("imported disks = %#v", reloaded.Disks)
+	}
+	disk := reloaded.Disks[0]
+	if disk.ID != "router-disk" || disk.Format != "qcow2" || disk.Kind != "base" || disk.SizeGB != 10 {
+		t.Fatalf("imported disk metadata = %#v", disk)
+	}
+	content, err := os.ReadFile(reloaded.ResolvePath(disk.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "image-data" {
+		t.Fatalf("imported disk content = %q", content)
+	}
+	if got := strings.Join(calls, "\n"); !strings.Contains(got, "qemu-img info --output=json "+source) {
+		t.Fatalf("disk import calls = %#v", calls)
+	}
+}
+
+func TestDiskImportRestoresSourceWhenLabSaveFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	blocker := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "data.raw")
+	if err := os.WriteFile(source, []byte("raw-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(&lab.Lab{ID: "demo"}, filepath.Join(blocker, "demo.lab"))
+	service.DiskCommands = DiskCommandFuncs{OutputFunc: func(string, ...string) ([]byte, error) {
+		return []byte(`{"virtual-size":2147483648,"format":"raw"}`), nil
+	}}
+
+	result := service.DiskImport(source)
+	if result.OK() || !strings.Contains(result.Message, "disk import failed:") {
+		t.Fatalf("DiskImport = %#v, want save failure", result)
+	}
+	content, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("source was not restored: %v", err)
+	}
+	if string(content) != "raw-data" || len(service.Lab.Disks) != 0 {
+		t.Fatalf("failed import state: content=%q disks=%#v", content, service.Lab.Disks)
+	}
+}
+
 func TestDiskCreateRejectsInvalidIDBeforeSideEffects(t *testing.T) {
 	calls := []string{}
 	diskCommands := stubDiskCommandsWithCalls(t, &calls)

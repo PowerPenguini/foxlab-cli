@@ -22,6 +22,14 @@ func (a *App) handleInspectorKey(key string) bool {
 		a.State.InspectorSelected = MoveContextSelection(a.State.InspectorSelected, len(fields), "down")
 	case "enter", "space", "right":
 		a.activateInspectorField(fields[a.State.InspectorSelected])
+	case "char:x", "char:X", "delete":
+		a.deleteInspectorResource(fields[a.State.InspectorSelected])
+	case "char:a", "char:A":
+		a.addInspectorDiskLayer(fields[a.State.InspectorSelected])
+	case "char:m", "char:M":
+		a.mergeInspectorDisk(fields[a.State.InspectorSelected])
+	case "char:d", "char:D":
+		a.detachInspectorDisk(fields[a.State.InspectorSelected])
 	case "left", "escape":
 		a.State.Focus = FocusGraph
 	case "quit":
@@ -103,6 +111,23 @@ func (a *App) activateInspectorField(field inspectorField) {
 		}
 	case inspectorFieldShellAction:
 		a.startShell(Node{Type: field.nodeType, ID: field.nodeID})
+	case inspectorFieldVNCAction:
+		a.startVNC(Node{Type: field.nodeType, ID: field.nodeID})
+	case inspectorFieldNICAdd:
+		a.openAddNICCommand(Node{Type: field.nodeType, ID: field.nodeID})
+	case inspectorFieldNIC:
+		a.startConnectNICIndex(Node{Type: field.nodeType, ID: field.nodeID}, field.nicIndex)
+	case inspectorFieldDiskAdd:
+		a.State.InspectorEditing = true
+		a.State.InspectorEditValue = a.nextDiskIDForNode("")
+		a.State.InspectorEditCursor = runeLen(a.State.InspectorEditValue)
+		a.State.InspectorEditAction = "add-disk"
+	case inspectorFieldDisk:
+		if field.diskAction == diskMenuActionAttach && field.diskID != "" {
+			a.diskAttach(field.diskID, map[string]string{"to": diskTargetForNode(Node{Type: field.nodeType, ID: field.nodeID})})
+		}
+	case inspectorFieldMoveAction:
+		a.startMove(Node{Type: field.nodeType, ID: field.nodeID})
 	case inspectorFieldDeleteAction:
 		switch field.nodeType {
 		case NodeVM:
@@ -126,8 +151,53 @@ func (a *App) applyInspectorEdit() {
 	selected := normalizedMenuSelection(a.State.InspectorSelected, len(fields))
 	field := fields[selected]
 	value := a.State.InspectorEditValue
+	action := a.State.InspectorEditAction
+	target := a.State.InspectorEditTarget
 	a.clearInspectorEdit()
+	if action == "add-disk" {
+		a.createNamedDiskForNode(Node{Type: field.nodeType, ID: field.nodeID}, value)
+		return
+	}
+	if action == "add-layer" {
+		a.createNamedLayerForNode(Node{Type: field.nodeType, ID: field.nodeID}, diskMenuEntry{diskID: target}, value)
+		return
+	}
 	a.applyInspectorField(field, value)
+}
+
+func (a *App) deleteInspectorResource(field inspectorField) {
+	node := Node{Type: field.nodeType, ID: field.nodeID}
+	if field.kind == inspectorFieldNIC {
+		a.deleteNIC(node, field.nicIndex)
+	}
+}
+
+func (a *App) addInspectorDiskLayer(field inspectorField) {
+	if field.kind != inspectorFieldDisk || field.diskKind != "base" || field.diskAction == diskMenuActionNone || field.diskID == "" {
+		return
+	}
+	a.State.InspectorEditing = true
+	a.State.InspectorEditValue = a.nextLayerIDForDisk(field.diskID)
+	a.State.InspectorEditCursor = runeLen(a.State.InspectorEditValue)
+	a.State.InspectorEditAction = "add-layer"
+	a.State.InspectorEditTarget = field.diskID
+}
+
+func (a *App) mergeInspectorDisk(field inspectorField) {
+	if field.kind != inspectorFieldDisk || field.diskKind != "layer" || field.diskID == "" {
+		return
+	}
+	if field.diskAction == diskMenuActionNone {
+		a.mergeDiskForNode(Node{Type: field.nodeType, ID: field.nodeID})
+		return
+	}
+	a.diskMerge(field.diskID)
+}
+
+func (a *App) detachInspectorDisk(field inspectorField) {
+	if field.kind == inspectorFieldDisk && field.diskAction == diskMenuActionNone {
+		a.detachDiskFromNode(Node{Type: field.nodeType, ID: field.nodeID})
+	}
 }
 
 func (a *App) applyInspectorField(field inspectorField, value string) {
@@ -159,13 +229,19 @@ func (a *App) selectedInspectorFields() []inspectorField {
 	if !ok {
 		return nil
 	}
-	return inspectorFields(node)
+	return a.inspectorFields(node)
+}
+
+func (a *App) inspectorFields(node Node) []inspectorField {
+	return inspectorFieldsForState(node, a.inspectorRenderState())
 }
 
 func (a *App) clearInspectorEdit() {
 	a.State.InspectorEditing = false
 	a.State.InspectorEditValue = ""
 	a.State.InspectorEditCursor = 0
+	a.State.InspectorEditAction = ""
+	a.State.InspectorEditTarget = ""
 }
 
 func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
@@ -173,7 +249,7 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 	if !ok {
 		return false
 	}
-	fields := inspectorFields(node)
+	fields := a.inspectorFields(node)
 	if actionIndex, actionField, hasAction := inspectorActionButtonAt(fields, panel, event.x, event.y); hasAction {
 		if a.State.InspectorEditing {
 			a.applyInspectorEdit()
@@ -181,7 +257,7 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 			if !ok {
 				return false
 			}
-			fields = inspectorFields(node)
+			fields = a.inspectorFields(node)
 			actionIndex, actionField, hasAction = inspectorActionButtonAt(fields, panel, event.x, event.y)
 			if !hasAction {
 				return false
@@ -222,11 +298,17 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 		if !ok {
 			return false
 		}
-		fields = inspectorFields(node)
+		fields = a.inspectorFields(node)
 		index, ok = inspectorFieldAt(panel, a.State, fields, event.y)
 		if !ok {
 			return false
 		}
+	}
+	if event.x >= panel.X+panel.W-5 && fields[index].kind == inspectorFieldNIC {
+		a.State.Focus = FocusInspector
+		a.State.InspectorSelected = index
+		a.deleteInspectorResource(fields[index])
+		return false
 	}
 	a.State.Focus = FocusInspector
 	a.State.InspectorSelected = index
@@ -275,7 +357,10 @@ func inspectorActionButtonAt(fields []inspectorField, panel rect, x, y int) (int
 	if index, field, ok := inspectorPowerField(fields); ok && xyInRect(x, y, inspectorPowerButtonRect(panel)) {
 		return index, field, true
 	}
-	if index, field, ok := inspectorShellField(fields); ok && xyInRect(x, y, inspectorShellButtonRect(panel)) {
+	if index, field, ok := inspectorShellField(fields); ok && xyInRect(x, y, inspectorShellButtonRectForFields(panel, fields)) {
+		return index, field, true
+	}
+	if index, field, ok := inspectorVNCField(fields); ok && xyInRect(x, y, inspectorVNCButtonRect(panel)) {
 		return index, field, true
 	}
 	return 0, inspectorField{}, false

@@ -22,6 +22,7 @@ type diskExplorerColumns struct {
 func diskExplorerActionButtons() []diskExplorerActionButton {
 	return []diskExplorerActionButton{
 		{label: " N create ", action: diskExplorerActionCreate},
+		{label: " I import ", action: diskExplorerActionImport},
 		{label: " L layer ", action: diskExplorerActionLayer},
 		{label: " E rename ", action: diskExplorerActionRename},
 		{label: " R resize ", action: diskExplorerActionResize},
@@ -39,6 +40,10 @@ func drawDiskExplorer(g *grid, _ Model, state ViewState, width, height int) {
 		return
 	}
 	fillRect(g, layout, themePanelDisk)
+	if state.DiskExplorerEdit == diskExplorerActionImport {
+		drawDiskImportBrowser(g, state, layout)
+		return
+	}
 	drawDiskExplorerTableHeader(g, layout)
 	rows := state.DiskExplorerRows
 	if len(rows) == 0 {
@@ -47,6 +52,123 @@ func drawDiskExplorer(g *grid, _ Model, state ViewState, width, height int) {
 		drawDiskExplorerRows(g, state, layout)
 	}
 	drawDiskExplorerActions(g, state, layout)
+}
+
+func drawDiskImportBrowser(g *grid, state ViewState, layout rect) {
+	g.Text(layout.X+1, layout.Y, fit("IMPORT DISK IMAGE", layout.W-2), themePanelDiskHeader)
+	pathLabel := "Path  "
+	pathWidth := max(0, layout.W-2-runeLen(pathLabel))
+	g.Text(layout.X+1, layout.Y+1, pathLabel, themePanelDiskMuted+ansiBold)
+	path := fitDiskImportPath(state.DiskImportPath, pathWidth)
+	pathStyle := themePanelDisk
+	if state.DiskImportPathEditing {
+		path = diskImportPathEditViewport(state.DiskExplorerEditValue, state.DiskExplorerEditCursor, pathWidth)
+		pathStyle = themePanelDiskSelected
+		fillRow(g, layout.X+1+runeLen(pathLabel), layout.Y+1, pathWidth, pathStyle)
+	}
+	g.Text(layout.X+1+runeLen(pathLabel), layout.Y+1, path, pathStyle)
+
+	if state.DiskImportError != "" {
+		g.Text(layout.X+1, diskExplorerRowsY(layout), fit(state.DiskImportError, layout.W-2), themePanelDisk+ansiRed)
+	} else if len(state.DiskImportEntries) == 0 {
+		g.Text(layout.X+1, diskExplorerRowsY(layout), fit("This directory is empty.", layout.W-2), themePanelDiskMuted)
+	} else {
+		drawDiskImportBrowserRows(g, state, layout)
+	}
+	drawDiskImportBrowserActions(g, state, layout)
+}
+
+func drawDiskImportBrowserRows(g *grid, state ViewState, layout rect) {
+	visible := diskExplorerVisibleRows(layout)
+	start := clamp(state.DiskImportScroll, 0, max(0, len(state.DiskImportEntries)-1))
+	selected := normalizedMenuSelection(state.DiskImportSelected, len(state.DiskImportEntries))
+	for row := 0; row < visible; row++ {
+		index := start + row
+		if index >= len(state.DiskImportEntries) {
+			break
+		}
+		y := diskExplorerRowsY(layout) + row
+		entry := state.DiskImportEntries[index]
+		style := themePanelDisk
+		if index == selected {
+			style = themePanelDiskSelected
+			fillRow(g, layout.X+1, y, layout.W-2, style)
+		}
+		marker := "  "
+		if index == selected {
+			marker = "> "
+		}
+		name := entry.Name
+		nameStyle := style + ansiWhite
+		if entry.Directory {
+			name += "/"
+			nameStyle = style + ansiBrightCyan + ansiBold
+		}
+		g.Text(layout.X+1, y, marker, style+ansiBrightCyan+ansiBold)
+		sizeWidth := 8
+		nameWidth := max(0, layout.W-4-sizeWidth)
+		g.Text(layout.X+3, y, fit(name, nameWidth), nameStyle)
+		if !entry.Directory && entry.Size != "" {
+			sizeX := layout.X + layout.W - 1 - sizeWidth
+			g.Text(sizeX, y, fitLeft(entry.Size, sizeWidth), style+ansiBrightBlack)
+		}
+	}
+	if len(state.DiskImportEntries) > visible {
+		pos := diskImportScrollText(state, layout)
+		g.Text(layout.X+layout.W-1-runeLen(pos), layout.Y, pos, themePanelDiskMuted)
+	}
+}
+
+func drawDiskImportBrowserActions(g *grid, state ViewState, layout rect) {
+	y := layout.Y + layout.H - 1
+	fillRow(g, layout.X, y, layout.W, themePanelDiskActions)
+	label := " P path  Enter open/import  Backspace parent  Esc cancel "
+	if state.DiskImportPathEditing {
+		label = " Enter open/import   Esc cancel input "
+	}
+	g.Text(layout.X+1, y, fit(label, layout.W-2), themePanelDiskActions)
+}
+
+func diskImportScrollText(state ViewState, layout rect) string {
+	visible := diskExplorerVisibleRows(layout)
+	if visible <= 0 || len(state.DiskImportEntries) <= visible {
+		return ""
+	}
+	top := min(len(state.DiskImportEntries), state.DiskImportScroll+1)
+	bottom := min(len(state.DiskImportEntries), state.DiskImportScroll+visible)
+	return fmt.Sprintf("%d-%d/%d", top, bottom, len(state.DiskImportEntries))
+}
+
+func fitDiskImportPath(path string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(path)
+	if len(runes) <= width {
+		return path
+	}
+	if width == 1 {
+		return "…"
+	}
+	return "…" + string(runes[len(runes)-width+1:])
+}
+
+func diskImportPathEditViewport(value string, cursor, width int) string {
+	if value == "" {
+		return fit("|", width)
+	}
+	return inspectorEditViewport(value, cursor, width)
+}
+
+func fitLeft(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) >= width {
+		return string(runes[:width])
+	}
+	return fmt.Sprintf("%*s", width, value)
 }
 
 func (a *App) renderDiskExplorerTab(width, height int) *grid {
@@ -89,7 +211,7 @@ func drawDiskExplorerRows(g *grid, state ViewState, layout rect) {
 			continue
 		}
 		label := state.DiskExplorerRows[index]
-		if state.DiskExplorerEdit != "" && index == selected {
+		if state.DiskExplorerEdit != "" && state.DiskExplorerEdit != diskExplorerActionImport && index == selected {
 			label = diskExplorerEditLabel(label, state.DiskExplorerEdit, state.DiskExplorerEditValue, state.DiskExplorerEditCursor)
 		}
 		g.Text(layout.X+1, y, fit(label, layout.W-2), style)
@@ -98,7 +220,7 @@ func drawDiskExplorerRows(g *grid, state ViewState, layout rect) {
 
 func drawDiskExplorerTableHeader(g *grid, layout rect) {
 	columns := diskExplorerTableColumns(layout)
-	y := layout.Y + 1
+	y := layout.Y
 	style := themePanelDiskMuted + ansiBold
 	g.Text(columns.ID.X, y, fit("DISK", columns.ID.W), style)
 	g.Text(columns.Kind.X, y, fit("TYPE", columns.Kind.W), style)
@@ -200,16 +322,16 @@ func drawDiskExplorerActions(g *grid, state ViewState, layout rect) {
 		g.Text(x, y, fit(action.label, layout.X+layout.W-1-x), themePanelDiskActions)
 		x += runeLen(action.label)
 	}
-	footer := "Esc close"
+	footer := ""
 	if state.DiskExplorerEdit != "" {
 		footer = "Enter apply  Esc cancel"
 	}
-	if x+1 < layout.X+layout.W-1 {
+	if footer != "" && x+1 < layout.X+layout.W-1 {
 		g.Text(x+1, y, fit(footer, layout.X+layout.W-2-x), themePanelDiskActions)
 	}
 	if len(state.DiskExplorerRows) > diskExplorerVisibleRowsForState(state, layout) {
 		pos := diskExplorerScrollText(state, layout)
-		g.Text(layout.X+layout.W-1-runeLen(pos), layout.Y+1, pos, themePanelDiskMuted)
+		g.Text(layout.X+layout.W-1-runeLen(pos), layout.Y, pos, themePanelDiskMuted)
 	}
 }
 

@@ -1,16 +1,149 @@
 package topology
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"foxlab-cli/internal/lab"
 )
 
 const defaultDiskSizeGB = 10
+
+type importedDiskInfo struct {
+	VirtualSize int64  `json:"virtual-size"`
+	Format      string `json:"format"`
+}
+
+func (s *Service) DiskImport(source string) Result {
+	if s.Lab == nil {
+		return Failure("disk import needs a loaded .lab file")
+	}
+	if err := s.requireSavePath(); err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return Failure("disk import needs a source path")
+	}
+	if source == "~" || strings.HasPrefix(source, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return FailureWithCause("disk import failed: "+err.Error(), err)
+		}
+		source = filepath.Join(home, strings.TrimPrefix(source, "~/"))
+	}
+	absSource, err := filepath.Abs(source)
+	if err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	fileInfo, err := os.Lstat(absSource)
+	if err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return Failure("disk import needs a regular file: " + absSource)
+	}
+	out, err := s.diskCommands().Output("qemu-img", "info", "--output=json", absSource)
+	if err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	var info importedDiskInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return FailureWithCause("disk import failed: invalid qemu-img info: "+err.Error(), err)
+	}
+	format := strings.ToLower(strings.TrimSpace(info.Format))
+	if format != "qcow2" && format != "raw" {
+		return Failure("disk import failed: unsupported disk format: " + format)
+	}
+	id, destination, err := s.importedDiskTarget(absSource, format)
+	if err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	if err := ensureDiskDirectoryWritable(filepath.Dir(destination)); err != nil {
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	samePath := filepath.Clean(absSource) == filepath.Clean(destination)
+	if !samePath {
+		if err := moveDiskFile(absSource, destination); err != nil {
+			return FailureWithCause("disk import failed: "+err.Error(), err)
+		}
+	}
+	sizeGB := 0
+	if info.VirtualSize > 0 {
+		const gib = int64(1024 * 1024 * 1024)
+		sizeGB = int((info.VirtualSize + gib - 1) / gib)
+	}
+	mutation := s.beginLabMutation()
+	s.Lab.Disks = append(s.Lab.Disks, lab.Disk{
+		ID: id, Path: destination, SizeGB: sizeGB, Format: format, Kind: "base",
+	})
+	if err := mutation.Commit(); err != nil {
+		if !samePath {
+			if restoreErr := moveDiskFile(destination, absSource); restoreErr != nil {
+				return FailureWithCause("disk import failed: "+err.Error()+"; restore failed: "+restoreErr.Error(), err)
+			}
+		}
+		return FailureWithCause("disk import failed: "+err.Error(), err)
+	}
+	return Success("imported disk:" + id)
+}
+
+func (s *Service) importedDiskTarget(source, format string) (string, string, error) {
+	base := importedDiskID(filepath.Base(source))
+	for suffix := 1; ; suffix++ {
+		id := base
+		if suffix > 1 {
+			id += "-" + strconv.Itoa(suffix)
+		}
+		if _, exists := s.diskByID(id); exists {
+			continue
+		}
+		path, err := s.Lab.DiskStoragePath(id, format)
+		if err != nil {
+			return "", "", err
+		}
+		if filepath.Clean(source) == filepath.Clean(path) {
+			return id, path, nil
+		}
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			return id, path, nil
+		} else if err != nil {
+			return "", "", err
+		}
+	}
+}
+
+func importedDiskID(filename string) string {
+	name := strings.TrimSuffix(filename, filepath.Ext(filename))
+	var out strings.Builder
+	separator := false
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' {
+			if r <= unicode.MaxASCII {
+				out.WriteRune(r)
+				separator = false
+				continue
+			}
+		}
+		if out.Len() > 0 && !separator {
+			out.WriteByte('-')
+			separator = true
+		}
+	}
+	id := strings.Trim(out.String(), "-_")
+	if !lab.ValidID(id) {
+		return "disk"
+	}
+	return id
+}
 
 func (s *Service) DiskCreate(id string, args map[string]string) Result {
 	if s.Lab == nil {

@@ -847,16 +847,26 @@ func TestInspectorUsesWiderBlenderStyleDock(t *testing.T) {
 	if got := vmG.Cells[button.Y*vmG.Width+button.X].Style; got != inspectorButtonRedStyle+inspectorPanelForeground {
 		t.Fatalf("stop button edge style = %q, want button RGB background behind panel cutout", got)
 	}
-	gap := vmG.Cells[(button.Y+button.H)*vmG.Width+button.X]
-	if gap.Ch != ' ' || gap.Style != themePanelInspector {
-		t.Fatalf("top action gap = %q style %q, want one blank Inspector row", gap.Ch, gap.Style)
+	if button.W != vmPanel.W-6 {
+		t.Fatalf("power button width = %d, want full content width %d", button.W, vmPanel.W-6)
 	}
 	shellButton := inspectorShellButtonRect(vmPanel)
-	if shellButton.X != button.X+button.W+1 {
-		t.Fatalf("shell button x = %d, want directly beside power button at %d", shellButton.X, button.X+button.W+1)
+	vncButton := inspectorVNCButtonRect(vmPanel)
+	if shellButton.Y != button.Y+button.H || vncButton.Y != shellButton.Y {
+		t.Fatalf("secondary buttons y = shell:%d vnc:%d, want directly below power at %d", shellButton.Y, vncButton.Y, button.Y+button.H)
+	}
+	if vncButton.X != shellButton.X+shellButton.W+1 {
+		t.Fatalf("VNC button x = %d, want directly beside Shell at %d", vncButton.X, shellButton.X+shellButton.W+1)
 	}
 	if got := vmG.Cells[(shellButton.Y+1)*vmG.Width+shellButton.X].Style; got != inspectorButtonCyanStyle {
 		t.Fatalf("shell button style = %q, want solid cyan action button", got)
+	}
+	if got := vmG.Cells[(vncButton.Y+1)*vmG.Width+vncButton.X].Style; got != inspectorButtonCyanStyle {
+		t.Fatalf("VNC button style = %q, want solid cyan action button", got)
+	}
+	gap := vmG.Cells[(shellButton.Y+shellButton.H)*vmG.Width+shellButton.X]
+	if gap.Ch != ' ' || gap.Style != themePanelInspector {
+		t.Fatalf("top action gap = %q style %q, want one blank Inspector row below both button rows", gap.Ch, gap.Style)
 	}
 	activeG := renderGrid(vm, ViewState{Selected: 0, Focus: FocusInspector, InspectorSelected: 0}, 120, 30)
 	activeCell := activeG.Cells[(button.Y+1)*activeG.Width+button.X]
@@ -867,7 +877,7 @@ func TestInspectorUsesWiderBlenderStyleDock(t *testing.T) {
 		t.Fatalf("active stop button style = %q, want subtle red color shift", activeCell.Style)
 	}
 	for _, row := range inspectorPanelRowsFor(inspectorFields(vm.Nodes[0])) {
-		if row.fieldIndex == 0 || row.fieldIndex == 1 {
+		if row.fieldIndex == 0 || row.fieldIndex == 1 || row.fieldIndex == 2 {
 			t.Fatal("top action button still rendered as a WORKLOAD property row")
 		}
 	}
@@ -893,7 +903,9 @@ func TestInspectorTextViewportShowsTailAndFollowsCursor(t *testing.T) {
 	if !strings.Contains(out, "…") || !strings.Contains(out, "router.iso") {
 		t.Fatalf("non-editing inspector did not show path tail:\n%s", out)
 	}
-	editing := RenderString(m, ViewState{Selected: 0, Focus: FocusInspector, InspectorSelected: 6, InspectorEditing: true, InspectorEditValue: path, InspectorEditCursor: runeLen(path)}, 120, 30, false)
+	fields := inspectorFields(m.Nodes[0])
+	isoIndex := inspectorFieldIndex(t, fields, "iso", "")
+	editing := RenderString(m, ViewState{Selected: 0, Focus: FocusInspector, InspectorSelected: isoIndex, InspectorEditing: true, InspectorEditValue: path, InspectorEditCursor: runeLen(path)}, 120, 30, false)
 	if !strings.Contains(editing, "router.iso|") {
 		t.Fatalf("editing inspector did not keep end cursor visible:\n%s", editing)
 	}
@@ -1624,24 +1636,38 @@ func TestRenderInspectorUsesPaddedPropertiesPanel(t *testing.T) {
 	if bottomRight.Style != themePanelInspectorHeader {
 		t.Fatalf("inspector full-width footer style = %q, want %q", bottomRight.Style, themePanelInspectorHeader)
 	}
-	deleteButton, ok := inspectorDeleteButtonRect(panel, ViewState{Selected: 0, Focus: FocusGraph}, inspectorFields(MockModel().Nodes[0]))
+	fields := inspectorFields(MockModel().Nodes[0])
+	deleteIndex := -1
+	for index, field := range fields {
+		if field.kind == inspectorFieldDeleteAction {
+			deleteIndex = index
+			break
+		}
+	}
+	if deleteIndex < 0 {
+		t.Fatal("inspector Delete field is missing")
+	}
+	buttonState := ViewState{Selected: 0, Focus: FocusGraph, InspectorSelected: deleteIndex}
+	buttonGrid := renderGrid(MockModel(), buttonState, width, height)
+	deleteButton, ok := inspectorDeleteButtonRect(panel, buttonState, fields)
 	if !ok {
 		t.Fatal("inspector Delete button is not visible after property sections")
 	}
-	for _, y := range []int{deleteButton.Y - 2, deleteButton.Y - 1} {
-		cell := g.Cells[y*g.Width+deleteButton.X]
-		if cell.Ch != ' ' || cell.Style != themePanelInspector {
-			t.Fatalf("Delete gap row %d = %q style %q, want blank Inspector row", y, cell.Ch, cell.Style)
-		}
-	}
-	if got := g.Cells[(deleteButton.Y+1)*g.Width+deleteButton.X].Style; got != inspectorButtonRedStyle {
+	if got := buttonGrid.Cells[(deleteButton.Y+1)*buttonGrid.Width+deleteButton.X].Style; got != inspectorButtonRedStyle {
 		t.Fatalf("inspector Delete button style = %q, want solid red action button", got)
 	}
-	if top, bottom := g.Cells[deleteButton.Y*g.Width+deleteButton.X].Ch, g.Cells[(deleteButton.Y+2)*g.Width+deleteButton.X].Ch; top != '▀' || bottom != '▄' {
+	if top, bottom := buttonGrid.Cells[deleteButton.Y*buttonGrid.Width+deleteButton.X].Ch, buttonGrid.Cells[(deleteButton.Y+2)*buttonGrid.Width+deleteButton.X].Ch; top != '▀' || bottom != '▄' {
 		t.Fatalf("Delete button half-row padding = %q/%q, want panel cutouts over solid button background", top, bottom)
 	}
-	if !strings.Contains(g.String(false), "×  Delete") {
-		t.Fatalf("inspector missing bottom Delete button:\n%s", g.String(false))
+	moveButton, moveOK := inspectorMoveButtonRect(panel, buttonState, fields)
+	if !moveOK || moveButton.Y >= deleteButton.Y {
+		t.Fatalf("Move button = %#v ok=%t, want it above Delete %#v", moveButton, moveOK, deleteButton)
+	}
+	if moveButton.Y+moveButton.H != deleteButton.Y {
+		t.Fatalf("Move/Delete gap = %d rows, want 0", deleteButton.Y-(moveButton.Y+moveButton.H))
+	}
+	if !strings.Contains(buttonGrid.String(false), "↔  Move") || !strings.Contains(buttonGrid.String(false), "×  Delete") {
+		t.Fatalf("inspector missing Move/Delete buttons:\n%s", buttonGrid.String(false))
 	}
 	if strings.Contains(g.String(false), "FOXLAB / PROPERTIES") {
 		t.Fatalf("inspector kept removed top bar:\n%s", g.String(false))
@@ -1756,6 +1782,43 @@ func TestRenderDiskExplorerRenameEditOmitsPrefix(t *testing.T) {
 	}
 	if strings.Contains(out, "rename=") {
 		t.Fatalf("disk explorer rename edit still shows prefix:\n%s", out)
+	}
+}
+
+func TestRenderDiskImportBrowserUsesFullDiskTab(t *testing.T) {
+	state := ViewState{
+		DiskExplorerOpen:   true,
+		DiskExplorerEdit:   diskExplorerActionImport,
+		DiskImportPath:     "/home/demo/very/long/path/to/images",
+		DiskImportSelected: 1,
+		DiskImportEntries: []DiskImportEntryView{
+			{Name: "..", Directory: true},
+			{Name: "router.qcow2", Size: "3.0G"},
+		},
+	}
+	out := RenderString(Model{}, state, 60, 16, false)
+	for _, want := range []string{"IMPORT DISK IMAGE", "Path", "../", "> router.qcow2", "3.0G", "Enter open/import", "Esc cancel"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("disk import browser missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "DISK       TYPE") || strings.Contains(out, "N create") {
+		t.Fatalf("disk table/actions leaked into import browser:\n%s", out)
+	}
+}
+
+func TestRenderDiskImportBrowserEditablePath(t *testing.T) {
+	state := ViewState{
+		DiskExplorerOpen:       true,
+		DiskExplorerEdit:       diskExplorerActionImport,
+		DiskImportPath:         "/home/demo",
+		DiskImportPathEditing:  true,
+		DiskExplorerEditValue:  "/mnt/images/router.qcow2",
+		DiskExplorerEditCursor: runeLen("/mnt/images/router.qcow2"),
+	}
+	out := RenderString(Model{}, state, 60, 16, false)
+	if !strings.Contains(out, "/mnt/images/router.qcow2|") || !strings.Contains(out, "Esc cancel input") {
+		t.Fatalf("disk import path input missing value/cursor/hint:\n%s", out)
 	}
 }
 
