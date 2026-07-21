@@ -237,9 +237,9 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		g.Text(x, y, fit(field.label, keyWidth), labelStyle)
 		valueX := x + keyWidth + 1
 		valueRight := panel.X + panel.W - 3
-		attachButton, hasAttachButton := inspectorDiskAttachButtonRect(field, panel, y)
-		if hasAttachButton {
-			valueRight = attachButton.X - 1
+		diskButton, diskButtonLabel, diskButtonStyle, hasDiskButton := inspectorDiskActionButton(field, panel, y)
+		if hasDiskButton {
+			valueRight = diskButton.X - 1
 		}
 		valueWidth := valueRight - valueX
 		if valueWidth > 0 {
@@ -262,8 +262,8 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 			}
 			g.Text(valueX+1, y, value, valueStyle)
 		}
-		if hasAttachButton {
-			drawInspectorInlineButton(g, attachButton, "Attach", inspectorButtonCyanStyle, active)
+		if hasDiskButton {
+			drawInspectorInlineButton(g, diskButton, diskButtonLabel, diskButtonStyle, active)
 		}
 		if field.kind == inspectorFieldNIC {
 			valueStyle := inspectorFieldValueStyle(field, active)
@@ -287,13 +287,28 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 	}
 }
 
-func inspectorDiskAttachButtonRect(field inspectorField, panel rect, y int) (rect, bool) {
-	if field.kind != inspectorFieldDisk || field.diskAction != diskMenuActionAttach || field.diskID == "" {
-		return rect{}, false
+func inspectorDiskActionButton(field inspectorField, panel rect, y int) (rect, string, string, bool) {
+	if field.kind != inspectorFieldDisk {
+		return rect{}, "", "", false
+	}
+	label := ""
+	style := ""
+	switch field.diskAction {
+	case diskMenuActionAttach:
+		if field.diskID == "" {
+			return rect{}, "", "", false
+		}
+		label = "Attach"
+		style = inspectorButtonCyanStyle
+	case diskMenuActionNone:
+		label = "Detach"
+		style = inspectorButtonRedStyle
+	default:
+		return rect{}, "", "", false
 	}
 	const width = 10
 	right := panel.X + panel.W - 3
-	return rect{X: right - width, Y: y, W: width, H: 1}, true
+	return rect{X: right - width, Y: y, W: width, H: 1}, label, style, true
 }
 
 func drawInspectorInlineButton(g *grid, button rect, label, style string, selected bool) {
@@ -433,9 +448,9 @@ func drawInspectorFooter(g *grid, node Node, state ViewState, panel rect) {
 func inspectorDiskFooterHint(field inspectorField) string {
 	if field.diskAction == diskMenuActionNone {
 		if field.diskKind == "layer" {
-			return "M merge · D detach · Tab back"
+			return "Enter detach · M merge · Tab back"
 		}
-		return "D detach · Tab back"
+		return "Enter detach · Tab back"
 	}
 	if field.diskKind == "base" {
 		return "Enter attach · A layer · Tab back"

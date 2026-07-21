@@ -125,6 +125,8 @@ func (a *App) activateInspectorField(field inspectorField) {
 	case inspectorFieldDisk:
 		if field.diskAction == diskMenuActionAttach && field.diskID != "" {
 			a.diskAttach(field.diskID, map[string]string{"to": diskTargetForNode(Node{Type: field.nodeType, ID: field.nodeID})})
+		} else if field.diskAction == diskMenuActionNone {
+			a.detachInspectorDisk(field)
 		}
 	case inspectorFieldMoveAction:
 		a.startMove(Node{Type: field.nodeType, ID: field.nodeID})
@@ -310,7 +312,7 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 		a.deleteInspectorResource(fields[index])
 		return false
 	}
-	if button, hasButton := inspectorDiskAttachButtonRect(fields[index], panel, event.y); hasButton {
+	if button, _, _, hasButton := inspectorDiskActionButton(fields[index], panel, event.y); hasButton {
 		a.State.Focus = FocusInspector
 		a.State.InspectorSelected = index
 		if xyInRect(event.x, event.y, button) {

@@ -419,8 +419,8 @@ func TestInspectorBuildsNICAndDiskSectionsFromTypedMetadata(t *testing.T) {
 	if layer.value != "| layer-a" {
 		t.Fatalf("attachable layer value = %q, want disk label without inline attach text", layer.value)
 	}
-	if base.value != "base-a 10G · attached" {
-		t.Fatalf("attached base value = %q, want attached status", base.value)
+	if base.value != "base-a 10G" {
+		t.Fatalf("attached base value = %q, want disk label without inline status", base.value)
 	}
 }
 
@@ -441,9 +441,12 @@ func TestInspectorDiskAttachIsRightAlignedButton(t *testing.T) {
 	if !ok {
 		t.Fatal("attachable disk row is not visible")
 	}
-	button, ok := inspectorDiskAttachButtonRect(fields[diskIndex], panel, y)
+	button, label, style, ok := inspectorDiskActionButton(fields[diskIndex], panel, y)
 	if !ok {
 		t.Fatal("attachable disk has no button rect")
+	}
+	if label != "Attach" || style != inspectorButtonCyanStyle {
+		t.Fatalf("attachable disk button = %q style %q", label, style)
 	}
 	if button.X+button.W != panel.X+panel.W-3 {
 		t.Fatalf("Attach button right edge = %d, want %d", button.X+button.W, panel.X+panel.W-3)
@@ -454,6 +457,26 @@ func TestInspectorDiskAttachIsRightAlignedButton(t *testing.T) {
 	}
 	if out := g.String(false); !strings.Contains(out, "Attach") || strings.Contains(out, "data 10G · attach") {
 		t.Fatalf("Attach button did not replace inline status:\n%s", out)
+	}
+
+	state.InspectorDiskActions[1] = diskMenuActionNone
+	fields = inspectorFieldsForState(m.Nodes[0], state)
+	diskIndex = inspectorFieldIndex(t, fields, "disk:data", "")
+	state.InspectorSelected = diskIndex
+	y, ok = inspectorFieldY(panel, state, fields, diskIndex)
+	if !ok {
+		t.Fatal("attached disk row is not visible")
+	}
+	button, label, style, ok = inspectorDiskActionButton(fields[diskIndex], panel, y)
+	if !ok || label != "Detach" || style != inspectorButtonRedStyle {
+		t.Fatalf("attached disk button = %q style %q visible=%v", label, style, ok)
+	}
+	g = renderGrid(m, state, 120, 30)
+	if got := g.Cells[y*g.Width+button.X].Style; got != inspectorButtonRedActiveStyle {
+		t.Fatalf("selected Detach button style = %q, want %q", got, inspectorButtonRedActiveStyle)
+	}
+	if out := g.String(false); !strings.Contains(out, "Detach") || strings.Contains(out, "data 10G · attached") {
+		t.Fatalf("Detach button did not replace inline status:\n%s", out)
 	}
 }
 
@@ -493,13 +516,29 @@ func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
 		t.Fatalf("clicking disk label attached it to %q, want selection only", got)
 	}
 
-	button, ok := inspectorDiskAttachButtonRect(fields[diskIndex], panel, y)
+	button, _, _, ok := inspectorDiskActionButton(fields[diskIndex], panel, y)
 	if !ok {
 		t.Fatal("attachable disk has no mouse button rect")
 	}
 	app.handleInspectorMouse(mouseEvent{x: button.X + 1, y: y, button: 0}, panel)
 	if got := app.Lab.Disks[0].AttachedTo; got != "vm1" {
 		t.Fatalf("clicking Attach attached disk to %q, want vm1; message=%q", got, app.State.Message)
+	}
+
+	fields = app.selectedInspectorFields()
+	diskIndex = inspectorFieldIndex(t, fields, "disk:data", "")
+	app.State.InspectorSelected = diskIndex
+	y, ok = inspectorFieldY(panel, app.State, fields, diskIndex)
+	if !ok {
+		t.Fatal("attached disk row is not visible")
+	}
+	button, label, style, ok := inspectorDiskActionButton(fields[diskIndex], panel, y)
+	if !ok || label != "Detach" || style != inspectorButtonRedStyle {
+		t.Fatalf("attached disk button = %q style %q visible=%v", label, style, ok)
+	}
+	app.handleInspectorMouse(mouseEvent{x: button.X + 1, y: y, button: 0}, panel)
+	if got := app.Lab.Disks[0].AttachedTo; got != "" {
+		t.Fatalf("clicking Detach left disk attached to %q; message=%q", got, app.State.Message)
 	}
 }
 

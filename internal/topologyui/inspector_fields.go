@@ -156,7 +156,6 @@ func inspectorDiskFields(node Node, state ViewState) []inspectorField {
 		}
 		value := strings.TrimSpace(item)
 		if action == diskMenuActionNone {
-			value += " · attached"
 			hasAttached = true
 		}
 		fields = append(fields, inspectorField{
@@ -168,7 +167,7 @@ func inspectorDiskFields(node Node, state ViewState) []inspectorField {
 	if !hasAttached {
 		if value := nodeDetailRawValue(node, "disk"); value != "" {
 			fields = append(fields, inspectorField{
-				id: "disk", label: "Disk", value: value + " · attached", kind: inspectorFieldDisk,
+				id: "disk", label: "Disk", value: value, kind: inspectorFieldDisk,
 				nodeID: node.ID, nodeType: node.Type, diskAction: diskMenuActionNone,
 			})
 		}
