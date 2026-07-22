@@ -11,7 +11,7 @@ func (a *App) displayNodeName(typ, id string) string {
 	if node, ok := nodeByKey(a.Model, NodeKey(typ, id)); ok {
 		return firstNonEmpty(node.Label, node.ID)
 	}
-	return displayNodeNameFromLab(a.Lab, typ, id)
+	return displayNodeNameFromLab(a.currentLab(), typ, id)
 }
 
 func (a *App) displayNodeKey(typ, id string) string {

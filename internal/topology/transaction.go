@@ -12,7 +12,7 @@ type labMutation struct {
 }
 
 func (s *Service) beginLabMutation() *labMutation {
-	return &labMutation{service: s, snapshot: lab.Clone(s.Lab)}
+	return &labMutation{service: s, snapshot: lab.Clone(s.CurrentLab())}
 }
 
 func (m *labMutation) Commit() error {
@@ -30,11 +30,11 @@ func (m *labMutation) Rollback() {
 	if m == nil || m.service == nil || m.snapshot == nil {
 		return
 	}
-	m.service.Lab = m.snapshot
+	m.service.ReplaceLab(m.snapshot)
 }
 
 func (s *Service) mutateLab(apply func(*lab.Lab) error) error {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return fmt.Errorf("missing loaded lab")
 	}
 	if apply == nil {
@@ -44,7 +44,7 @@ func (s *Service) mutateLab(apply func(*lab.Lab) error) error {
 		return err
 	}
 	mutation := s.beginLabMutation()
-	if err := apply(s.Lab); err != nil {
+	if err := apply(s.CurrentLab()); err != nil {
 		mutation.Rollback()
 		return err
 	}

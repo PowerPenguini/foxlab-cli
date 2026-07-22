@@ -21,7 +21,7 @@ func TestMutateLabRollsBackCallbackFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(loaded, path)
-	want := lab.Clone(service.Lab)
+	want := lab.Clone(service.CurrentLab())
 	sentinel := errors.New("abort mutation")
 	err = service.mutateLab(func(current *lab.Lab) error {
 		current.VMs[0].CPUs = 99
@@ -30,8 +30,8 @@ func TestMutateLabRollsBackCallbackFailure(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("mutateLab error = %v, want sentinel", err)
 	}
-	if !reflect.DeepEqual(service.Lab, want) {
-		t.Fatalf("callback failure changed in-memory lab:\ngot  %#v\nwant %#v", service.Lab, want)
+	if !reflect.DeepEqual(service.CurrentLab(), want) {
+		t.Fatalf("callback failure changed in-memory lab:\ngot  %#v\nwant %#v", service.CurrentLab(), want)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -56,8 +56,8 @@ func TestMutateLabRollsBackSaveFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("mutateLab unexpectedly succeeded")
 	}
-	if !reflect.DeepEqual(service.Lab, initial) {
-		t.Fatalf("save failure changed in-memory lab:\ngot  %#v\nwant %#v", service.Lab, initial)
+	if !reflect.DeepEqual(service.CurrentLab(), initial) {
+		t.Fatalf("save failure changed in-memory lab:\ngot  %#v\nwant %#v", service.CurrentLab(), initial)
 	}
 }
 
@@ -68,24 +68,40 @@ func TestMutateLabCommitsAndRefreshesFromDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(lab.Clone(initial), path)
-	before := service.Lab
+	before := service.CurrentLab()
 	if err := service.mutateLab(func(current *lab.Lab) error {
 		current.VMs[0].CPUs = 4
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if service.Lab == before {
+	if service.CurrentLab() == before {
 		t.Fatal("successful mutation did not refresh the in-memory lab")
 	}
-	if got := service.Lab.VMs[0].CPUs; got != 4 {
+	if got := service.CurrentLab().VMs[0].CPUs; got != 4 {
 		t.Fatalf("in-memory CPUs = %d, want 4", got)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(reloaded, service.Lab) {
-		t.Fatalf("saved lab differs from refreshed lab:\ngot  %#v\nwant %#v", reloaded, service.Lab)
+	if !reflect.DeepEqual(reloaded, service.CurrentLab()) {
+		t.Fatalf("saved lab differs from refreshed lab:\ngot  %#v\nwant %#v", reloaded, service.CurrentLab())
+	}
+}
+
+func TestServiceUsesSharedLabSession(t *testing.T) {
+	initial := &lab.Lab{ID: "initial"}
+	session := lab.NewSession(initial, "initial.lab")
+	service := NewServiceWithSession(session)
+
+	replacement := &lab.Lab{ID: "replacement"}
+	session.Replace(replacement)
+	if service.CurrentLab() != replacement {
+		t.Fatal("service did not observe session replacement")
+	}
+	service.SetLabPath("replacement.lab")
+	if got := session.Path(); got != "replacement.lab" {
+		t.Fatalf("session path = %q, want replacement.lab", got)
 	}
 }

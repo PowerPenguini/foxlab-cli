@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/workload"
 )
 
 func TestServiceMutationsPersistAndRefreshLab(t *testing.T) {
@@ -39,7 +40,7 @@ func TestServiceMutationsPersistAndRefreshLab(t *testing.T) {
 	if !ok {
 		t.Fatalf("vm1 was not present after create")
 	}
-	if vm.MemoryMB != 4096 || len(vm.Networks) != 1 || vm.Networks[0].Switch != service.Lab.Switches[0].ID {
+	if vm.MemoryMB != 4096 || len(vm.Networks) != 1 || vm.Networks[0].Switch != service.CurrentLab().Switches[0].ID {
 		t.Fatalf("vm1 was not refreshed from persisted lab: %+v", vm)
 	}
 
@@ -177,8 +178,8 @@ func TestServiceVMNICDeleteReindexesDirectLinks(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	if got, want := service.VMNICDelete("vm1", "1").Message, "deleted nic from vm:vm1 nic1"; got != want {
-		t.Fatalf("VMNICDelete() = %q, want %q", got, want)
+	if got, want := service.DeleteVMNIC("vm1", 1).Message, "deleted nic from vm:vm1 nic1"; got != want {
+		t.Fatalf("DeleteVMNIC() = %q, want %q", got, want)
 	}
 	vm, ok := service.LabVM("vm1")
 	if !ok {
@@ -187,10 +188,10 @@ func TestServiceVMNICDeleteReindexesDirectLinks(t *testing.T) {
 	if len(vm.Networks) != 2 {
 		t.Fatalf("vm1 networks = %#v, want 2 nics", vm.Networks)
 	}
-	if len(service.Lab.NetworkLinks) != 1 {
-		t.Fatalf("network links = %#v, want only link for shifted nic", service.Lab.NetworkLinks)
+	if len(service.CurrentLab().NetworkLinks) != 1 {
+		t.Fatalf("network links = %#v, want only link for shifted nic", service.CurrentLab().NetworkLinks)
 	}
-	link := service.Lab.NetworkLinks[0]
+	link := service.CurrentLab().NetworkLinks[0]
 	vm1, _ := service.LabVM("vm1")
 	vm2, _ := service.LabVM("vm2")
 	if link.From.ID != vm1.ID || link.From.NIC != 1 || link.To.ID != vm2.ID || link.To.NIC != 1 {
@@ -198,7 +199,7 @@ func TestServiceVMNICDeleteReindexesDirectLinks(t *testing.T) {
 	}
 }
 
-func TestServiceNICIndexArgumentsTrimWhitespace(t *testing.T) {
+func TestServiceConnectVMNIC(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "demo.lab")
 	initial := &lab.Lab{
 		ID:       "demo",
@@ -220,8 +221,9 @@ func TestServiceNICIndexArgumentsTrimWhitespace(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	if got, want := service.VMNICConnect("vm1", " 0 ", map[string]string{"to": "lan"}).Message, "connected nic to vm:vm1"; got != want {
-		t.Fatalf("VMNICConnect() = %q, want %q", got, want)
+	request := NICConnectRequest{NIC: 0, Endpoint: NetworkEndpointRef{Type: NetworkEndpointAuto, ID: "lan"}}
+	if got, want := service.ConnectVMNIC("vm1", request).Message, "connected nic to vm:vm1"; got != want {
+		t.Fatalf("ConnectVMNIC() = %q, want %q", got, want)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -251,8 +253,8 @@ func TestServiceContainerNICDelete(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	if got, want := service.ContainerNICDelete("web", "0").Message, "deleted nic from container:web nic0"; got != want {
-		t.Fatalf("ContainerNICDelete() = %q, want %q", got, want)
+	if got, want := service.DeleteContainerNIC("web", 0).Message, "deleted nic from container:web nic0"; got != want {
+		t.Fatalf("DeleteContainerNIC() = %q, want %q", got, want)
 	}
 	ct, ok := service.LabContainer("web")
 	if !ok {
@@ -399,29 +401,29 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 		},
 		{
 			name: "switch",
-			run:  func() string { return service.SwitchCreate("", map[string]string{}).Message },
+			run:  func() string { return service.CreateSwitch(SwitchCreateRequest{}).Message },
 			want: "usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]",
 		},
 		{
 			name: "switch duplicate name",
-			run:  func() string { return service.SwitchCreate("existing", map[string]string{}).Message },
+			run:  func() string { return service.CreateSwitch(SwitchCreateRequest{Name: "existing"}).Message },
 			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "external",
-			run:  func() string { return service.ExternalCreate("", map[string]string{}).Message },
+			run:  func() string { return service.CreateExternal(ExternalCreateRequest{}).Message },
 			want: "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]",
 		},
 		{
 			name: "external duplicate name",
 			run: func() string {
-				return service.ExternalCreate("existing", map[string]string{"interface": "eth0"}).Message
+				return service.CreateExternal(ExternalCreateRequest{Name: "existing", Interface: "eth0"}).Message
 			},
 			want: "node id already exists as switch: existing",
 		},
 		{
 			name: "external interface",
-			run:  func() string { return service.ExternalCreate("uplink", map[string]string{}).Message },
+			run:  func() string { return service.CreateExternal(ExternalCreateRequest{Name: "uplink"}).Message },
 			want: "usage: uplink create <name> interface=IFACE [mode=nat|direct|macnat]",
 		},
 	}
@@ -431,77 +433,14 @@ func TestServiceCreateRejectsEmptyIDWithoutMutatingLab(t *testing.T) {
 			t.Fatalf("%s create = %q, want %q", tt.name, got, tt.want)
 		}
 	}
-	if len(service.Lab.VMs) != 0 || len(service.Lab.Containers) != 0 || len(service.Lab.Switches) != 1 || len(service.Lab.ExternalLinks) != 0 {
-		t.Fatalf("empty-id create mutated lab: %#v", service.Lab)
+	if len(service.CurrentLab().VMs) != 0 || len(service.CurrentLab().Containers) != 0 || len(service.CurrentLab().Switches) != 1 || len(service.CurrentLab().ExternalLinks) != 0 {
+		t.Fatalf("empty-id create mutated lab: %#v", service.CurrentLab())
 	}
-	if service.Lab.Switches[0].ID != "existing" || service.Lab.Switches[0].Name != "" {
-		t.Fatalf("empty-id create mutated existing switch: %#v", service.Lab.Switches)
+	if service.CurrentLab().Switches[0].ID != "existing" || service.CurrentLab().Switches[0].Name != "" {
+		t.Fatalf("empty-id create mutated existing switch: %#v", service.CurrentLab().Switches)
 	}
-	if len(service.Lab.Layout.Nodes) != 1 {
-		t.Fatalf("empty-id create mutated layout: %#v", service.Lab.Layout.Nodes)
-	}
-}
-
-func TestServiceSwitchAndExternalRejectUnsupportedArgs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "demo.lab")
-	initial := &lab.Lab{
-		ID: "demo",
-		Switches: []lab.Switch{{
-			ID:   "lan",
-			Mode: "bridge",
-		}},
-		ExternalLinks: []lab.ExternalLink{{
-			ID:        "uplink",
-			Interface: "eth0",
-			Mode:      lab.ExternalModeNAT,
-		}},
-	}
-	if err := lab.SaveFile(path, initial); err != nil {
-		t.Fatalf("save initial lab: %v", err)
-	}
-	loaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatalf("load initial lab: %v", err)
-	}
-
-	service := NewService(loaded, path)
-	tests := []struct {
-		name string
-		run  func() string
-		want string
-	}{
-		{
-			name: "switch create",
-			run:  func() string { return service.SwitchCreate("wan", map[string]string{"mod": "nat"}).Message },
-			want: "unsupported switch create argument: mod",
-		},
-		{
-			name: "switch set",
-			run:  func() string { return service.SwitchSet("lan", map[string]string{"mod": "nat"}).Message },
-			want: "unsupported switch set argument: mod",
-		},
-		{
-			name: "external create",
-			run:  func() string { return service.ExternalCreate("lte", map[string]string{"iface": "wwan0"}).Message },
-			want: "unsupported uplink create argument: iface",
-		},
-		{
-			name: "external set",
-			run:  func() string { return service.ExternalSet("uplink", map[string]string{"iface": "eth1"}).Message },
-			want: "unsupported uplink set argument: iface",
-		},
-	}
-
-	for _, tt := range tests {
-		if got := tt.run(); got != tt.want {
-			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
-		}
-	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Name != "" || service.Lab.Switches[0].Mode != "bridge" {
-		t.Fatalf("unsupported switch args mutated lab: %#v", service.Lab.Switches)
-	}
-	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].ID != "uplink" || service.Lab.ExternalLinks[0].Name != "" || service.Lab.ExternalLinks[0].Interface != "eth0" {
-		t.Fatalf("unsupported external args mutated lab: %#v", service.Lab.ExternalLinks)
+	if len(service.CurrentLab().Layout.Nodes) != 1 {
+		t.Fatalf("empty-id create mutated layout: %#v", service.CurrentLab().Layout.Nodes)
 	}
 }
 
@@ -567,10 +506,10 @@ func TestServiceVMRejectsInvalidTypedArgsWithoutMutatingLab(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
 	}
-	if len(service.Lab.VMs) != 1 {
-		t.Fatalf("invalid vm args created vms: %#v", service.Lab.VMs)
+	if len(service.CurrentLab().VMs) != 1 {
+		t.Fatalf("invalid vm args created vms: %#v", service.CurrentLab().VMs)
 	}
-	vm := service.Lab.VMs[0]
+	vm := service.CurrentLab().VMs[0]
 	if vm.ID != "vm1" || vm.Name != "" || vm.Disk != "disks/vm1.qcow2" || vm.CPUs != 1 || vm.MemoryMB != 512 || !vm.VNC {
 		t.Fatalf("invalid vm args mutated vm: %#v", vm)
 	}
@@ -609,31 +548,33 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 	}{
 		{
 			name: "switch create bad mode",
-			run:  func(s *Service) string { return s.SwitchCreate("wan", map[string]string{"mode": "bad"}).Message },
+			run:  func(s *Service) string { return s.CreateSwitch(SwitchCreateRequest{Name: "wan", Mode: "bad"}).Message },
 			want: `switch create failed: switch "wan" uses unsupported mode "bad"; supported modes are bridge, nat and macnat-bridge`,
 		},
 		{
 			name: "switch create missing external",
 			run: func(s *Service) string {
-				return s.SwitchCreate("wan", map[string]string{"external": "missing"}).Message
+				return s.CreateSwitch(SwitchCreateRequest{Name: "wan", Uplink: "missing"}).Message
 			},
 			want: `switch create failed: uplink not found: missing`,
 		},
 		{
 			name: "switch set bad mode",
-			run:  func(s *Service) string { return s.SwitchSet("lan", map[string]string{"mode": "bad"}).Message },
+			run:  func(s *Service) string { return s.UpdateSwitch("lan", SwitchUpdate{Mode: SetField("bad")}).Message },
 			want: `switch config failed: switch "lan" uses unsupported mode "bad"; supported modes are bridge, nat and macnat-bridge`,
 		},
 		{
 			name: "external create bad mode",
 			run: func(s *Service) string {
-				return s.ExternalCreate("lte", map[string]string{"interface": "wwan0", "mode": "bad"}).Message
+				return s.CreateExternal(ExternalCreateRequest{Name: "lte", Interface: "wwan0", Mode: "bad"}).Message
 			},
 			want: `uplink create failed: uplink "lte" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
 		},
 		{
 			name: "external set bad mode",
-			run:  func(s *Service) string { return s.ExternalSet("uplink", map[string]string{"mode": "bad"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateExternal("uplink", ExternalUpdate{Mode: SetField("bad")}).Message
+			},
 			want: `uplink config failed: uplink "uplink" uses unsupported mode "bad"; supported modes are nat, direct and macnat`,
 		},
 		{
@@ -697,8 +638,8 @@ func TestServiceRejectsInvalidConfigBeforeMutatingNewFileLab(t *testing.T) {
 		if got := tt.run(service); got != tt.want {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
-		if !reflect.DeepEqual(service.Lab, initial) {
-			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+		if !reflect.DeepEqual(service.CurrentLab(), initial) {
+			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s created lab file or stat failed: %v", tt.name, err)
@@ -729,8 +670,9 @@ func TestServiceSwitchSetAppendsExternalLinks(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 
-	if got := service.SwitchSet("lan", map[string]string{"external": "uplink2"}).Message; got != "configured switch:lan" {
-		t.Fatalf("SwitchSet = %q", got)
+	update := SwitchUpdate{AttachUplink: SetField("uplink2")}
+	if got := service.UpdateSwitch("lan", update).Message; got != "configured switch:lan" {
+		t.Fatalf("UpdateSwitch = %q", got)
 	}
 
 	reloaded, err := lab.LoadFile(path)
@@ -797,29 +739,52 @@ func TestServiceRollsBackWhenSaveFailsForNewPath(t *testing.T) {
 			return s.UpdateContainer("web", ContainerUpdate{Image: SetField("redis")}).Message
 		}},
 		{name: "container delete", run: func(s *Service) string { return s.ContainerDelete("api").Message }},
-		{name: "switch create", run: func(s *Service) string { return s.SwitchCreate("wan", map[string]string{"mode": "bridge"}).Message }},
-		{name: "switch set", run: func(s *Service) string { return s.SwitchSet("lan", map[string]string{"name": "LAN"}).Message }},
+		{name: "switch create", run: func(s *Service) string {
+			return s.CreateSwitch(SwitchCreateRequest{Name: "wan", Mode: "bridge"}).Message
+		}},
+		{name: "switch set", run: func(s *Service) string {
+			return s.UpdateSwitch("lan", SwitchUpdate{Name: SetField("LAN")}).Message
+		}},
 		{name: "switch delete", run: func(s *Service) string { return s.SwitchDelete("lan").Message }},
 		{name: "external create", run: func(s *Service) string {
-			return s.ExternalCreate("lte", map[string]string{"interface": "wwan0"}).Message
+			return s.CreateExternal(ExternalCreateRequest{Name: "lte", Interface: "wwan0"}).Message
 		}},
-		{name: "external set", run: func(s *Service) string { return s.ExternalSet("uplink", map[string]string{"name": "WAN"}).Message }},
+		{name: "external set", run: func(s *Service) string {
+			return s.UpdateExternal("uplink", ExternalUpdate{Name: SetField("WAN")}).Message
+		}},
 		{name: "external delete", run: func(s *Service) string { return s.ExternalDelete("uplink").Message }},
-		{name: "vm nic add", run: func(s *Service) string { return s.VMNICAdd("vm1", nil).Message }},
-		{name: "vm nic connect", run: func(s *Service) string { return s.VMNICConnect("vm2", "0", map[string]string{"switch": "lan"}).Message }},
-		{name: "vm nic delete", run: func(s *Service) string { return s.VMNICDelete("vm2", "0").Message }},
-		{name: "container nic add", run: func(s *Service) string { return s.ContainerNICAdd("web", nil).Message }},
+		{name: "vm nic add", run: func(s *Service) string { return s.AddVMNIC("vm1", NICAddRequest{}).Message }},
+		{name: "vm nic connect", run: func(s *Service) string {
+			request := NICConnectRequest{NIC: 0, Endpoint: NetworkEndpointRef{Type: NetworkEndpointSwitch, ID: "lan"}}
+			return s.ConnectVMNIC("vm2", request).Message
+		}},
+		{name: "vm nic delete", run: func(s *Service) string { return s.DeleteVMNIC("vm2", 0).Message }},
+		{name: "container nic add", run: func(s *Service) string { return s.AddContainerNIC("web", NICAddRequest{}).Message }},
 		{name: "container nic connect", run: func(s *Service) string {
-			return s.ContainerNICConnect("api", "0", map[string]string{"switch": "lan"}).Message
+			request := NICConnectRequest{NIC: 0, Endpoint: NetworkEndpointRef{Type: NetworkEndpointSwitch, ID: "lan"}}
+			return s.ConnectContainerNIC("api", request).Message
 		}},
-		{name: "container nic delete", run: func(s *Service) string { return s.ContainerNICDelete("api", "0").Message }},
-		{name: "direct connect", run: func(s *Service) string { return s.NICConnectDirect("vm", "vm2", "0", "container", "api").Message }},
+		{name: "container nic delete", run: func(s *Service) string { return s.DeleteContainerNIC("api", 0).Message }},
+		{name: "direct connect", run: func(s *Service) string {
+			source := NetworkEndpointRef{Type: NetworkEndpointVM, ID: "vm2", NIC: SetField(0)}
+			target := NetworkEndpointRef{Type: NetworkEndpointContainer, ID: "api"}
+			return s.ConnectDirectNIC(source, target).Message
+		}},
 		{name: "direct connect to", run: func(s *Service) string {
-			return s.NICConnectDirectTo("vm", "vm2", "0", "container", "api", "0").Message
+			source := NetworkEndpointRef{Type: NetworkEndpointVM, ID: "vm2", NIC: SetField(0)}
+			target := NetworkEndpointRef{Type: NetworkEndpointContainer, ID: "api", NIC: SetField(0)}
+			return s.ConnectDirectNIC(source, target).Message
 		}},
-		{name: "direct disconnect", run: func(s *Service) string { return s.NICDisconnect("vm", "vm1", "0").Message }},
-		{name: "disk detach", run: func(s *Service) string { return s.DiskDetach("vm1", map[string]string{"type": "vm"}).Message }},
-		{name: "disk attach base", run: func(s *Service) string { return s.DiskAttach("free", map[string]string{"to": "vm:vm2"}).Message }},
+		{name: "direct disconnect", run: func(s *Service) string {
+			return s.DisconnectNIC(NetworkEndpointRef{Type: NetworkEndpointVM, ID: "vm1", NIC: SetField(0)}).Message
+		}},
+		{name: "disk detach", run: func(s *Service) string {
+			return s.DetachDisk(DiskDetachRequest{Target: workload.Ref{Type: workload.TypeVM, ID: "vm1"}}).Message
+		}},
+		{name: "disk attach base", run: func(s *Service) string {
+			request := DiskAttachRequest{DiskID: "free", Target: workload.Ref{Type: workload.TypeVM, ID: "vm2"}}
+			return s.AttachDisk(request).Message
+		}},
 	}
 
 	for _, tt := range tests {
@@ -834,8 +799,8 @@ func TestServiceRollsBackWhenSaveFailsForNewPath(t *testing.T) {
 		if !strings.Contains(got, "failed:") {
 			t.Fatalf("%s = %q, want save failure", tt.name, got)
 		}
-		if !reflect.DeepEqual(service.Lab, initial) {
-			t.Fatalf("%s failed save mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+		if !reflect.DeepEqual(service.CurrentLab(), initial) {
+			t.Fatalf("%s failed save mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 		}
 	}
 }
@@ -892,12 +857,14 @@ func TestServiceMutationsRequireSavePathBeforeMutatingLab(t *testing.T) {
 		},
 		{
 			name: "nic delete",
-			run:  func() string { return service.VMNICDelete("vm1", "0").Message },
+			run:  func() string { return service.DeleteVMNIC("vm1", 0).Message },
 			want: "nic delete failed: missing lab path",
 		},
 		{
 			name: "direct disconnect",
-			run:  func() string { return service.NICDisconnect("vm", "vm1", "0").Message },
+			run: func() string {
+				return service.DisconnectNIC(NetworkEndpointRef{Type: NetworkEndpointVM, ID: "vm1", NIC: SetField(0)}).Message
+			},
 			want: "nic disconnect failed: missing lab path",
 		},
 		{
@@ -912,23 +879,23 @@ func TestServiceMutationsRequireSavePathBeforeMutatingLab(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
 	}
-	if len(service.Lab.VMs) != 2 || service.Lab.VMs[0].ID != "vm1" || service.Lab.VMs[0].CPUs != 1 || service.Lab.VMs[1].ID != "vm2" {
-		t.Fatalf("missing-path operations mutated vms: %#v", service.Lab.VMs)
+	if len(service.CurrentLab().VMs) != 2 || service.CurrentLab().VMs[0].ID != "vm1" || service.CurrentLab().VMs[0].CPUs != 1 || service.CurrentLab().VMs[1].ID != "vm2" {
+		t.Fatalf("missing-path operations mutated vms: %#v", service.CurrentLab().VMs)
 	}
-	if len(service.Lab.Containers) != 1 || service.Lab.Containers[0].ID != "web" {
-		t.Fatalf("missing-path operations mutated containers: %#v", service.Lab.Containers)
+	if len(service.CurrentLab().Containers) != 1 || service.CurrentLab().Containers[0].ID != "web" {
+		t.Fatalf("missing-path operations mutated containers: %#v", service.CurrentLab().Containers)
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" {
-		t.Fatalf("missing-path operations mutated switches: %#v", service.Lab.Switches)
+	if len(service.CurrentLab().Switches) != 1 || service.CurrentLab().Switches[0].ID != "lan" {
+		t.Fatalf("missing-path operations mutated switches: %#v", service.CurrentLab().Switches)
 	}
-	if len(service.Lab.ExternalLinks) != 1 || service.Lab.ExternalLinks[0].ID != "uplink" {
-		t.Fatalf("missing-path operations mutated externals: %#v", service.Lab.ExternalLinks)
+	if len(service.CurrentLab().ExternalLinks) != 1 || service.CurrentLab().ExternalLinks[0].ID != "uplink" {
+		t.Fatalf("missing-path operations mutated externals: %#v", service.CurrentLab().ExternalLinks)
 	}
-	if len(service.Lab.NetworkLinks) != 1 {
-		t.Fatalf("missing-path operations mutated network links: %#v", service.Lab.NetworkLinks)
+	if len(service.CurrentLab().NetworkLinks) != 1 {
+		t.Fatalf("missing-path operations mutated network links: %#v", service.CurrentLab().NetworkLinks)
 	}
-	if len(service.Lab.VMs[0].Networks) != 1 {
-		t.Fatalf("missing-path operations mutated vm nics: %#v", service.Lab.VMs[0].Networks)
+	if len(service.CurrentLab().VMs[0].Networks) != 1 {
+		t.Fatalf("missing-path operations mutated vm nics: %#v", service.CurrentLab().VMs[0].Networks)
 	}
 }
 
@@ -940,13 +907,15 @@ func TestNetworkNodeRenameRequiresSavePathBeforeMutation(t *testing.T) {
 	}{
 		{
 			name: "switch",
-			run:  func(s *Service) string { return s.SwitchSet("lan", map[string]string{"name": "renamed-lan"}).Message },
+			run: func(s *Service) string {
+				return s.UpdateSwitch("lan", SwitchUpdate{Name: SetField("renamed-lan")}).Message
+			},
 			want: "switch config failed: missing lab path",
 		},
 		{
 			name: "uplink",
 			run: func(s *Service) string {
-				return s.ExternalSet("uplink", map[string]string{"name": "renamed-uplink"}).Message
+				return s.UpdateExternal("uplink", ExternalUpdate{Name: SetField("renamed-uplink")}).Message
 			},
 			want: "uplink config failed: missing lab path",
 		},
@@ -971,8 +940,8 @@ func TestNetworkNodeRenameRequiresSavePathBeforeMutation(t *testing.T) {
 			if got := tt.run(service); got != tt.want {
 				t.Fatalf("rename = %q, want %q", got, tt.want)
 			}
-			if !reflect.DeepEqual(service.Lab, initial) {
-				t.Fatalf("missing-path rename mutated lab:\ngot  %#v\nwant %#v", service.Lab, initial)
+			if !reflect.DeepEqual(service.CurrentLab(), initial) {
+				t.Fatalf("missing-path rename mutated lab:\ngot  %#v\nwant %#v", service.CurrentLab(), initial)
 			}
 		})
 	}
@@ -1041,8 +1010,8 @@ func TestWorkloadNetworkRefsValidateBeforeSavePath(t *testing.T) {
 		if got := tt.run(service); got != tt.want {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
-		if !reflect.DeepEqual(service.Lab, initial) {
-			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+		if !reflect.DeepEqual(service.CurrentLab(), initial) {
+			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 		}
 	}
 }
@@ -1070,13 +1039,18 @@ func TestNICMACArgsValidateBeforeSavePath(t *testing.T) {
 	}{
 		{
 			name: "vm nic add",
-			run:  func(s *Service) string { return s.VMNICAdd("vm1", map[string]string{"mac": "not-a-mac"}).Message },
+			run:  func(s *Service) string { return s.AddVMNIC("vm1", NICAddRequest{MAC: "not-a-mac"}).Message },
 			want: "invalid vm nic mac: not-a-mac",
 		},
 		{
 			name: "vm nic connect",
 			run: func(s *Service) string {
-				return s.VMNICConnect("vm1", "0", map[string]string{"to": "lan", "mac": "not-a-mac"}).Message
+				request := NICConnectRequest{
+					NIC:      0,
+					Endpoint: NetworkEndpointRef{Type: NetworkEndpointAuto, ID: "lan"},
+					MAC:      "not-a-mac",
+				}
+				return s.ConnectVMNIC("vm1", request).Message
 			},
 			want: "invalid vm nic mac: not-a-mac",
 		},
@@ -1100,14 +1074,19 @@ func TestNICMACArgsValidateBeforeSavePath(t *testing.T) {
 		{
 			name: "container nic add",
 			run: func(s *Service) string {
-				return s.ContainerNICAdd("web", map[string]string{"mac": "not-a-mac"}).Message
+				return s.AddContainerNIC("web", NICAddRequest{MAC: "not-a-mac"}).Message
 			},
 			want: "invalid container nic mac: not-a-mac",
 		},
 		{
 			name: "container nic connect",
 			run: func(s *Service) string {
-				return s.ContainerNICConnect("web", "0", map[string]string{"to": "lan", "mac": "not-a-mac"}).Message
+				request := NICConnectRequest{
+					NIC:      0,
+					Endpoint: NetworkEndpointRef{Type: NetworkEndpointAuto, ID: "lan"},
+					MAC:      "not-a-mac",
+				}
+				return s.ConnectContainerNIC("web", request).Message
 			},
 			want: "invalid container nic mac: not-a-mac",
 		},
@@ -1119,8 +1098,8 @@ func TestNICMACArgsValidateBeforeSavePath(t *testing.T) {
 		if got := tt.run(service); got != tt.want {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
-		if !reflect.DeepEqual(service.Lab, initial) {
-			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+		if !reflect.DeepEqual(service.CurrentLab(), initial) {
+			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 		}
 	}
 }
@@ -1162,13 +1141,13 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 		},
 		{
 			name: "switch collides with external",
-			run:  func(s *Service) string { return s.SwitchCreate("uplink", nil).Message },
+			run:  func(s *Service) string { return s.CreateSwitch(SwitchCreateRequest{Name: "uplink"}).Message },
 			want: "node id already exists as uplink: uplink",
 		},
 		{
 			name: "external collides with switch",
 			run: func(s *Service) string {
-				return s.ExternalCreate("lan", map[string]string{"interface": "eth0"}).Message
+				return s.CreateExternal(ExternalCreateRequest{Name: "lan", Interface: "eth0"}).Message
 			},
 			want: "node id already exists as switch: lan",
 		},
@@ -1181,8 +1160,8 @@ func TestCreateRejectsCrossTypeNodeIDBeforeSavePath(t *testing.T) {
 			if got := tt.run(service); got != tt.want {
 				t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 			}
-			if !reflect.DeepEqual(service.Lab, initial) {
-				t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+			if !reflect.DeepEqual(service.CurrentLab(), initial) {
+				t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 			}
 		})
 	}
@@ -1274,12 +1253,12 @@ func TestServiceEmptySetArgsAreNoOpBeforeSavePath(t *testing.T) {
 		},
 		{
 			name: "switch set",
-			run:  func(s *Service) string { return s.SwitchSet("lan", nil).Message },
+			run:  func(s *Service) string { return s.UpdateSwitch("lan", SwitchUpdate{}).Message },
 			want: "configured switch:LAN",
 		},
 		{
 			name: "external set",
-			run:  func(s *Service) string { return s.ExternalSet("uplink", nil).Message },
+			run:  func(s *Service) string { return s.UpdateExternal("uplink", ExternalUpdate{}).Message },
 			want: "configured uplink:WAN",
 		},
 	}
@@ -1290,8 +1269,8 @@ func TestServiceEmptySetArgsAreNoOpBeforeSavePath(t *testing.T) {
 		if got := tt.run(service); got != tt.want {
 			t.Fatalf("%s = %q, want %q", tt.name, got, tt.want)
 		}
-		if !reflect.DeepEqual(service.Lab, initial) {
-			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.Lab, initial)
+		if !reflect.DeepEqual(service.CurrentLab(), initial) {
+			t.Fatalf("%s mutated lab:\ngot  %#v\nwant %#v", tt.name, service.CurrentLab(), initial)
 		}
 	}
 }
@@ -1306,11 +1285,12 @@ func TestNICDisconnectValidatesEndpointBeforeSavePath(t *testing.T) {
 		}},
 	}, "")
 
-	if got := service.NICDisconnect("pod", "vm1", "0").Message; got != "direct link target must be vm or container" {
+	endpoint := NetworkEndpointRef{Type: NetworkEndpointType("pod"), ID: "vm1", NIC: SetField(0)}
+	if got := service.DisconnectNIC(endpoint).Message; got != "direct link target must be vm or container" {
 		t.Fatalf("NICDisconnect invalid type = %q, want endpoint validation", got)
 	}
-	if len(service.Lab.NetworkLinks) != 1 {
-		t.Fatalf("invalid disconnect mutated network links: %#v", service.Lab.NetworkLinks)
+	if len(service.CurrentLab().NetworkLinks) != 1 {
+		t.Fatalf("invalid disconnect mutated network links: %#v", service.CurrentLab().NetworkLinks)
 	}
 }
 
@@ -1329,12 +1309,12 @@ func TestSaveAndRefreshFailureReloadsPersistedLab(t *testing.T) {
 	}
 
 	service := NewService(loaded, path)
-	got := service.SwitchCreate("badmode", map[string]string{"mode": "bad"}).Message
+	got := service.CreateSwitch(SwitchCreateRequest{Name: "badmode", Mode: "bad"}).Message
 	if !strings.Contains(got, "unsupported mode") {
 		t.Fatalf("SwitchCreate = %q, want validation failure", got)
 	}
-	if len(service.Lab.Switches) != 1 || service.Lab.Switches[0].ID != "lan" || service.Lab.Switches[0].Name != "" || service.Lab.Switches[0].Mode != "bridge" {
-		t.Fatalf("service did not reload persisted lab after failed save: %#v", service.Lab.Switches)
+	if len(service.CurrentLab().Switches) != 1 || service.CurrentLab().Switches[0].ID != "lan" || service.CurrentLab().Switches[0].Name != "" || service.CurrentLab().Switches[0].Mode != "bridge" {
+		t.Fatalf("service did not reload persisted lab after failed save: %#v", service.CurrentLab().Switches)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -1397,8 +1377,8 @@ func TestNodeRenameRewritesAllMnemonicReferences(t *testing.T) {
 	for label, got := range map[string]string{
 		"vm":        service.UpdateVM("vm-old", VMUpdate{Name: SetField("vm-new")}).Message,
 		"container": service.UpdateContainer("ct-old", ContainerUpdate{Name: SetField("ct-new")}).Message,
-		"switch":    service.SwitchSet("sw-old", map[string]string{"name": "sw-new"}).Message,
-		"external":  service.ExternalSet("up-old", map[string]string{"name": "up-new"}).Message,
+		"switch":    service.UpdateSwitch("sw-old", SwitchUpdate{Name: SetField("sw-new")}).Message,
+		"external":  service.UpdateExternal("up-old", ExternalUpdate{Name: SetField("up-new")}).Message,
 	} {
 		if !strings.Contains(got, "runtime will be recreated") {
 			t.Fatalf("%s rename message = %q", label, got)
@@ -1450,7 +1430,7 @@ func TestNodeRenameCollisionDoesNotMutateLab(t *testing.T) {
 	if err := service.renameNodeID("vm", "router", "LAN"); err == nil || err.Error() != "node id already exists as switch: LAN" {
 		t.Fatalf("rename collision = %v", err)
 	}
-	if !reflect.DeepEqual(service.Lab, initial) {
-		t.Fatalf("rename collision mutated lab:\ngot  %#v\nwant %#v", service.Lab, initial)
+	if !reflect.DeepEqual(service.CurrentLab(), initial) {
+		t.Fatalf("rename collision mutated lab:\ngot  %#v\nwant %#v", service.CurrentLab(), initial)
 	}
 }

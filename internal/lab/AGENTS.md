@@ -7,7 +7,7 @@
 
 ## Ownership
 
-- `lab.go` owns public schema structs; `io.go` and `normalize.go` own load/save and normalization.
+- `lab.go` owns public schema structs; `session.go` owns loaded-lab identity, path, and revision; `io.go` and `normalize.go` own load/save and normalization.
 - `validate*.go` owns validation orchestration and resource-specific validation sections; `lookup.go` owns shared schema lookups and endpoint equality.
 - `storage.go` owns `~/.foxlab` storage roots and managed disk/layer paths.
 - `*_test.go` files should cover schema compatibility, validation errors, path behavior, and save/load round trips.

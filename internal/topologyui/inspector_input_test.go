@@ -27,10 +27,8 @@ func TestInspectorEditsContainerConfigurationAndCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 		ViewWidth:  120,
 		ViewHeight: 30,
 	}
@@ -85,12 +83,10 @@ func TestInspectorShellButtonOpensContainerShell(t *testing.T) {
 	key := NodeKey(NodeContainer, "kali")
 	runtime := &fakeVMRuntime{states: map[string]string{key: "running"}}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
-		State:         ViewState{Focus: FocusInspector},
-		ViewWidth:     120,
-		ViewHeight:    30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
+		State:      ViewState{Focus: FocusInspector},
+		ViewWidth:  120,
+		ViewHeight: 30,
 	}
 	app.Model.Nodes[0].State = "running"
 	fields := app.selectedInspectorFields()
@@ -126,9 +122,7 @@ func TestInspectorVNCButtonOpensVMViewer(t *testing.T) {
 	loaded := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "router", CPUs: 2, MemoryMB: 2048, VNC: true}}}
 	key := NodeKey(NodeVM, "router")
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		VNCPorts:   map[string]int{key: 5905},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), VNCPorts: map[string]int{key: 5905},
 		VNCViewer:  "/bin/true",
 		State:      ViewState{Focus: FocusInspector},
 		ViewWidth:  120,
@@ -185,18 +179,16 @@ func TestInspectorDeleteButtonDeletesWithKeyboardAndMouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusInspector},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusInspector},
 		ViewWidth:  120,
 		ViewHeight: 30,
 	}
 	fields := app.selectedInspectorFields()
 	app.State.InspectorSelected = inspectorFieldIndex(t, fields, "deleteAction", "")
 	app.handleKey("enter")
-	if len(app.Lab.Containers) != 1 || app.Lab.Containers[0].ID != "second" {
-		t.Fatalf("containers after keyboard delete = %#v, want second only", app.Lab.Containers)
+	if len(app.currentLab().Containers) != 1 || app.currentLab().Containers[0].ID != "second" {
+		t.Fatalf("containers after keyboard delete = %#v, want second only", app.currentLab().Containers)
 	}
 
 	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
@@ -206,8 +198,8 @@ func TestInspectorDeleteButtonDeletesWithKeyboardAndMouse(t *testing.T) {
 		t.Fatal("Delete button is not visible after the Inspector sections")
 	}
 	app.handleKey("mouse:" + strconv.Itoa(button.X+button.W/2) + ":" + strconv.Itoa(button.Y) + ":0")
-	if len(app.Lab.Containers) != 0 {
-		t.Fatalf("containers after mouse delete = %#v, want none", app.Lab.Containers)
+	if len(app.currentLab().Containers) != 0 {
+		t.Fatalf("containers after mouse delete = %#v, want none", app.currentLab().Containers)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -233,10 +225,8 @@ func TestInspectorInterfacePickerSearchesAndSelectsHostInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusInspector},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusInspector},
 		ViewWidth:  120,
 		ViewHeight: 30,
 	}
@@ -324,10 +314,8 @@ func TestInspectorMouseTogglesCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusInspector},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusInspector},
 		ViewWidth:  120,
 		ViewHeight: 30,
 	}
@@ -499,8 +487,7 @@ func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
-		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, labPath), State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
 	}
 	fields := app.selectedInspectorFields()
 	diskIndex := inspectorFieldIndex(t, fields, "disk:data", "")
@@ -512,7 +499,7 @@ func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
 	}
 
 	app.handleInspectorMouse(mouseEvent{x: panel.X + 5, y: y, button: 0}, panel)
-	if got := app.Lab.Disks[0].AttachedTo; got != "" {
+	if got := app.currentLab().Disks[0].AttachedTo; got != "" {
 		t.Fatalf("clicking disk label attached it to %q, want selection only", got)
 	}
 
@@ -521,7 +508,7 @@ func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
 		t.Fatal("attachable disk has no mouse button rect")
 	}
 	app.handleInspectorMouse(mouseEvent{x: button.X + 1, y: y, button: 0}, panel)
-	if got := app.Lab.Disks[0].AttachedTo; got != "vm1" {
+	if got := app.currentLab().Disks[0].AttachedTo; got != "vm1" {
 		t.Fatalf("clicking Attach attached disk to %q, want vm1; message=%q", got, app.State.Message)
 	}
 
@@ -537,7 +524,7 @@ func TestInspectorDiskAttachButtonOwnsMouseActivation(t *testing.T) {
 		t.Fatalf("attached disk button = %q style %q visible=%v", label, style, ok)
 	}
 	app.handleInspectorMouse(mouseEvent{x: button.X + 1, y: y, button: 0}, panel)
-	if got := app.Lab.Disks[0].AttachedTo; got != "" {
+	if got := app.currentLab().Disks[0].AttachedTo; got != "" {
 		t.Fatalf("clicking Detach left disk attached to %q; message=%q", got, app.State.Message)
 	}
 }
@@ -555,8 +542,7 @@ func TestInspectorAddDiskShowsInlineCursorAndWorksFromMouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
-		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
 	}
 	fields := app.selectedInspectorFields()
 	addDisk := inspectorFieldIndex(t, fields, "addDisk", "")
@@ -583,8 +569,8 @@ func TestInspectorAddDiskShowsInlineCursorAndWorksFromMouse(t *testing.T) {
 		t.Fatalf("Add Disk mouse activation state = %#v", app.State)
 	}
 	app.handleKey("enter")
-	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "disk" {
-		t.Fatalf("disks after Inspector Add Disk = %#v, message=%q notification=%#v", app.Lab.Disks, app.State.Message, app.State.Notification)
+	if len(app.currentLab().Disks) != 1 || app.currentLab().Disks[0].ID != "disk" {
+		t.Fatalf("disks after Inspector Add Disk = %#v, message=%q notification=%#v", app.currentLab().Disks, app.State.Message, app.State.Notification)
 	}
 }
 
@@ -610,15 +596,14 @@ func TestInspectorDoesNotDeleteDisksWithKeyboardOrMouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
-		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, labPath), State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
 	}
 	fields := app.selectedInspectorFields()
 	diskIndex := inspectorFieldIndex(t, fields, "disk:data", "")
 	app.State.InspectorSelected = diskIndex
 	app.handleKey("char:x")
-	if len(app.Lab.Disks) != 1 {
-		t.Fatalf("keyboard X deleted Inspector disk: %#v", app.Lab.Disks)
+	if len(app.currentLab().Disks) != 1 {
+		t.Fatalf("keyboard X deleted Inspector disk: %#v", app.currentLab().Disks)
 	}
 
 	panel := inspectorBounds(app.ViewWidth, app.contentHeight())
@@ -631,8 +616,8 @@ func TestInspectorDoesNotDeleteDisksWithKeyboardOrMouse(t *testing.T) {
 		t.Fatalf("Inspector disk row still renders delete control:\n%s", g.String(false))
 	}
 	app.handleKey("mouse:" + strconv.Itoa(panel.X+panel.W-4) + ":" + strconv.Itoa(y) + ":0")
-	if len(app.Lab.Disks) != 1 {
-		t.Fatalf("mouse click deleted Inspector disk: %#v", app.Lab.Disks)
+	if len(app.currentLab().Disks) != 1 {
+		t.Fatalf("mouse click deleted Inspector disk: %#v", app.currentLab().Disks)
 	}
 	if _, err := os.Stat(diskPath); err != nil {
 		t.Fatalf("Inspector removed disk file: %v", err)

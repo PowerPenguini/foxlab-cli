@@ -63,7 +63,7 @@ func vmUpdateRequest(args map[string]string) (topology.VMUpdate, error) {
 		update.ISO = topology.SetField(value)
 	}
 	if value, ok := args["vnc"]; ok {
-		parsed, valid := parseWorkloadBool(value)
+		parsed, valid := parseCommandBool(value)
 		if !valid {
 			return topology.VMUpdate{}, fmt.Errorf("invalid vm vnc: %s", value)
 		}
@@ -148,17 +148,6 @@ func parsePositiveWorkloadInt(field, value string) (int, error) {
 		return 0, fmt.Errorf("invalid %s: %s", field, value)
 	}
 	return parsed, nil
-}
-
-func parseWorkloadBool(value string) (bool, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true, true
-	case "0", "false", "no", "off":
-		return false, true
-	default:
-		return false, false
-	}
 }
 
 func splitWorkloadCommand(value string) []string {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 )
 
 const (
@@ -88,14 +89,14 @@ func (a *App) clearDiskExplorerEdit() {
 }
 
 func (a *App) diskExplorerRows() []diskExplorerRow {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return nil
 	}
 	layerRows := map[string][]lab.Disk{}
 	seen := map[string]bool{}
 	baseOrder := []lab.Disk{}
 	otherRows := []lab.Disk{}
-	for _, disk := range a.Lab.Disks {
+	for _, disk := range a.currentLab().Disks {
 		switch diskKindUI(disk) {
 		case "layer":
 			layerRows[disk.Base] = append(layerRows[disk.Base], disk)
@@ -105,7 +106,7 @@ func (a *App) diskExplorerRows() []diskExplorerRow {
 			otherRows = append(otherRows, disk)
 		}
 	}
-	rows := make([]diskExplorerRow, 0, len(a.Lab.Disks))
+	rows := make([]diskExplorerRow, 0, len(a.currentLab().Disks))
 	for _, disk := range baseOrder {
 		rows = append(rows, diskExplorerRow{Disk: disk})
 		seen[disk.ID] = true
@@ -254,7 +255,12 @@ func (a *App) commitDiskExplorerEdit() {
 	case diskExplorerActionResize:
 		size := strings.TrimSpace(a.State.DiskExplorerEditValue)
 		a.clearDiskExplorerEdit()
-		a.diskResize(row.Disk.ID, map[string]string{"size": size})
+		request, err := diskResizeRequest(row.Disk.ID, map[string]string{"size": size})
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskResize(request)
 	}
 }
 
@@ -263,7 +269,11 @@ func (a *App) runDiskExplorerAction(action string) {
 	switch action {
 	case diskExplorerActionCreate:
 		id := a.nextDiskIDForNode("")
-		a.diskCreate(id, map[string]string{"size": "10", "format": "qcow2"})
+		a.diskCreate(topology.DiskCreateRequest{
+			ID:     id,
+			SizeGB: topology.SetField(10),
+			Format: topology.DiskFormatQCOW2,
+		})
 		a.selectDiskExplorerID(id)
 	case diskExplorerActionImport:
 		a.openDiskImportBrowser()

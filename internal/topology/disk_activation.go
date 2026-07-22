@@ -18,11 +18,11 @@ func (s *Service) activateContainerDataDisk(disk lab.Disk, targetID string) Resu
 	}
 	mutation := s.beginLabMutation()
 	s.detachActiveDisk("container", targetID)
-	s.Lab.Disks[index].Kind = "data"
-	s.Lab.Disks[index].Base = ""
-	s.Lab.Disks[index].AttachedType = "container"
-	s.Lab.Disks[index].AttachedTo = targetID
-	s.setWorkloadDisk("container", targetID, s.Lab.ResolvePath(disk.Path))
+	s.CurrentLab().Disks[index].Kind = "data"
+	s.CurrentLab().Disks[index].Base = ""
+	s.CurrentLab().Disks[index].AttachedType = "container"
+	s.CurrentLab().Disks[index].AttachedTo = targetID
+	s.setWorkloadDisk("container", targetID, s.CurrentLab().ResolvePath(disk.Path))
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("disk attach failed: "+err.Error(), err)
 	}
@@ -46,11 +46,11 @@ func (s *Service) activateBaseDisk(disk lab.Disk, targetType, targetID string) R
 	}
 	mutation := s.beginLabMutation()
 	s.detachActiveDisk(targetType, targetID)
-	s.Lab.Disks[index].Kind = "base"
-	s.Lab.Disks[index].Base = ""
-	s.Lab.Disks[index].AttachedType = targetType
-	s.Lab.Disks[index].AttachedTo = targetID
-	s.setWorkloadDisk(targetType, targetID, s.Lab.ResolvePath(disk.Path))
+	s.CurrentLab().Disks[index].Kind = "base"
+	s.CurrentLab().Disks[index].Base = ""
+	s.CurrentLab().Disks[index].AttachedType = targetType
+	s.CurrentLab().Disks[index].AttachedTo = targetID
+	s.setWorkloadDisk(targetType, targetID, s.CurrentLab().ResolvePath(disk.Path))
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("disk attach failed: "+err.Error(), err)
 	}
@@ -76,9 +76,9 @@ func (s *Service) activateDiskLayer(id string, disk lab.Disk, targetType, target
 	}
 	mutation := s.beginLabMutation()
 	s.detachActiveDisk(targetType, targetID)
-	s.Lab.Disks[index].AttachedType = targetType
-	s.Lab.Disks[index].AttachedTo = targetID
-	s.setWorkloadDisk(targetType, targetID, s.Lab.ResolvePath(disk.Path))
+	s.CurrentLab().Disks[index].AttachedType = targetType
+	s.CurrentLab().Disks[index].AttachedTo = targetID
+	s.setWorkloadDisk(targetType, targetID, s.CurrentLab().ResolvePath(disk.Path))
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("disk attach failed: "+err.Error(), err)
 	}
@@ -86,17 +86,17 @@ func (s *Service) activateDiskLayer(id string, disk lab.Disk, targetType, target
 }
 
 func (s *Service) detachActiveDisk(targetType, targetID string) {
-	for i := range s.Lab.Disks {
-		if s.Lab.Disks[i].AttachedType == targetType && s.Lab.Disks[i].AttachedTo == targetID {
-			s.Lab.Disks[i].AttachedType = ""
-			s.Lab.Disks[i].AttachedTo = ""
+	for i := range s.CurrentLab().Disks {
+		if s.CurrentLab().Disks[i].AttachedType == targetType && s.CurrentLab().Disks[i].AttachedTo == targetID {
+			s.CurrentLab().Disks[i].AttachedType = ""
+			s.CurrentLab().Disks[i].AttachedTo = ""
 		}
 	}
 	s.setWorkloadDisk(targetType, targetID, "")
 }
 
 func (s *Service) setWorkloadDisk(targetType, targetID, path string) {
-	setLabWorkloadDisk(s.Lab, targetType, targetID, path)
+	setLabWorkloadDisk(s.CurrentLab(), targetType, targetID, path)
 }
 
 func setLabWorkloadDisk(l *lab.Lab, targetType, targetID, path string) {
@@ -122,13 +122,13 @@ func setLabWorkloadDisk(l *lab.Lab, targetType, targetID, path string) {
 }
 
 func (s *Service) detachDisksForNode(targetType, targetID string) {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return
 	}
-	for i := range s.Lab.Disks {
-		if s.Lab.Disks[i].AttachedType == targetType && s.Lab.Disks[i].AttachedTo == targetID {
-			s.Lab.Disks[i].AttachedType = ""
-			s.Lab.Disks[i].AttachedTo = ""
+	for i := range s.CurrentLab().Disks {
+		if s.CurrentLab().Disks[i].AttachedType == targetType && s.CurrentLab().Disks[i].AttachedTo == targetID {
+			s.CurrentLab().Disks[i].AttachedType = ""
+			s.CurrentLab().Disks[i].AttachedTo = ""
 		}
 	}
 }

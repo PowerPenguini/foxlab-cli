@@ -29,7 +29,7 @@ func (s *recordingTabSession) Close() error {
 
 func testAppWithShellTab(t *testing.T, status tabStatus) (*App, *appTab, *recordingTabSession) {
 	t.Helper()
-	app := &App{Lab: &lab.Lab{ID: "demo"}}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo"}, "")}
 	app.ensureTabs()
 	session := &recordingTabSession{}
 	tab := &appTab{
@@ -50,7 +50,7 @@ func testAppWithShellTab(t *testing.T, status tabStatus) (*App, *appTab, *record
 }
 
 func TestLabCardClosesLikeEveryOtherCard(t *testing.T) {
-	app := &App{Lab: &lab.Lab{ID: "training"}}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "training"}, "")}
 	app.ensureTabs()
 	if len(app.tabs.tabs) != 1 {
 		t.Fatalf("tabs = %d, want one", len(app.tabs.tabs))
@@ -71,9 +71,7 @@ func TestLabCardClosesLikeEveryOtherCard(t *testing.T) {
 }
 
 func TestDiskExplorerOpensAsReusableApplicationTab(t *testing.T) {
-	app := &App{
-		Lab:        &lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Kind: "base", SizeGB: 10, Format: "qcow2", Path: "disks/data.qcow2"}}},
-		Model:      Model{ID: "demo"},
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Kind: "base", SizeGB: 10, Format: "qcow2", Path: "disks/data.qcow2"}}}, ""), Model: Model{ID: "demo"},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -137,7 +135,7 @@ func TestTerminalUpdateWakesBlockedInputPoll(t *testing.T) {
 	}
 	defer input.Close()
 	defer inputWriter.Close()
-	app := &App{In: input, Lab: &lab.Lab{ID: "demo"}}
+	app := &App{In: input, Session: lab.NewSession(&lab.Lab{ID: "demo"}, "")}
 	app.ensureTabs()
 	if err := app.tabs.openWakePipe(); err != nil {
 		t.Fatal(err)
@@ -196,7 +194,7 @@ func TestShellInputDoesNotRenderStaleFrame(t *testing.T) {
 }
 
 func TestInitialShellSizeUsesCurrentContentViewport(t *testing.T) {
-	app := &App{Lab: &lab.Lab{ID: "demo"}, ViewWidth: 132, ViewHeight: 41}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), ViewWidth: 132, ViewHeight: 41}
 	app.ensureTabs()
 	cols, rows := app.initialShellSize()
 	if cols != 132 || rows != 40 {
@@ -513,7 +511,7 @@ func TestBracketedPastePayloadCannotTriggerFoxLabShortcuts(t *testing.T) {
 }
 
 func TestBracketedPasteDoesNotTriggerLabShortcuts(t *testing.T) {
-	app := &App{Lab: &lab.Lab{ID: "demo"}, Model: MockModel(), State: ViewState{Focus: FocusGraph}}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), Model: MockModel(), State: ViewState{Focus: FocusGraph}}
 	app.ensureTabs()
 	selected := app.State.Selected
 	app.handleTabInput("paste-start", []byte(bracketedPasteStart))
@@ -527,7 +525,7 @@ func TestBracketedPasteDoesNotTriggerLabShortcuts(t *testing.T) {
 }
 
 func TestBracketedPasteIntoPaletteCannotSubmitOrCloseIt(t *testing.T) {
-	app := &App{Lab: &lab.Lab{ID: "demo"}, State: ViewState{PaletteOpen: true}}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{PaletteOpen: true}}
 	app.ensureTabs()
 	app.handleTabInput("paste-start", []byte(bracketedPasteStart))
 	if app.handleTabInput("char:x", []byte("x")) {
@@ -856,7 +854,7 @@ func TestCloseTabsInvalidatesLateSessionCompletion(t *testing.T) {
 }
 
 func TestClosingStartingVMTabCancelsConsoleConnection(t *testing.T) {
-	app := &App{Lab: &lab.Lab{ID: "demo"}}
+	app := &App{Session: lab.NewSession(&lab.Lab{ID: "demo"}, "")}
 	app.ensureTabs()
 	started := make(chan struct{})
 	canceled := make(chan struct{})
@@ -903,7 +901,7 @@ func TestTabBarIsAlwaysFirstRowAndShellOutputStartsBelowIt(t *testing.T) {
 }
 
 func TestClickingCloseOnFinalLabCardExitsInteractiveRun(t *testing.T) {
-	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
+	app := App{Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph}, Out: tempOutputFile(t)}
 	reads := 0
 	start := func(*App) (func(), error) { return func() {}, nil }
 	read := func(app *App) (string, error) {

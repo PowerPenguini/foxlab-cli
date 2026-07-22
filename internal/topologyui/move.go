@@ -69,17 +69,17 @@ func (a *App) saveActiveMove() {
 		return
 	}
 	node := a.Model.Nodes[index]
-	if a.Lab != nil {
-		snapshot := lab.Clone(a.Lab)
-		if a.Lab.Layout.Nodes == nil {
-			a.Lab.Layout.Nodes = map[string]lab.Position{}
+	if a.currentLab() != nil {
+		snapshot := lab.Clone(a.currentLab())
+		if a.currentLab().Layout.Nodes == nil {
+			a.currentLab().Layout.Nodes = map[string]lab.Position{}
 		}
-		a.Lab.Layout.Nodes[node.ID] = lab.Position{X: node.X * 16, Y: node.Y * 24}
+		a.currentLab().Layout.Nodes[node.ID] = lab.Position{X: node.X * 16, Y: node.Y * 24}
 		if err := a.saveAndRefresh(); err != nil {
-			a.Lab = snapshot
-			if a.Service != nil {
-				a.Service.Lab = snapshot
-			}
+			session := a.ensureSession()
+			revision := session.Revision()
+			session.Replace(snapshot)
+			a.refreshAfterSessionRevision(revision)
 			a.State.Message = "move failed: " + err.Error()
 			return
 		}

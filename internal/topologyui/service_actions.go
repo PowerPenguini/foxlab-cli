@@ -3,108 +3,128 @@ package topologyui
 import "foxlab-cli/internal/topology"
 
 func (a *App) vmCreate(request topology.VMCreateRequest) {
-	a.setOperationResult(a.ensureService().CreateVM(request))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.CreateVM(request)
+	})
 }
 
 func (a *App) vmSet(id string, update topology.VMUpdate) {
-	a.setOperationResult(a.ensureService().UpdateVM(id, update))
-	a.syncAfterServiceMutation()
-	if update.VNC.Set && a.shouldRefreshRuntimeAfterMutation() {
+	result := a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.UpdateVM(id, update)
+	})
+	if result.Changed && update.VNC.Set && a.shouldRefreshRuntimeAfterMutation() {
 		a.refreshWorkloadStates()
 	}
 }
 
-func (a *App) vmNICAdd(id string, args map[string]string) topology.Result {
-	result := a.ensureService().VMNICAdd(id, args)
-	a.setOperationResult(result)
-	a.syncAfterServiceMutation()
-	return result
+func (a *App) vmNICAdd(id string, request topology.NICAddRequest) topology.Result {
+	return a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.AddVMNIC(id, request)
+	})
 }
 
-func (a *App) vmNICConnect(id, index string, args map[string]string) {
-	a.setOperationResult(a.ensureService().VMNICConnect(id, index, args))
-	a.syncAfterServiceMutation()
+func (a *App) vmNICConnect(id string, request topology.NICConnectRequest) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ConnectVMNIC(id, request)
+	})
 }
 
-func (a *App) vmNICDelete(id, index string) {
-	a.setOperationResult(a.ensureService().VMNICDelete(id, index))
-	a.syncAfterServiceMutation()
+func (a *App) vmNICDelete(id string, index int) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.DeleteVMNIC(id, index)
+	})
 }
 
 func (a *App) vmDelete(id string) {
-	a.setOperationResult(a.ensureService().VMDelete(id))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.VMDelete(id)
+	})
 }
 
-func (a *App) switchCreate(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().SwitchCreate(id, args))
-	a.syncAfterServiceMutation()
+func (a *App) switchCreate(request topology.SwitchCreateRequest) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.CreateSwitch(request)
+	})
 }
 
-func (a *App) switchSet(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().SwitchSet(id, args))
-	a.syncAfterServiceMutation()
+func (a *App) switchSet(id string, update topology.SwitchUpdate) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.UpdateSwitch(id, update)
+	})
 }
 
 func (a *App) switchDisconnectExternal(id, externalID string) {
-	a.setOperationResult(a.ensureService().SwitchDisconnectExternal(id, externalID))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.SwitchDisconnectExternal(id, externalID)
+	})
 }
 
 func (a *App) switchDelete(id string) {
-	a.setOperationResult(a.ensureService().SwitchDelete(id))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.SwitchDelete(id)
+	})
 }
 
-func (a *App) externalCreate(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().ExternalCreate(id, args))
-	a.syncAfterServiceMutation()
+func (a *App) externalCreate(request topology.ExternalCreateRequest) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.CreateExternal(request)
+	})
 }
 
-func (a *App) externalSet(id string, args map[string]string) {
-	a.setOperationResult(a.ensureService().ExternalSet(id, args))
-	a.syncAfterServiceMutation()
+func (a *App) externalSet(id string, update topology.ExternalUpdate) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.UpdateExternal(id, update)
+	})
 }
 
 func (a *App) externalDelete(id string) {
-	a.setOperationResult(a.ensureService().ExternalDelete(id))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ExternalDelete(id)
+	})
 }
 
 func (a *App) containerCreate(request topology.ContainerCreateRequest) {
-	a.setOperationResult(a.ensureService().CreateContainer(request))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.CreateContainer(request)
+	})
 }
 
 func (a *App) containerSet(id string, update topology.ContainerUpdate) {
-	a.setOperationResult(a.ensureService().UpdateContainer(id, update))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.UpdateContainer(id, update)
+	})
 }
 
 func (a *App) containerCapabilitySet(id, capability string, enabled bool) {
-	a.setOperationResult(a.ensureService().ContainerCapabilitySet(id, capability, enabled))
-	a.syncAfterServiceMutation()
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ContainerCapabilitySet(id, capability, enabled)
+	})
 }
 
-func (a *App) containerNICAdd(id string, args map[string]string) topology.Result {
-	result := a.ensureService().ContainerNICAdd(id, args)
-	a.setOperationResult(result)
-	a.syncAfterServiceMutation()
-	return result
+func (a *App) containerNICAdd(id string, request topology.NICAddRequest) topology.Result {
+	return a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.AddContainerNIC(id, request)
+	})
 }
 
-func (a *App) containerNICConnect(id, index string, args map[string]string) {
-	a.setOperationResult(a.ensureService().ContainerNICConnect(id, index, args))
-	a.syncAfterServiceMutation()
+func (a *App) containerNICConnect(id string, request topology.NICConnectRequest) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ConnectContainerNIC(id, request)
+	})
 }
 
-func (a *App) containerNICDelete(id, index string) {
-	a.setOperationResult(a.ensureService().ContainerNICDelete(id, index))
-	a.syncAfterServiceMutation()
+func (a *App) containerNICDelete(id string, index int) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.DeleteContainerNIC(id, index)
+	})
 }
 
-func (a *App) deleteNIC(node Node, index string) {
+func (a *App) deleteNIC(node Node, indexValue string) {
+	index, ok := parseNICIndex(indexValue)
+	if !ok {
+		a.State.Message = "nic not found: " + a.displayNodeName(node.Type, node.ID) + ":" + indexValue
+		return
+	}
 	switch node.Type {
 	case NodeVM:
 		a.vmNICDelete(node.ID, index)
@@ -113,43 +133,29 @@ func (a *App) deleteNIC(node Node, index string) {
 	}
 }
 
-func (a *App) nicConnectDirect(sourceType, sourceID, index, targetType, targetID string) {
-	a.setOperationResult(a.ensureService().NICConnectDirect(sourceType, sourceID, index, targetType, targetID))
-	a.syncAfterServiceMutation()
+func (a *App) nicConnectDirect(source, target topology.NetworkEndpointRef) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ConnectDirectNIC(source, target)
+	})
 }
 
-func (a *App) nicConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex string) {
-	a.setOperationResult(a.ensureService().NICConnectDirectTo(sourceType, sourceID, index, targetType, targetID, targetIndex))
-	a.syncAfterServiceMutation()
-}
-
-func (a *App) nicDisconnect(sourceType, sourceID, index string) bool {
-	result := a.ensureService().NICDisconnect(sourceType, sourceID, index)
-	a.setOperationResult(result)
-	a.syncAfterServiceMutation()
+func (a *App) nicDisconnect(source topology.NetworkEndpointRef) bool {
+	result := a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.DisconnectNIC(source)
+	})
 	return result.OK()
 }
 
 func (a *App) containerDelete(id string) {
-	a.setOperationResult(a.ensureService().ContainerDelete(id))
-	a.syncAfterServiceMutation()
-}
-
-func (a *App) syncAfterServiceMutation() {
-	a.syncFromService()
-	if a.State.Selected >= len(a.Model.Nodes) {
-		a.State.Selected = max(0, len(a.Model.Nodes)-1)
-	}
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.ContainerDelete(id)
+	})
 }
 
 func (a *App) saveAndRefresh() error {
+	revision := a.ensureSession().Revision()
 	service := a.ensureService()
-	if err := service.SaveAndRefresh(); err != nil {
-		return err
-	}
-	a.syncFromService()
-	if a.State.Selected >= len(a.Model.Nodes) {
-		a.State.Selected = max(0, len(a.Model.Nodes)-1)
-	}
-	return nil
+	err := service.SaveAndRefresh()
+	a.refreshAfterSessionRevision(revision)
+	return err
 }

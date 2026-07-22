@@ -17,25 +17,25 @@ func (s *Service) nextNodeName(prefix string) string {
 }
 
 func (s *Service) existingNodeNameKind(name, selfID string) string {
-	if s.Lab == nil || name == "" {
+	if s.CurrentLab() == nil || name == "" {
 		return ""
 	}
-	for _, vm := range s.Lab.VMs {
+	for _, vm := range s.CurrentLab().VMs {
 		if vm.ID != selfID && nodeMatchesRef(vm.ID, vm.Name, name) {
 			return "vm"
 		}
 	}
-	for _, ct := range s.Lab.Containers {
+	for _, ct := range s.CurrentLab().Containers {
 		if ct.ID != selfID && nodeMatchesRef(ct.ID, ct.Name, name) {
 			return "container"
 		}
 	}
-	for _, sw := range s.Lab.Switches {
+	for _, sw := range s.CurrentLab().Switches {
 		if sw.ID != selfID && nodeMatchesRef(sw.ID, sw.Name, name) {
 			return "switch"
 		}
 	}
-	for _, link := range s.Lab.ExternalLinks {
+	for _, link := range s.CurrentLab().ExternalLinks {
 		if link.ID != selfID && nodeMatchesRef(link.ID, link.Name, name) {
 			return "uplink"
 		}
@@ -61,7 +61,7 @@ func nodeMatchesRef(id, name, ref string) bool {
 }
 
 func (s *Service) renameNodeID(kind, oldID, newID string) error {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return fmt.Errorf("missing loaded lab")
 	}
 	if oldID == newID {
@@ -74,37 +74,37 @@ func (s *Service) renameNodeID(kind, oldID, newID string) error {
 	found := false
 	switch kind {
 	case "vm":
-		for i := range s.Lab.VMs {
-			if s.Lab.VMs[i].ID == oldID {
-				s.Lab.VMs[i].ID = newID
-				s.Lab.VMs[i].Name = ""
+		for i := range s.CurrentLab().VMs {
+			if s.CurrentLab().VMs[i].ID == oldID {
+				s.CurrentLab().VMs[i].ID = newID
+				s.CurrentLab().VMs[i].Name = ""
 				found = true
 				break
 			}
 		}
 	case "container":
-		for i := range s.Lab.Containers {
-			if s.Lab.Containers[i].ID == oldID {
-				s.Lab.Containers[i].ID = newID
-				s.Lab.Containers[i].Name = ""
+		for i := range s.CurrentLab().Containers {
+			if s.CurrentLab().Containers[i].ID == oldID {
+				s.CurrentLab().Containers[i].ID = newID
+				s.CurrentLab().Containers[i].Name = ""
 				found = true
 				break
 			}
 		}
 	case "switch":
-		for i := range s.Lab.Switches {
-			if s.Lab.Switches[i].ID == oldID {
-				s.Lab.Switches[i].ID = newID
-				s.Lab.Switches[i].Name = ""
+		for i := range s.CurrentLab().Switches {
+			if s.CurrentLab().Switches[i].ID == oldID {
+				s.CurrentLab().Switches[i].ID = newID
+				s.CurrentLab().Switches[i].Name = ""
 				found = true
 				break
 			}
 		}
 	case "external":
-		for i := range s.Lab.ExternalLinks {
-			if s.Lab.ExternalLinks[i].ID == oldID {
-				s.Lab.ExternalLinks[i].ID = newID
-				s.Lab.ExternalLinks[i].Name = ""
+		for i := range s.CurrentLab().ExternalLinks {
+			if s.CurrentLab().ExternalLinks[i].ID == oldID {
+				s.CurrentLab().ExternalLinks[i].ID = newID
+				s.CurrentLab().ExternalLinks[i].Name = ""
 				found = true
 				break
 			}
@@ -122,89 +122,89 @@ func (s *Service) renameNodeID(kind, oldID, newID string) error {
 func (s *Service) clearRedundantNodeName(kind, id string) {
 	switch kind {
 	case "vm":
-		for i := range s.Lab.VMs {
-			if s.Lab.VMs[i].ID == id && s.Lab.VMs[i].Name == id {
-				s.Lab.VMs[i].Name = ""
+		for i := range s.CurrentLab().VMs {
+			if s.CurrentLab().VMs[i].ID == id && s.CurrentLab().VMs[i].Name == id {
+				s.CurrentLab().VMs[i].Name = ""
 			}
 		}
 	case "container":
-		for i := range s.Lab.Containers {
-			if s.Lab.Containers[i].ID == id && s.Lab.Containers[i].Name == id {
-				s.Lab.Containers[i].Name = ""
+		for i := range s.CurrentLab().Containers {
+			if s.CurrentLab().Containers[i].ID == id && s.CurrentLab().Containers[i].Name == id {
+				s.CurrentLab().Containers[i].Name = ""
 			}
 		}
 	case "switch":
-		for i := range s.Lab.Switches {
-			if s.Lab.Switches[i].ID == id && s.Lab.Switches[i].Name == id {
-				s.Lab.Switches[i].Name = ""
+		for i := range s.CurrentLab().Switches {
+			if s.CurrentLab().Switches[i].ID == id && s.CurrentLab().Switches[i].Name == id {
+				s.CurrentLab().Switches[i].Name = ""
 			}
 		}
 	case "external":
-		for i := range s.Lab.ExternalLinks {
-			if s.Lab.ExternalLinks[i].ID == id && s.Lab.ExternalLinks[i].Name == id {
-				s.Lab.ExternalLinks[i].Name = ""
+		for i := range s.CurrentLab().ExternalLinks {
+			if s.CurrentLab().ExternalLinks[i].ID == id && s.CurrentLab().ExternalLinks[i].Name == id {
+				s.CurrentLab().ExternalLinks[i].Name = ""
 			}
 		}
 	}
 }
 
 func (s *Service) rewriteNodeReferences(kind, oldID, newID string) {
-	if position, ok := s.Lab.Layout.Nodes[oldID]; ok {
-		delete(s.Lab.Layout.Nodes, oldID)
-		s.Lab.Layout.Nodes[newID] = position
+	if position, ok := s.CurrentLab().Layout.Nodes[oldID]; ok {
+		delete(s.CurrentLab().Layout.Nodes, oldID)
+		s.CurrentLab().Layout.Nodes[newID] = position
 	}
-	for i := range s.Lab.Layout.Links {
-		rewriteLayoutEndpoint(&s.Lab.Layout.Links[i].From, kind, oldID, newID)
-		rewriteLayoutEndpoint(&s.Lab.Layout.Links[i].To, kind, oldID, newID)
+	for i := range s.CurrentLab().Layout.Links {
+		rewriteLayoutEndpoint(&s.CurrentLab().Layout.Links[i].From, kind, oldID, newID)
+		rewriteLayoutEndpoint(&s.CurrentLab().Layout.Links[i].To, kind, oldID, newID)
 	}
 	switch kind {
 	case "vm", "container":
-		for i := range s.Lab.NetworkLinks {
-			rewriteNetworkEndpoint(&s.Lab.NetworkLinks[i].From, kind, oldID, newID)
-			rewriteNetworkEndpoint(&s.Lab.NetworkLinks[i].To, kind, oldID, newID)
+		for i := range s.CurrentLab().NetworkLinks {
+			rewriteNetworkEndpoint(&s.CurrentLab().NetworkLinks[i].From, kind, oldID, newID)
+			rewriteNetworkEndpoint(&s.CurrentLab().NetworkLinks[i].To, kind, oldID, newID)
 		}
-		for i := range s.Lab.Disks {
-			if s.Lab.Disks[i].AttachedType == kind && s.Lab.Disks[i].AttachedTo == oldID {
-				s.Lab.Disks[i].AttachedTo = newID
+		for i := range s.CurrentLab().Disks {
+			if s.CurrentLab().Disks[i].AttachedType == kind && s.CurrentLab().Disks[i].AttachedTo == oldID {
+				s.CurrentLab().Disks[i].AttachedTo = newID
 			}
 		}
 	case "switch":
-		for i := range s.Lab.VMs {
-			for j := range s.Lab.VMs[i].Networks {
-				if s.Lab.VMs[i].Networks[j].Switch == oldID {
-					s.Lab.VMs[i].Networks[j].Switch = newID
+		for i := range s.CurrentLab().VMs {
+			for j := range s.CurrentLab().VMs[i].Networks {
+				if s.CurrentLab().VMs[i].Networks[j].Switch == oldID {
+					s.CurrentLab().VMs[i].Networks[j].Switch = newID
 				}
 			}
 		}
-		for i := range s.Lab.Containers {
-			for j := range s.Lab.Containers[i].Networks {
-				if s.Lab.Containers[i].Networks[j].Switch == oldID {
-					s.Lab.Containers[i].Networks[j].Switch = newID
+		for i := range s.CurrentLab().Containers {
+			for j := range s.CurrentLab().Containers[i].Networks {
+				if s.CurrentLab().Containers[i].Networks[j].Switch == oldID {
+					s.CurrentLab().Containers[i].Networks[j].Switch = newID
 				}
 			}
 		}
 	case "external":
-		for i := range s.Lab.Switches {
-			for j := range s.Lab.Switches[i].ExternalLinks {
-				if s.Lab.Switches[i].ExternalLinks[j] == oldID {
-					s.Lab.Switches[i].ExternalLinks[j] = newID
+		for i := range s.CurrentLab().Switches {
+			for j := range s.CurrentLab().Switches[i].ExternalLinks {
+				if s.CurrentLab().Switches[i].ExternalLinks[j] == oldID {
+					s.CurrentLab().Switches[i].ExternalLinks[j] = newID
 				}
 			}
-			if s.Lab.Switches[i].ExternalLink == oldID {
-				s.Lab.Switches[i].ExternalLink = newID
+			if s.CurrentLab().Switches[i].ExternalLink == oldID {
+				s.CurrentLab().Switches[i].ExternalLink = newID
 			}
 		}
-		for i := range s.Lab.VMs {
-			for j := range s.Lab.VMs[i].Networks {
-				if s.Lab.VMs[i].Networks[j].ExternalLink == oldID {
-					s.Lab.VMs[i].Networks[j].ExternalLink = newID
+		for i := range s.CurrentLab().VMs {
+			for j := range s.CurrentLab().VMs[i].Networks {
+				if s.CurrentLab().VMs[i].Networks[j].ExternalLink == oldID {
+					s.CurrentLab().VMs[i].Networks[j].ExternalLink = newID
 				}
 			}
 		}
-		for i := range s.Lab.Containers {
-			for j := range s.Lab.Containers[i].Networks {
-				if s.Lab.Containers[i].Networks[j].ExternalLink == oldID {
-					s.Lab.Containers[i].Networks[j].ExternalLink = newID
+		for i := range s.CurrentLab().Containers {
+			for j := range s.CurrentLab().Containers[i].Networks {
+				if s.CurrentLab().Containers[i].Networks[j].ExternalLink == oldID {
+					s.CurrentLab().Containers[i].Networks[j].ExternalLink = newID
 				}
 			}
 		}
@@ -212,14 +212,14 @@ func (s *Service) rewriteNodeReferences(kind, oldID, newID string) {
 }
 
 func (s *Service) removeLayoutLinksForNode(kind, id string) {
-	links := s.Lab.Layout.Links[:0]
-	for _, link := range s.Lab.Layout.Links {
+	links := s.CurrentLab().Layout.Links[:0]
+	for _, link := range s.CurrentLab().Layout.Links {
 		if layoutEndpointMatchesNode(link.From, kind, id) || layoutEndpointMatchesNode(link.To, kind, id) {
 			continue
 		}
 		links = append(links, link)
 	}
-	s.Lab.Layout.Links = links
+	s.CurrentLab().Layout.Links = links
 }
 
 func layoutEndpointMatchesNode(endpoint lab.LayoutEndpoint, kind, id string) bool {
@@ -243,22 +243,22 @@ func rewriteLayoutEndpoint(endpoint *lab.LayoutEndpoint, kind, oldID, newID stri
 }
 
 func (s *Service) resolveVMID(ref string) (string, bool) {
-	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindVM)
+	resolved, err := lab.ResolveNode(s.CurrentLab(), ref, lab.NodeKindVM)
 	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveContainerID(ref string) (string, bool) {
-	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindContainer)
+	resolved, err := lab.ResolveNode(s.CurrentLab(), ref, lab.NodeKindContainer)
 	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveSwitchID(ref string) (string, bool) {
-	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindSwitch)
+	resolved, err := lab.ResolveNode(s.CurrentLab(), ref, lab.NodeKindSwitch)
 	return resolved.ID, err == nil
 }
 
 func (s *Service) resolveExternalID(ref string) (string, bool) {
-	resolved, err := lab.ResolveNode(s.Lab, ref, lab.NodeKindExternal)
+	resolved, err := lab.ResolveNode(s.CurrentLab(), ref, lab.NodeKindExternal)
 	return resolved.ID, err == nil
 }
 

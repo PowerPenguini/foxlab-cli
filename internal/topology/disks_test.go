@@ -30,10 +30,10 @@ func TestDiskCreateAttachDetachDelete(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("data", map[string]string{"size": "2"}).Message; got != "created disk:data" {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "data", SizeGB: SetField(2)}).Message; got != "created disk:data" {
 		t.Fatalf("DiskCreate = %q", got)
 	}
-	if got := service.DiskAttach("data", map[string]string{"to": "vm:vm1"}).Message; got != "attached disk:data to vm:vm1" {
+	if got := service.AttachDisk(DiskAttachRequest{DiskID: "data", Target: workload.Ref{Type: workload.TypeVM, ID: "vm1"}}).Message; got != "attached disk:data to vm:vm1" {
 		t.Fatalf("DiskAttach = %q", got)
 	}
 	if len(calls) != 1 {
@@ -54,7 +54,7 @@ func TestDiskCreateAttachDetachDelete(t *testing.T) {
 	}
 
 	service = NewService(reloaded, path)
-	if got := service.DiskDetach("vm1", nil).Message; got != "detached disk from vm:vm1" {
+	if got := service.DetachDisk(DiskDetachRequest{Target: workload.Ref{ID: "vm1"}}).Message; got != "detached disk from vm:vm1" {
 		t.Fatalf("DiskDetach = %q", got)
 	}
 	reloaded, err = lab.LoadFile(path)
@@ -141,8 +141,8 @@ func TestDiskImportRestoresSourceWhenLabSaveFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("source was not restored: %v", err)
 	}
-	if string(content) != "raw-data" || len(service.Lab.Disks) != 0 {
-		t.Fatalf("failed import state: content=%q disks=%#v", content, service.Lab.Disks)
+	if string(content) != "raw-data" || len(service.CurrentLab().Disks) != 0 {
+		t.Fatalf("failed import state: content=%q disks=%#v", content, service.CurrentLab().Disks)
 	}
 }
 
@@ -163,53 +163,18 @@ func TestDiskCreateRejectsInvalidIDBeforeSideEffects(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("bad/id", map[string]string{}).Message; got != "invalid disk id: bad/id" {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "bad/id"}).Message; got != "invalid disk id: bad/id" {
 		t.Fatalf("DiskCreate = %q, want invalid id", got)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("disk command calls = %#v, want none", calls)
 	}
-	if len(service.Lab.Disks) != 0 {
-		t.Fatalf("invalid disk create mutated lab: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 0 {
+		t.Fatalf("invalid disk create mutated lab: %#v", service.CurrentLab().Disks)
 	}
 }
 
-func TestDiskAttachRejectsLayerArgumentBeforeSideEffects(t *testing.T) {
-	calls := []string{}
-	diskCommands := stubDiskCommandsWithCalls(t, &calls)
-	t.Setenv("HOME", t.TempDir())
-
-	path := filepath.Join(t.TempDir(), "demo.lab")
-	initial := &lab.Lab{
-		ID:    "demo",
-		VMs:   []lab.VM{{ID: "vm1", MemoryMB: 1024, CPUs: 1}},
-		Disks: []lab.Disk{{ID: "base", Path: "disks/base.qcow2", Format: "qcow2", Kind: "base"}},
-	}
-	if err := lab.SaveFile(path, initial); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := NewService(loaded, path)
-	service.DiskCommands = diskCommands
-
-	if got := service.DiskAttach("base", map[string]string{"to": "vm:vm1", "layer": "bad/id"}).Message; got != "unsupported disk attach argument: layer" {
-		t.Fatalf("DiskAttach = %q, want unsupported layer arg", got)
-	}
-	if len(calls) != 0 {
-		t.Fatalf("disk command calls = %#v, want none", calls)
-	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "base" {
-		t.Fatalf("invalid layer attach mutated disks: %#v", service.Lab.Disks)
-	}
-	if service.Lab.VMs[0].Disk != "" {
-		t.Fatalf("invalid layer attach mutated vm disk: %q", service.Lab.VMs[0].Disk)
-	}
-}
-
-func TestDiskCommandsRejectUnsupportedArgsBeforeMutating(t *testing.T) {
+func TestTypedDiskRequestsRejectInvalidValuesBeforeMutating(t *testing.T) {
 	calls := []string{}
 	diskCommands := stubDiskCommandsWithCalls(t, &calls)
 	t.Setenv("HOME", t.TempDir())
@@ -237,32 +202,23 @@ func TestDiskCommandsRejectUnsupportedArgsBeforeMutating(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("newdisk", map[string]string{"siz": "20"}).Message; got != "unsupported disk create argument: siz" {
-		t.Fatalf("DiskCreate = %q, want unsupported arg", got)
-	}
-	if got := service.DiskCreate("newdisk", map[string]string{"size": "0"}).Message; got != "invalid disk size: 0" {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "newdisk", SizeGB: SetField(0)}).Message; got != "invalid disk size: 0" {
 		t.Fatalf("DiskCreate size zero = %q, want invalid size", got)
 	}
-	if got := service.DiskCreate("newdisk", map[string]string{"size": "abc"}).Message; got != "invalid disk size: abc" {
-		t.Fatalf("DiskCreate bad size = %q, want invalid size", got)
+	if got := service.CreateDisk(DiskCreateRequest{ID: "newdisk", Format: DiskFormat("vmdk")}).Message; got != "unsupported disk format: vmdk" {
+		t.Fatalf("DiskCreate format = %q, want unsupported format", got)
 	}
-	if got := service.DiskAttach("data", map[string]string{"to": "vm:vm1", "layr": "data-layer"}).Message; got != "unsupported disk attach argument: layr" {
-		t.Fatalf("DiskAttach = %q, want unsupported arg", got)
-	}
-	if got := service.DiskDetach("vm1", map[string]string{"diskid": "data"}).Message; got != "unsupported disk detach argument: diskid" {
-		t.Fatalf("DiskDetach = %q, want unsupported arg", got)
-	}
-	if got := service.DiskDetach("vm1", map[string]string{"type": "pod"}).Message; got != "disk target must be vm or container" {
+	if got := service.DetachDisk(DiskDetachRequest{Target: workload.Ref{Type: "pod", ID: "vm1"}}).Message; got != "disk target must be vm or container" {
 		t.Fatalf("DiskDetach invalid type = %q, want disk target validation", got)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("disk command calls = %#v, want none", calls)
 	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "data" || service.Lab.Disks[0].AttachedTo != service.Lab.VMs[0].ID {
-		t.Fatalf("unsupported args mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 1 || service.CurrentLab().Disks[0].ID != "data" || service.CurrentLab().Disks[0].AttachedTo != service.CurrentLab().VMs[0].ID {
+		t.Fatalf("invalid requests mutated disks: %#v", service.CurrentLab().Disks)
 	}
-	if service.Lab.VMs[0].Disk != "disks/data.qcow2" {
-		t.Fatalf("unsupported args mutated vm disk: %q", service.Lab.VMs[0].Disk)
+	if service.CurrentLab().VMs[0].Disk != "disks/data.qcow2" {
+		t.Fatalf("invalid requests mutated vm disk: %q", service.CurrentLab().VMs[0].Disk)
 	}
 }
 
@@ -274,14 +230,14 @@ func TestDiskCreateRequiresSavePathBeforeSideEffects(t *testing.T) {
 	service := NewService(&lab.Lab{ID: "demo"}, "")
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("data", map[string]string{}).Message; got != "disk create failed: missing lab path" {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "data"}).Message; got != "disk create failed: missing lab path" {
 		t.Fatalf("DiskCreate = %q, want missing path", got)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("disk command calls = %#v, want none", calls)
 	}
-	if len(service.Lab.Disks) != 0 {
-		t.Fatalf("missing-path disk create mutated lab: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 0 {
+		t.Fatalf("missing-path disk create mutated lab: %#v", service.CurrentLab().Disks)
 	}
 }
 
@@ -326,14 +282,14 @@ func TestDiskCreateRemovesImageAndRestoresLabOnSaveFailure(t *testing.T) {
 	service := NewService(loaded, t.TempDir())
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("data", map[string]string{}).Message; !strings.Contains(got, "disk create failed:") {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "data"}).Message; !strings.Contains(got, "disk create failed:") {
 		t.Fatalf("DiskCreate = %q, want save failure", got)
 	}
 	if _, err := os.Stat(diskPath); !os.IsNotExist(err) {
 		t.Fatalf("created disk path still exists or stat failed: %v", err)
 	}
-	if len(service.Lab.Disks) != 0 {
-		t.Fatalf("failed disk create mutated lab: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 0 {
+		t.Fatalf("failed disk create mutated lab: %#v", service.CurrentLab().Disks)
 	}
 }
 
@@ -358,17 +314,18 @@ func TestDiskAttachRestoresLabOnSaveFailure(t *testing.T) {
 	service := NewService(loaded, t.TempDir())
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskAttach("base", map[string]string{"to": "vm:vm1"}).Message; !strings.Contains(got, "disk attach failed:") {
+	request := DiskAttachRequest{DiskID: "base", Target: workload.Ref{Type: workload.TypeVM, ID: "vm1"}}
+	if got := service.AttachDisk(request).Message; !strings.Contains(got, "disk attach failed:") {
 		t.Fatalf("DiskAttach = %q, want save failure", got)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("direct attach ran disk commands: %#v", calls)
 	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "base" {
-		t.Fatalf("failed attach mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 1 || service.CurrentLab().Disks[0].ID != "base" {
+		t.Fatalf("failed attach mutated disks: %#v", service.CurrentLab().Disks)
 	}
-	if service.Lab.VMs[0].Disk != "" {
-		t.Fatalf("failed attach mutated vm disk: %q", service.Lab.VMs[0].Disk)
+	if service.CurrentLab().VMs[0].Disk != "" {
+		t.Fatalf("failed attach mutated vm disk: %q", service.CurrentLab().VMs[0].Disk)
 	}
 }
 
@@ -409,7 +366,12 @@ func TestDiskCreateWithVMTargetRemovesBaseWhenSaveFails(t *testing.T) {
 	service := NewService(loaded, t.TempDir())
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("vm-disk", map[string]string{"size": "3", "to": "vm:vm1"}).Message; !strings.Contains(got, "disk create failed:") {
+	request := DiskCreateRequest{
+		ID:       "vm-disk",
+		SizeGB:   SetField(3),
+		AttachTo: SetField(workload.Ref{Type: workload.TypeVM, ID: "vm1"}),
+	}
+	if got := service.CreateDisk(request).Message; !strings.Contains(got, "disk create failed:") {
 		t.Fatalf("DiskCreate attached = %q, want save failure", got)
 	}
 	if len(calls) != 1 || strings.Contains(calls[0], " -b ") {
@@ -428,8 +390,8 @@ func TestDiskCreateWithVMTargetRemovesBaseWhenSaveFails(t *testing.T) {
 	if reloaded.VMs[0].Disk != "" {
 		t.Fatalf("failed disk create persisted vm disk: %q", reloaded.VMs[0].Disk)
 	}
-	if len(service.Lab.Disks) != 0 || service.Lab.VMs[0].Disk != "" {
-		t.Fatalf("failed disk create mutated service lab: disks=%#v vmDisk=%q", service.Lab.Disks, service.Lab.VMs[0].Disk)
+	if len(service.CurrentLab().Disks) != 0 || service.CurrentLab().VMs[0].Disk != "" {
+		t.Fatalf("failed disk create mutated service lab: disks=%#v vmDisk=%q", service.CurrentLab().Disks, service.CurrentLab().VMs[0].Disk)
 	}
 }
 
@@ -453,7 +415,12 @@ func TestDiskCreateWithVMTargetAttachesBaseDirectly(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("vm-disk", map[string]string{"size": "3", "to": "vm:vm1"}).Message; got != "attached disk:vm-disk to vm:vm1" {
+	request := DiskCreateRequest{
+		ID:       "vm-disk",
+		SizeGB:   SetField(3),
+		AttachTo: SetField(workload.Ref{Type: workload.TypeVM, ID: "vm1"}),
+	}
+	if got := service.CreateDisk(request).Message; got != "attached disk:vm-disk to vm:vm1" {
 		t.Fatalf("DiskCreate attached = %q", got)
 	}
 	if len(calls) != 1 || strings.Contains(calls[0], " -b ") {
@@ -494,7 +461,12 @@ func TestDiskCreateWithContainerTargetCreatesBaseRootLayer(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskCreate("web-disk", map[string]string{"size": "3", "to": "container:web"}).Message; got != "attached disk:web-disk to container:web" {
+	request := DiskCreateRequest{
+		ID:       "web-disk",
+		SizeGB:   SetField(3),
+		AttachTo: SetField(workload.Ref{Type: workload.TypeContainer, ID: "web"}),
+	}
+	if got := service.CreateDisk(request).Message; got != "attached disk:web-disk to container:web" {
 		t.Fatalf("DiskCreate attached = %q", got)
 	}
 	for _, call := range calls {
@@ -551,7 +523,8 @@ func TestDiskAttachStandaloneBaseToContainerUsesBaseAsRootLayer(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskAttach("data", map[string]string{"to": "container:web"}).Message; got != "attached disk:data to container:web" {
+	request := DiskAttachRequest{DiskID: "data", Target: workload.Ref{Type: workload.TypeContainer, ID: "web"}}
+	if got := service.AttachDisk(request).Message; got != "attached disk:data to container:web" {
 		t.Fatalf("DiskAttach = %q", got)
 	}
 	if len(calls) != 0 {
@@ -605,7 +578,8 @@ func TestDiskAttachBaseWithLayersToContainerUsesBaseDirectly(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskAttach("data", map[string]string{"to": "container:web"}).Message; got != "attached disk:data to container:web" {
+	request := DiskAttachRequest{DiskID: "data", Target: workload.Ref{Type: workload.TypeContainer, ID: "web"}}
+	if got := service.AttachDisk(request).Message; got != "attached disk:data to container:web" {
 		t.Fatalf("DiskAttach = %q", got)
 	}
 	if len(calls) != 0 {
@@ -626,49 +600,6 @@ func TestDiskAttachBaseWithLayersToContainerUsesBaseDirectly(t *testing.T) {
 	}
 	if reloaded.Containers[0].Disk != base {
 		t.Fatalf("container disk = %q, want base path %q", reloaded.Containers[0].Disk, base)
-	}
-}
-
-func TestDiskAttachLayerArgumentToContainerDoesNotCreateLayer(t *testing.T) {
-	calls := []string{}
-	diskCommands := stubDiskCommandsWithCalls(t, &calls)
-	t.Setenv("HOME", t.TempDir())
-
-	path := filepath.Join(t.TempDir(), "demo.lab")
-	diskPath := filepath.Join(t.TempDir(), "base.qcow2")
-	if err := os.WriteFile(diskPath, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	initial := &lab.Lab{
-		ID:         "demo",
-		Containers: []lab.Container{{ID: "web", Image: "docker.io/library/alpine:latest"}},
-		Disks:      []lab.Disk{{ID: "data", Path: diskPath, Format: "qcow2", Kind: "base"}},
-	}
-	if err := lab.SaveFile(path, initial); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := NewService(loaded, path)
-	service.DiskCommands = diskCommands
-
-	if got := service.DiskAttach("data", map[string]string{"to": "container:web", "layer": "data-layer"}).Message; got != "unsupported disk attach argument: layer" {
-		t.Fatalf("DiskAttach = %q", got)
-	}
-	if len(calls) != 0 {
-		t.Fatalf("container base attach with layer arg ran disk commands: %#v", calls)
-	}
-	reloaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" || reloaded.Disks[0].Kind != "base" || reloaded.Disks[0].AttachedTo != "" {
-		t.Fatalf("disks = %#v, want unchanged base disk", reloaded.Disks)
-	}
-	if reloaded.Containers[0].Disk != "" {
-		t.Fatalf("container disk = %q, want unchanged empty disk", reloaded.Containers[0].Disk)
 	}
 }
 
@@ -703,7 +634,7 @@ func TestDiskLayerCreateAndAttachCreatesMultipleLayerVariants(t *testing.T) {
 	if got := service.DiskLayerCreateAndAttach("data", "data-layer", "vm", "vm1").Message; got != "attached disk:data-layer to vm:vm1" {
 		t.Fatalf("first DiskLayerCreateAndAttach = %q", got)
 	}
-	service = NewService(service.Lab, path)
+	service = NewService(service.CurrentLab(), path)
 	service.DiskCommands = diskCommands
 	if got := service.DiskLayerCreateAndAttach("data", "data-layer-2", "vm", "vm1").Message; got != "attached disk:data-layer-2 to vm:vm1" {
 		t.Fatalf("second DiskLayerCreateAndAttach = %q", got)
@@ -778,53 +709,6 @@ func TestDiskLayerCreateAndAttachUsesCustomLayerName(t *testing.T) {
 	}
 }
 
-func TestDiskAttachRejectsLayerIDAlias(t *testing.T) {
-	calls := []string{}
-	diskCommands := stubDiskCommandsWithCalls(t, &calls)
-	t.Setenv("HOME", t.TempDir())
-
-	path := filepath.Join(t.TempDir(), "demo.lab")
-	initial := &lab.Lab{
-		ID:  "demo",
-		VMs: []lab.VM{{ID: "vm1", MemoryMB: 1024, CPUs: 1}},
-		Disks: []lab.Disk{{
-			ID:     "data",
-			Path:   filepath.Join(t.TempDir(), "base.qcow2"),
-			Format: "qcow2",
-			Kind:   "base",
-		}},
-	}
-	if err := os.WriteFile(initial.Disks[0].Path, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := lab.SaveFile(path, initial); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := NewService(loaded, path)
-	service.DiskCommands = diskCommands
-
-	if got := service.DiskAttach("data", map[string]string{"to": "vm:vm1", "layerid": "from-command"}).Message; got != "unsupported disk attach argument: layerid" {
-		t.Fatalf("DiskAttach = %q", got)
-	}
-	if len(calls) != 0 {
-		t.Fatalf("disk attach layerid alias ran disk commands: %#v", calls)
-	}
-	reloaded, err := lab.LoadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reloaded.Disks) != 1 || reloaded.Disks[0].ID != "data" || reloaded.Disks[0].AttachedTo != "" {
-		t.Fatalf("disks = %#v, want unchanged base disk", reloaded.Disks)
-	}
-	if reloaded.VMs[0].Disk != "" {
-		t.Fatalf("vm disk = %q, want unchanged empty disk", reloaded.VMs[0].Disk)
-	}
-}
-
 func TestDiskAttachExistingLayerSwitchesActiveLayer(t *testing.T) {
 	diskCommands := stubDiskCommands(t)
 	t.Setenv("HOME", t.TempDir())
@@ -858,7 +742,8 @@ func TestDiskAttachExistingLayerSwitchesActiveLayer(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskAttach("data-layer-2", map[string]string{"to": "vm:vm1"}).Message; got != "attached disk:data-layer-2 to vm:vm1" {
+	request := DiskAttachRequest{DiskID: "data-layer-2", Target: workload.Ref{Type: workload.TypeVM, ID: "vm1"}}
+	if got := service.AttachDisk(request).Message; got != "attached disk:data-layer-2 to vm:vm1" {
 		t.Fatalf("DiskAttach layer = %q", got)
 	}
 	reloaded, err := lab.LoadFile(path)
@@ -1008,8 +893,8 @@ func TestDiskMergeValidatesFinalLabBeforeCommit(t *testing.T) {
 	if _, err := os.Stat(layer); err != nil {
 		t.Fatalf("layer file missing after failed preflight: %v", err)
 	}
-	if len(service.Lab.Disks) != 2 || service.Lab.Disks[1].ID != "data-layer" {
-		t.Fatalf("failed merge preflight mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 2 || service.CurrentLab().Disks[1].ID != "data-layer" {
+		t.Fatalf("failed merge preflight mutated disks: %#v", service.CurrentLab().Disks)
 	}
 }
 
@@ -1051,11 +936,11 @@ func TestDiskMergeKeepsLayerAndRestoresLabOnSaveFailure(t *testing.T) {
 	if _, err := os.Stat(layer); err != nil {
 		t.Fatalf("layer file missing after failed save: %v", err)
 	}
-	if len(service.Lab.Disks) != 2 || service.Lab.Disks[1].ID != "data-layer" {
-		t.Fatalf("failed merge mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 2 || service.CurrentLab().Disks[1].ID != "data-layer" {
+		t.Fatalf("failed merge mutated disks: %#v", service.CurrentLab().Disks)
 	}
-	if service.Lab.VMs[0].Disk != layer {
-		t.Fatalf("failed merge mutated vm disk: %q", service.Lab.VMs[0].Disk)
+	if service.CurrentLab().VMs[0].Disk != layer {
+		t.Fatalf("failed merge mutated vm disk: %q", service.CurrentLab().VMs[0].Disk)
 	}
 }
 
@@ -1086,8 +971,8 @@ func TestDiskDeleteKeepsFileAndRestoresLabOnSaveFailure(t *testing.T) {
 	if _, err := os.Stat(diskPath); err != nil {
 		t.Fatalf("disk file missing after failed save: %v", err)
 	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].ID != "data" {
-		t.Fatalf("failed delete mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 1 || service.CurrentLab().Disks[0].ID != "data" {
+		t.Fatalf("failed delete mutated disks: %#v", service.CurrentLab().Disks)
 	}
 }
 
@@ -1111,10 +996,10 @@ func TestDiskResizeGrowsAndShrinks(t *testing.T) {
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskResize("data", map[string]string{"size": "12"}).Message; got != "resized disk:data" {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data", SizeGB: 12}).Message; got != "resized disk:data" {
 		t.Fatalf("grow DiskResize = %q", got)
 	}
-	if got := service.DiskResize("data", map[string]string{"size": "8", "force": "true"}).Message; got != "resized disk:data" {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data", SizeGB: 8, Force: true}).Message; got != "resized disk:data" {
 		t.Fatalf("shrink DiskResize = %q", got)
 	}
 	want := []string{
@@ -1146,11 +1031,8 @@ func TestDiskResizeRequiresForceToShrink(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
-	if got := service.DiskResize("data", map[string]string{"size": "8"}).Message; !strings.Contains(got, "force=true") {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data", SizeGB: 8}).Message; !strings.Contains(got, "force=true") {
 		t.Fatalf("unforced shrink = %q", got)
-	}
-	if got := service.DiskResize("data", map[string]string{"size": "8", "force": "maybe"}).Message; got != "invalid disk resize force: maybe" {
-		t.Fatalf("invalid force = %q", got)
 	}
 }
 
@@ -1178,7 +1060,7 @@ func TestDiskCreatePreservesExistingManagedPath(t *testing.T) {
 	}
 	service := NewService(loaded, path)
 	service.DiskCommands = diskCommands
-	if got := service.DiskCreate("data", nil).Message; !strings.Contains(got, "disk path already exists") {
+	if got := service.CreateDisk(DiskCreateRequest{ID: "data"}).Message; !strings.Contains(got, "disk path already exists") {
 		t.Fatalf("DiskCreate = %q", got)
 	}
 	data, err := os.ReadFile(diskPath)
@@ -1211,16 +1093,10 @@ func TestDiskResizeRejectsInvalidAndRunning(t *testing.T) {
 	service.States = map[string]string{workload.Key(workload.Ref{Type: "vm", ID: "vm1"}): "running"}
 	service.StatesConfirmed = true
 
-	if got := service.DiskResize("data", map[string]string{}).Message; got != "usage: disk resize <id> size=N [force=true]" {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data"}).Message; got != "usage: disk resize <id> size=N [force=true]" {
 		t.Fatalf("missing size = %q", got)
 	}
-	if got := service.DiskResize("data", map[string]string{"siz": "12"}).Message; got != "unsupported disk resize argument: siz" {
-		t.Fatalf("unsupported arg = %q", got)
-	}
-	if got := service.DiskResize("data", map[string]string{"size": "abc"}).Message; got != "usage: disk resize <id> size=N [force=true]" {
-		t.Fatalf("bad size = %q", got)
-	}
-	if got := service.DiskResize("data", map[string]string{"size": "12"}).Message; got != "disk operation needs stopped workload; vm:vm1 is running" {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data", SizeGB: 12}).Message; got != "disk operation needs stopped workload; vm:vm1 is running" {
 		t.Fatalf("running resize = %q", got)
 	}
 }
@@ -1279,14 +1155,14 @@ func TestDiskResizeRestoresSizeOnSaveFailure(t *testing.T) {
 	service := NewService(lab.Clone(initial), filepath.Join(blocker, "demo.lab"))
 	service.DiskCommands = diskCommands
 
-	if got := service.DiskResize("data", map[string]string{"size": "12"}).Message; !strings.Contains(got, "disk resize failed:") {
+	if got := service.ResizeDisk(DiskResizeRequest{DiskID: "data", SizeGB: 12}).Message; !strings.Contains(got, "disk resize failed:") {
 		t.Fatalf("DiskResize = %q, want save failure", got)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("resize commands = %#v, want none before metadata persists", calls)
 	}
-	if len(service.Lab.Disks) != 1 || service.Lab.Disks[0].SizeGB != 10 {
-		t.Fatalf("failed resize mutated disks: %#v", service.Lab.Disks)
+	if len(service.CurrentLab().Disks) != 1 || service.CurrentLab().Disks[0].SizeGB != 10 {
+		t.Fatalf("failed resize mutated disks: %#v", service.CurrentLab().Disks)
 	}
 }
 
@@ -1430,7 +1306,7 @@ func stubDiskCommands(t *testing.T) DiskCommandRunner {
 func confirmAttachedWorkloadsStopped(service *Service) {
 	service.StatesConfirmed = true
 	service.States = map[string]string{}
-	for _, disk := range service.Lab.Disks {
+	for _, disk := range service.CurrentLab().Disks {
 		if disk.AttachedType == "" || disk.AttachedTo == "" {
 			continue
 		}

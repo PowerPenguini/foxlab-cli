@@ -14,10 +14,10 @@ func (s *Service) diskByID(id string) (lab.Disk, bool) {
 }
 
 func (s *Service) diskIndexByID(id string) (int, lab.Disk, bool) {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return -1, lab.Disk{}, false
 	}
-	for i, disk := range s.Lab.Disks {
+	for i, disk := range s.CurrentLab().Disks {
 		if disk.ID == id {
 			return i, disk, true
 		}
@@ -28,13 +28,13 @@ func (s *Service) diskIndexByID(id string) (int, lab.Disk, bool) {
 func (s *Service) workloadDisk(targetType, targetID string) string {
 	switch targetType {
 	case "vm":
-		for _, vm := range s.Lab.VMs {
+		for _, vm := range s.CurrentLab().VMs {
 			if vm.ID == targetID {
 				return vm.Disk
 			}
 		}
 	case "container":
-		for _, ct := range s.Lab.Containers {
+		for _, ct := range s.CurrentLab().Containers {
 			if ct.ID == targetID {
 				return ct.Disk
 			}
@@ -87,8 +87,12 @@ func (s *Service) resolveDiskTarget(targetType, targetID string) (string, string
 	return targetType, resolvedID, nil
 }
 
+func validDiskTargetRef(ref workload.Ref) bool {
+	return (ref.Type == workload.TypeVM || ref.Type == workload.TypeContainer) && strings.TrimSpace(ref.ID) != ""
+}
+
 func (s *Service) attachedDiskIndex(targetType, targetID, diskID string) int {
-	for i, disk := range s.Lab.Disks {
+	for i, disk := range s.CurrentLab().Disks {
 		if disk.AttachedType != targetType || disk.AttachedTo != targetID {
 			continue
 		}
@@ -106,14 +110,14 @@ func (s *Service) requireDiskOffline(disk lab.Disk) error {
 	desired := ""
 	switch disk.AttachedType {
 	case workload.TypeVM:
-		for _, vm := range s.Lab.VMs {
+		for _, vm := range s.CurrentLab().VMs {
 			if vm.ID == disk.AttachedTo {
 				desired = lab.DesiredState(vm.DesiredState)
 				break
 			}
 		}
 	case workload.TypeContainer:
-		for _, ct := range s.Lab.Containers {
+		for _, ct := range s.CurrentLab().Containers {
 			if ct.ID == disk.AttachedTo {
 				desired = lab.DesiredState(ct.DesiredState)
 				break

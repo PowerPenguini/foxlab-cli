@@ -12,7 +12,7 @@ import (
 )
 
 // AppConfig contains the stable process-level configuration used by App.
-// Mutable topology and runtime state remain owned by App itself.
+// Mutable topology state is owned by the App session; runtime state remains on App.
 type AppConfig struct {
 	LabPath               string
 	LibvirtURI            string
@@ -38,11 +38,11 @@ type RuntimeFactory func(*lab.Lab) (workload.Runtime, func(), error)
 
 // NewApp is the composition root for the interactive topology application.
 func NewApp(model Model, loadedLab *lab.Lab, config AppConfig, deps AppDeps) *App {
+	session := lab.NewSession(loadedLab, config.LabPath)
 	app := &App{
 		Model:                 model,
 		State:                 ViewState{Focus: FocusGraph},
-		Lab:                   loadedLab,
-		LabPath:               config.LabPath,
+		Session:               session,
 		LibvirtURI:            config.LibvirtURI,
 		ContainerdAddress:     config.ContainerdAddress,
 		VNCViewer:             config.VNCViewer,
@@ -52,6 +52,6 @@ func NewApp(model Model, loadedLab *lab.Lab, config AppConfig, deps AppDeps) *Ap
 		DaemonController:      deps.DaemonController,
 		runtimeAccess:         newRuntimeAccess(deps.RuntimeFactory, config.StatusSocket, deps.StatusQuery),
 	}
-	app.Service = topology.NewService(loadedLab, config.LabPath)
+	app.Service = topology.NewServiceWithSession(session)
 	return app
 }

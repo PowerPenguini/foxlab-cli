@@ -368,9 +368,7 @@ func TestExternalInterfaceFieldOpensChoiceMenu(t *testing.T) {
 		ExternalLinks: []lab.ExternalLink{{ID: "uplink1", Interface: "eth0"}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), State: ViewState{
 			Focus:            FocusGraph,
 			Selected:         0,
 			ContextMenu:      true,
@@ -413,10 +411,8 @@ func TestExternalInterfaceChoiceAppliesSelectedInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:                 FocusGraph,
 			Selected:              0,
 			ContextMenu:           true,
@@ -457,10 +453,8 @@ func TestExternalModeFieldOpensThirdMenuAndAppliesChoice(t *testing.T) {
 	}
 	model := ModelFromLab(loaded)
 	app := App{
-		Model:   model,
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: model, Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:              FocusGraph,
 			Selected:           0,
 			ContextMenu:        true,
@@ -506,10 +500,8 @@ func TestSwitchModeFieldOpensThirdMenuAndAppliesChoice(t *testing.T) {
 	}
 	model := ModelFromLab(loaded)
 	app := App{
-		Model:   model,
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: model, Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:              FocusGraph,
 			Selected:           0,
 			ContextMenu:        true,
@@ -654,9 +646,7 @@ func TestContextMenuMouseSwitchesInlineEditFieldsWithoutCopyingValue(t *testing.
 		t.Fatalf("config menu missing name/cpu items: %#v", items)
 	}
 	app := App{
-		Model:      model,
-		Lab:        loaded,
-		ViewWidth:  100,
+		Model: model, Session: lab.NewSession(loaded, ""), ViewWidth: 100,
 		ViewHeight: 30,
 		State: ViewState{
 			Focus:              FocusGraph,
@@ -691,8 +681,8 @@ func TestContextMenuMouseSwitchesInlineEditFieldsWithoutCopyingValue(t *testing.
 	if app.State.ContextEditValue != "2" {
 		t.Fatalf("edit value = %q, want CPU value 2", app.State.ContextEditValue)
 	}
-	if app.Lab.VMs[0].Name != "vm1" || app.Lab.VMs[0].CPUs != 2 {
-		t.Fatalf("old edit value was applied to lab: %#v", app.Lab.VMs[0])
+	if app.currentLab().VMs[0].Name != "vm1" || app.currentLab().VMs[0].CPUs != 2 {
+		t.Fatalf("old edit value was applied to lab: %#v", app.currentLab().VMs[0])
 	}
 }
 
@@ -781,9 +771,7 @@ func TestRefreshWorkloadStatesAddsRuntimeVNCPort(t *testing.T) {
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5903},
 		}),
@@ -810,9 +798,7 @@ func TestRefreshWorkloadStatesCopiesRuntimeMaps(t *testing.T) {
 		vncPorts: map[string]int{stateKey: 5903},
 	}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
 	}
 
 	app.refreshWorkloadStates()
@@ -836,9 +822,7 @@ func TestRefreshWorkloadStatesShowsActualStateWithoutAppliedLab(t *testing.T) {
 		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
 		}),
 	}
@@ -867,10 +851,8 @@ func TestRefreshWorkloadStatesShowsMissingForAppliedDesiredRunningMissingContain
 		t.Fatal(err)
 	}
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		State:            ViewState{ApplyLabDisabled: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{ApplyLabDisabled: true},
 		DaemonController: &fakeDaemonController{status: DaemonStatus{Active: true, LabPath: path}},
 		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeContainer, "kali"): "missing"},
@@ -906,10 +888,8 @@ func TestRefreshWorkloadStatesUsesFoxlabdSnapshot(t *testing.T) {
 		States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Message: "foxlabd status: runtime unavailable"},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Message: "foxlabd status: runtime unavailable"},
 		runtimeAccess: testRuntimeAccessWithStatus(
 			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
 			func(context.Context, string) (daemonstatus.Snapshot, error) { return snapshot, nil },
@@ -951,10 +931,8 @@ func TestRefreshWorkloadStatesShowsStoppedMissingVMAsDefined(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: newRuntimeAccess(nil, "", func(context.Context, string) (daemonstatus.Snapshot, error) {
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: newRuntimeAccess(nil, "", func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return daemonstatus.Snapshot{
 				LabPath: path,
 				LabName: "demo",
@@ -992,10 +970,8 @@ func TestRefreshWorkloadStatesQueriesAppliedDaemonSocketPath(t *testing.T) {
 	}
 	var queriedSocket string
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: testRuntimeAccessWithStatus(
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccessWithStatus(
 			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
 			func(_ context.Context, socket string) (daemonstatus.Snapshot, error) {
 				queriedSocket = socket
@@ -1060,10 +1036,8 @@ func TestRefreshWorkloadStatesFallsBackWhenFoxlabdSnapshotIsForAnotherLab(t *tes
 		States:  map[string]string{NodeKey(NodeContainer, "web"): "running"},
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: testRuntimeAccessWithStatus(
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccessWithStatus(
 			&fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "missing"}},
 			func(context.Context, string) (daemonstatus.Snapshot, error) { return snapshot, nil },
 		),
@@ -1087,9 +1061,7 @@ func TestRefreshWorkloadStatesNormalizesRuntimeStates(t *testing.T) {
 		Containers: []lab.Container{{ID: "kali", Image: "docker.io/kalilinux/kali-rolling:latest", DesiredState: lab.DesiredStateRunning}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{key: " Missing "},
 		}),
 	}
@@ -1164,10 +1136,8 @@ func TestContextMenuInlineEditVMName(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph, ContextMenu: true, ContextGroup: "config-menu", ContextInSubmenu: true},
 	}
 
 	app.State.ContextSubSelected = 1
@@ -1215,8 +1185,7 @@ func TestInspectorMoveSavesLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
-		State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusInspector}, ViewWidth: 120, ViewHeight: 30,
 	}
 
 	fields := app.selectedInspectorFields()
@@ -1267,10 +1236,8 @@ func TestNormalModeMStartsMoveAndSavesLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char:m")
@@ -1314,10 +1281,8 @@ func TestMouseDragNodeSavesLayoutWithoutMoveAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1436,10 +1401,8 @@ func TestMoveSaveFailureRestoresLabLayout(t *testing.T) {
 		}},
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: filepath.Join(blocker, "demo.lab"),
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			filepath.Join(blocker, "demo.lab")), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char:m")
@@ -1453,11 +1416,11 @@ func TestMoveSaveFailureRestoresLabLayout(t *testing.T) {
 	if !strings.HasPrefix(app.State.Message, "move failed:") {
 		t.Fatalf("message = %q, want move failed", app.State.Message)
 	}
-	if got := app.Lab.Layout.Nodes["vm1"]; got != (lab.Position{X: 80, Y: 72}) {
+	if got := app.currentLab().Layout.Nodes["vm1"]; got != (lab.Position{X: 80, Y: 72}) {
 		t.Fatalf("lab layout after failed save = %#v, want original", got)
 	}
-	if app.Model.Nodes[0].X != 6 || app.Model.Nodes[0].Y != 4 {
-		t.Fatalf("move preview = (%d,%d), want (6,4)", app.Model.Nodes[0].X, app.Model.Nodes[0].Y)
+	if app.Model.Nodes[0].X != 5 || app.Model.Nodes[0].Y != 3 {
+		t.Fatalf("move rollback = (%d,%d), want (5,3)", app.Model.Nodes[0].X, app.Model.Nodes[0].Y)
 	}
 }
 
@@ -1547,9 +1510,7 @@ func TestRunInteractiveRefreshesRuntimeStatusWithoutReconciling(t *testing.T) {
 	}
 	runtime := &fakeVMRuntime{states: map[string]string{key: "missing"}}
 	app := App{
-		Model:                 ModelFromLab(loaded),
-		Lab:                   loaded,
-		runtimeAccess:         testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
 		StatusRefreshInterval: time.Millisecond,
 		State:                 ViewState{Focus: FocusGraph},
 		Out:                   tempOutputFile(t),
@@ -1587,7 +1548,7 @@ func TestRunInteractiveRefreshesRuntimeStatusWithoutReconciling(t *testing.T) {
 	}
 }
 
-func TestDrainStatusUpdatesIgnoresStaleLabUpdate(t *testing.T) {
+func TestDrainStatusUpdatesIgnoresStaleSessionRevision(t *testing.T) {
 	oldLab := &lab.Lab{
 		ID:         "old",
 		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
@@ -1596,14 +1557,12 @@ func TestDrainStatusUpdatesIgnoresStaleLabUpdate(t *testing.T) {
 		ID:         "current",
 		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
 	}
-	app := App{
-		Model: ModelFromLab(currentLab),
-		Lab:   currentLab,
-		State: ViewState{Focus: FocusGraph},
-	}
+	session := lab.NewSession(oldLab, "")
+	session.Replace(currentLab)
+	app := App{Model: ModelFromLab(currentLab), Session: session, State: ViewState{Focus: FocusGraph}}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab: oldLab,
+		revision: 0,
 		snapshot: runtimeSnapshot{
 			states:         map[string]string{NodeKey(NodeContainer, "web"): "running"},
 			statesReceived: true,
@@ -1635,12 +1594,10 @@ func TestDrainStatusUpdatesCopiesUpdateMaps(t *testing.T) {
 	states := map[string]string{stateKey: "running"}
 	ports := map[string]int{stateKey: 5903}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		State: ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), State: ViewState{Focus: FocusGraph},
 	}
 	updates := make(chan statusUpdate, 1)
-	updates <- statusUpdate{lab: loaded, snapshot: runtimeSnapshot{
+	updates <- statusUpdate{snapshot: runtimeSnapshot{
 		states:         states,
 		statesReceived: true,
 		vncPorts:       ports,
@@ -1668,13 +1625,10 @@ func TestDrainStatusUpdatesClearsRecoveredStatusMessage(t *testing.T) {
 		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		State: ViewState{Focus: FocusGraph, Message: "foxlabd status: runtime unavailable"},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), State: ViewState{Focus: FocusGraph, Message: "foxlabd status: runtime unavailable"},
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab: loaded,
 		snapshot: runtimeSnapshot{
 			states:          map[string]string{NodeKey(NodeContainer, "web"): "running"},
 			statesReceived:  true,
@@ -1697,13 +1651,10 @@ func TestDrainStatusUpdatesKeepsCommandMessageOnHealthyStatus(t *testing.T) {
 		Containers: []lab.Container{{ID: "web", Image: "nginx", DesiredState: lab.DesiredStateRunning}},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		State: ViewState{Focus: FocusGraph, Message: "renamed disk:data to system"},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), State: ViewState{Focus: FocusGraph, Message: "renamed disk:data to system"},
 	}
 	updates := make(chan statusUpdate, 1)
 	updates <- statusUpdate{
-		lab: loaded,
 		snapshot: runtimeSnapshot{
 			states:          map[string]string{NodeKey(NodeContainer, "web"): "running"},
 			statesReceived:  true,
@@ -1733,7 +1684,7 @@ func TestStartStatusRefreshUsesLabSnapshot(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, runtimeAccess: testRuntimeAccess(runtime)}
+	app := App{Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1753,8 +1704,8 @@ func TestStartStatusRefreshUsesLabSnapshot(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("status update was not sent")
 	}
-	if update.lab != loaded {
-		t.Fatal("status update did not keep original lab marker")
+	if update.revision != app.Session.Revision() {
+		t.Fatalf("status update revision = %d, want %d", update.revision, app.Session.Revision())
 	}
 	if runtime.seenLab == loaded {
 		t.Fatal("runtime received mutable app lab instead of snapshot")
@@ -1780,7 +1731,7 @@ func TestRuntimeCallsAreSerializedDuringStatusRefresh(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	app := App{Lab: loaded, runtimeAccess: testRuntimeAccess(runtime)}
+	app := App{Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime)}
 	updates := make(chan statusUpdate, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -88,7 +88,12 @@ func (a *App) executeDiskCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.diskCreate(fields[2], args)
+		request, err := diskCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskCreate(request)
 	case "attach", "connect":
 		if len(fields) < 4 {
 			a.State.Message = "usage: disk attach <id> to=vm:<id>|container:<id>"
@@ -99,7 +104,12 @@ func (a *App) executeDiskCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.diskAttach(fields[2], args)
+		request, err := diskAttachRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskAttach(request)
 	case "detach":
 		if len(fields) < 3 {
 			a.State.Message = "usage: disk detach <workload-id> [type=vm|container] [disk=ID]"
@@ -110,7 +120,12 @@ func (a *App) executeDiskCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.diskDetach(fields[2], args)
+		request, err := diskDetachRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskDetach(request)
 	case "merge":
 		if !a.requireExactCommandArgs(fields, 3, "usage: disk merge <id>") {
 			return
@@ -126,7 +141,12 @@ func (a *App) executeDiskCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.diskResize(fields[2], args)
+		request, err := diskResizeRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.diskResize(request)
 	case "info":
 		if !a.requireExactCommandArgs(fields, 3, "usage: disk info <id>") {
 			return
@@ -176,7 +196,12 @@ func (a *App) executeAddCommand(fields []string) {
 		}
 		a.vmCreate(request)
 	case "sw", "switch":
-		a.switchCreate(fields[2], args)
+		request, err := switchCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.switchCreate(request)
 	case "cont", "container", "ct":
 		request, err := containerCreateRequest(fields[2], args)
 		if err != nil {
@@ -244,11 +269,13 @@ func (a *App) executeLinkAddCommand(fields []string) {
 		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
 		return
 	}
-	if target.NIC == "" {
-		a.nicConnectDirect(source.Type, source.ID, source.NIC, target.Type, target.ID)
+	sourceRef, sourceOK := directNetworkEndpoint(source.Type, source.ID, source.NIC)
+	targetRef, targetOK := directNetworkEndpoint(target.Type, target.ID, target.NIC)
+	if !sourceOK || !targetOK {
+		a.State.Message = "usage: link add <vm|container>:<id>:<nic> to=<vm|container>:<id>[:nic]"
 		return
 	}
-	a.nicConnectDirectTo(source.Type, source.ID, source.NIC, target.Type, target.ID, target.NIC)
+	a.nicConnectDirect(sourceRef, targetRef)
 }
 
 func (a *App) executeLinkDeleteCommand(fields []string) {
@@ -261,7 +288,12 @@ func (a *App) executeLinkDeleteCommand(fields []string) {
 		a.State.Message = "usage: link delete <vm|container>:<id>:<nic>"
 		return
 	}
-	a.nicDisconnect(endpoint.Type, endpoint.ID, endpoint.NIC)
+	source, ok := directNetworkEndpoint(endpoint.Type, endpoint.ID, endpoint.NIC)
+	if !ok {
+		a.State.Message = "usage: link delete <vm|container>:<id>:<nic>"
+		return
+	}
+	a.nicDisconnect(source)
 }
 
 func (a *App) executeContainerCommand(fields []string) {
@@ -328,7 +360,12 @@ func (a *App) executeContainerCommand(fields []string) {
 				a.State.Message = err.Error()
 				return
 			}
-			a.containerNICAdd(fields[3], args)
+			request, err := nicAddRequest(NodeContainer, args)
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.containerNICAdd(fields[3], request)
 		case "connect":
 			if len(fields) < 6 {
 				a.State.Message = "usage: container nic connect <id> <index> to=ID [mac=MAC]"
@@ -339,12 +376,22 @@ func (a *App) executeContainerCommand(fields []string) {
 				a.State.Message = err.Error()
 				return
 			}
-			a.containerNICConnect(fields[3], fields[4], args)
+			request, err := nicConnectRequest(NodeContainer, fields[4], args)
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.containerNICConnect(fields[3], request)
 		case "delete", "rm":
 			if !a.requireExactCommandArgs(fields, 5, "usage: container nic delete <id> <index>") {
 				return
 			}
-			a.containerNICDelete(fields[3], fields[4])
+			index, ok := parseNICIndex(fields[4])
+			if !ok {
+				a.State.Message = "usage: container nic delete <id> <index>"
+				return
+			}
+			a.containerNICDelete(fields[3], index)
 		default:
 			a.State.Message = "unknown container nic command: " + fields[2]
 		}
@@ -374,7 +421,12 @@ func (a *App) executeSwitchCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.switchCreate(fields[2], args)
+		request, err := switchCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.switchCreate(request)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
 			a.State.Message = "usage: switch set <id> mode=bridge uplink=ID"
@@ -385,7 +437,12 @@ func (a *App) executeSwitchCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.switchSet(fields[2], args)
+		update, err := switchUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.switchSet(fields[2], update)
 	case "delete", "rm":
 		if !a.requireExactCommandArgs(fields, 3, "usage: switch delete <id>") {
 			return
@@ -412,7 +469,12 @@ func (a *App) executeExternalCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.externalCreate(fields[2], args)
+		request, err := externalCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.externalCreate(request)
 	case "set", "config", "configure":
 		if len(fields) < 4 {
 			a.State.Message = "usage: uplink set <id> interface=IFACE name=NAME mode=nat|direct|macnat"
@@ -423,7 +485,12 @@ func (a *App) executeExternalCommand(fields []string) {
 			a.State.Message = err.Error()
 			return
 		}
-		a.externalSet(fields[2], args)
+		update, err := externalUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.externalSet(fields[2], update)
 	case "delete", "rm":
 		if !a.requireExactCommandArgs(fields, 3, "usage: uplink delete <id>") {
 			return
@@ -498,7 +565,12 @@ func (a *App) executeVMCommand(fields []string) {
 				a.State.Message = err.Error()
 				return
 			}
-			a.vmNICAdd(fields[3], args)
+			request, err := nicAddRequest(NodeVM, args)
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.vmNICAdd(fields[3], request)
 		case "connect":
 			if len(fields) < 6 {
 				a.State.Message = "usage: vm nic connect <id> <index> to=ID [mac=MAC]"
@@ -509,12 +581,22 @@ func (a *App) executeVMCommand(fields []string) {
 				a.State.Message = err.Error()
 				return
 			}
-			a.vmNICConnect(fields[3], fields[4], args)
+			request, err := nicConnectRequest(NodeVM, fields[4], args)
+			if err != nil {
+				a.State.Message = err.Error()
+				return
+			}
+			a.vmNICConnect(fields[3], request)
 		case "delete", "rm":
 			if !a.requireExactCommandArgs(fields, 5, "usage: vm nic delete <id> <index>") {
 				return
 			}
-			a.vmNICDelete(fields[3], fields[4])
+			index, ok := parseNICIndex(fields[4])
+			if !ok {
+				a.State.Message = "usage: vm nic delete <id> <index>"
+				return
+			}
+			a.vmNICDelete(fields[3], index)
 		default:
 			a.State.Message = "unknown vm nic command: " + fields[2]
 		}
