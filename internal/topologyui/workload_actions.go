@@ -7,7 +7,7 @@ import (
 )
 
 func (a *App) runWorkload(typ, id string) {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		a.State.Message = "run needs a loaded .lab file"
 		return
 	}
@@ -15,7 +15,7 @@ func (a *App) runWorkload(typ, id string) {
 }
 
 func (a *App) stopWorkload(typ, id string) {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		a.State.Message = "stop needs a loaded .lab file"
 		return
 	}
@@ -23,22 +23,22 @@ func (a *App) stopWorkload(typ, id string) {
 }
 
 func (a *App) setWorkloadDesiredState(typ, id, state string) {
-	service := a.ensureService()
 	resolvedID := id
-	if value, ok := service.ResolveWorkloadID(typ, id); ok {
-		resolvedID = value
-	}
-	result := topology.Failure("desired state is available for vm and container nodes")
-	switch typ {
-	case NodeContainer:
-		result = service.ContainerDesiredState(resolvedID, state)
-	case NodeVM:
-		result = service.VMDesiredState(resolvedID, state)
-	}
-	a.setOperationResult(result)
+	result := a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		if value, ok := service.ResolveWorkloadID(typ, id); ok {
+			resolvedID = value
+		}
+		switch typ {
+		case NodeContainer:
+			return service.ContainerDesiredState(resolvedID, state)
+		case NodeVM:
+			return service.VMDesiredState(resolvedID, state)
+		default:
+			return topology.Failure("desired state is available for vm and container nodes")
+		}
+	})
 	message := result.Message
-	a.syncFromService()
-	if result.OK() {
+	if result.Changed {
 		a.setPendingWorkloadStart(typ, resolvedID, state)
 		a.ensureAppliedAfterDesiredState(message)
 	}

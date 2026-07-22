@@ -3,7 +3,7 @@ package topology
 import "foxlab-cli/internal/lab"
 
 func (s *Service) ContainerCapabilitySet(ref, capability string, enabled bool) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("container capability needs a loaded .lab file")
 	}
 	capability = lab.NormalizeContainerCapability(capability)
@@ -14,8 +14,8 @@ func (s *Service) ContainerCapabilitySet(ref, capability string, enabled bool) R
 	if !ok {
 		return Failure("container not found: " + ref)
 	}
-	for i := range s.Lab.Containers {
-		ct := &s.Lab.Containers[i]
+	for i := range s.CurrentLab().Containers {
+		ct := &s.CurrentLab().Containers[i]
 		if ct.ID != id {
 			continue
 		}

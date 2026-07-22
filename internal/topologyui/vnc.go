@@ -56,7 +56,7 @@ func (a *App) vncCommand(node Node) (shellCommand, error) {
 	if node.Type != NodeVM {
 		return shellCommand{}, fmt.Errorf("vnc is available for vm nodes")
 	}
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return shellCommand{}, fmt.Errorf("vnc needs a loaded .lab file")
 	}
 	vm, ok := a.labVM(node.ID)
@@ -257,11 +257,11 @@ func vncViewerUserEnv(u *user.User) []string {
 func (a *App) refreshVNCWorkloadStatus(_ Node) error {
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	snapshot := a.runtimeClient().readLiveStatus(ctx, a.Lab, liveStatusOptions{includeVNC: true})
+	snapshot := a.runtimeClient().readLiveStatus(ctx, a.currentLab(), liveStatusOptions{includeVNC: true})
 	if snapshot.runtimeErr != nil {
 		return snapshot.runtimeErr
 	}
-	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{})
+	a.applyRuntimeSnapshot(a.currentLab(), snapshot, runtimeSnapshotApplyOptions{})
 	if snapshot.vncErr != nil {
 		if snapshot.statesErr != nil {
 			return fmt.Errorf("runtime status unavailable: %w", snapshot.statesErr)

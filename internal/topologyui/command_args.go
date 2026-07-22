@@ -95,3 +95,14 @@ func commandArg(fields []string, index int) string {
 	}
 	return fields[index]
 }
+
+func parseCommandBool(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}

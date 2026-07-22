@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Service) CreateVM(request VMCreateRequest) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("vm create needs a loaded .lab file")
 	}
 	name := request.Name
@@ -50,8 +50,8 @@ func (s *Service) CreateVM(request VMCreateRequest) Result {
 			return Failure("create failed: uplink not found: " + value)
 		}
 	}
-	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
-		switchRef = s.Lab.Switches[0].ID
+	if switchRef == "" && externalRef == "" && len(s.CurrentLab().Switches) > 0 {
+		switchRef = s.CurrentLab().Switches[0].ID
 	}
 	id := name
 	if err := s.validateVMNetworkRefs(name, switchRef, externalRef); err != nil {
@@ -73,11 +73,11 @@ func (s *Service) CreateVM(request VMCreateRequest) Result {
 	if externalRef != "" {
 		vm.Networks = append(vm.Networks, lab.VMNetwork{ExternalLink: externalRef})
 	}
-	s.Lab.VMs = append(s.Lab.VMs, vm)
-	if s.Lab.Layout.Nodes == nil {
-		s.Lab.Layout.Nodes = map[string]lab.Position{}
+	s.CurrentLab().VMs = append(s.CurrentLab().VMs, vm)
+	if s.CurrentLab().Layout.Nodes == nil {
+		s.CurrentLab().Layout.Nodes = map[string]lab.Position{}
 	}
-	s.Lab.Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.Lab.VMs)*96}
+	s.CurrentLab().Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.CurrentLab().VMs)*96}
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("create failed: "+err.Error(), err)
 	}
@@ -85,15 +85,15 @@ func (s *Service) CreateVM(request VMCreateRequest) Result {
 }
 
 func (s *Service) UpdateVM(ref string, update VMUpdate) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("vm set needs a loaded .lab file")
 	}
 	id, ok := s.resolveVMID(ref)
 	if !ok {
 		return Failure("vm not found: " + ref)
 	}
-	for i := range s.Lab.VMs {
-		if s.Lab.VMs[i].ID != id {
+	for i := range s.CurrentLab().VMs {
+		if s.CurrentLab().VMs[i].ID != id {
 			continue
 		}
 		if !vmUpdateRequested(update) {
@@ -137,27 +137,27 @@ func (s *Service) UpdateVM(ref string, update VMUpdate) Result {
 			id = value
 		}
 		if update.Disk.Set {
-			s.Lab.VMs[i].Disk = update.Disk.Value
+			s.CurrentLab().VMs[i].Disk = update.Disk.Value
 		}
 		if update.ISO.Set {
-			s.Lab.VMs[i].ISO = update.ISO.Value
+			s.CurrentLab().VMs[i].ISO = update.ISO.Value
 		}
 		if update.VNC.Set {
-			s.Lab.VMs[i].VNC = update.VNC.Value
+			s.CurrentLab().VMs[i].VNC = update.VNC.Value
 		}
 		if update.CPUs.Set {
-			s.Lab.VMs[i].CPUs = update.CPUs.Value
+			s.CurrentLab().VMs[i].CPUs = update.CPUs.Value
 		}
 		if update.MemoryMB.Set {
-			s.Lab.VMs[i].MemoryMB = update.MemoryMB.Value
+			s.CurrentLab().VMs[i].MemoryMB = update.MemoryMB.Value
 		}
 		if switchRef != "" {
 			s.removeNetworkLinksForNode("vm", id)
-			s.Lab.VMs[i].Networks = []lab.VMNetwork{{Switch: switchRef}}
+			s.CurrentLab().VMs[i].Networks = []lab.VMNetwork{{Switch: switchRef}}
 		}
 		if externalRef != "" {
 			s.removeNetworkLinksForNode("vm", id)
-			s.Lab.VMs[i].Networks = []lab.VMNetwork{{ExternalLink: externalRef}}
+			s.CurrentLab().VMs[i].Networks = []lab.VMNetwork{{ExternalLink: externalRef}}
 		}
 		if err := mutation.Commit(); err != nil {
 			return FailureWithCause("config failed: "+err.Error(), err)
@@ -172,7 +172,7 @@ func (s *Service) UpdateVM(ref string, update VMUpdate) Result {
 }
 
 func (s *Service) VMDelete(ref string) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("vm delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveVMID(ref)
@@ -183,17 +183,17 @@ func (s *Service) VMDelete(ref string) Result {
 		return FailureWithCause("delete failed: "+err.Error(), err)
 	}
 	mutation := s.beginLabMutation()
-	filtered := s.Lab.VMs[:0]
-	for _, vm := range s.Lab.VMs {
+	filtered := s.CurrentLab().VMs[:0]
+	for _, vm := range s.CurrentLab().VMs {
 		if vm.ID == id {
 			continue
 		}
 		filtered = append(filtered, vm)
 	}
-	s.Lab.VMs = filtered
+	s.CurrentLab().VMs = filtered
 	s.removeNetworkLinksForNode("vm", id)
 	s.detachDisksForNode("vm", id)
-	delete(s.Lab.Layout.Nodes, id)
+	delete(s.CurrentLab().Layout.Nodes, id)
 	s.removeLayoutLinksForNode("vm", id)
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("delete failed: "+err.Error(), err)
@@ -202,7 +202,7 @@ func (s *Service) VMDelete(ref string) Result {
 }
 
 func (s *Service) CreateContainer(request ContainerCreateRequest) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("container create needs a loaded .lab file")
 	}
 	name := request.Name
@@ -231,8 +231,8 @@ func (s *Service) CreateContainer(request ContainerCreateRequest) Result {
 			return Failure("container create failed: uplink not found: " + value)
 		}
 	}
-	if switchRef == "" && externalRef == "" && len(s.Lab.Switches) > 0 {
-		switchRef = s.Lab.Switches[0].ID
+	if switchRef == "" && externalRef == "" && len(s.CurrentLab().Switches) > 0 {
+		switchRef = s.CurrentLab().Switches[0].ID
 	}
 	id := name
 	if err := s.validateContainerNetworkRefs(name, switchRef, externalRef); err != nil {
@@ -256,11 +256,11 @@ func (s *Service) CreateContainer(request ContainerCreateRequest) Result {
 	if externalRef != "" {
 		ct.Networks = append(ct.Networks, lab.ContainerNetwork{ExternalLink: externalRef, MAC: request.Network.MAC})
 	}
-	s.Lab.Containers = append(s.Lab.Containers, ct)
-	if s.Lab.Layout.Nodes == nil {
-		s.Lab.Layout.Nodes = map[string]lab.Position{}
+	s.CurrentLab().Containers = append(s.CurrentLab().Containers, ct)
+	if s.CurrentLab().Layout.Nodes == nil {
+		s.CurrentLab().Layout.Nodes = map[string]lab.Position{}
 	}
-	s.Lab.Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.Lab.Containers)*96}
+	s.CurrentLab().Layout.Nodes[id] = lab.Position{X: 80, Y: 80 + len(s.CurrentLab().Containers)*96}
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("container create failed: "+err.Error(), err)
 	}
@@ -268,15 +268,15 @@ func (s *Service) CreateContainer(request ContainerCreateRequest) Result {
 }
 
 func (s *Service) UpdateContainer(ref string, update ContainerUpdate) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("container set needs a loaded .lab file")
 	}
 	id, ok := s.resolveContainerID(ref)
 	if !ok {
 		return Failure("container not found: " + ref)
 	}
-	for i := range s.Lab.Containers {
-		if s.Lab.Containers[i].ID != id {
+	for i := range s.CurrentLab().Containers {
+		if s.CurrentLab().Containers[i].ID != id {
 			continue
 		}
 		if !containerUpdateRequested(update) {
@@ -317,29 +317,29 @@ func (s *Service) UpdateContainer(ref string, update ContainerUpdate) Result {
 			id = value
 		}
 		if value := update.Image.Value; update.Image.Set && value != "" {
-			s.Lab.Containers[i].Image = value
+			s.CurrentLab().Containers[i].Image = value
 		}
 		if update.Disk.Set {
-			s.Lab.Containers[i].Disk = update.Disk.Value
+			s.CurrentLab().Containers[i].Disk = update.Disk.Value
 		}
 		if update.Command.Set {
-			s.Lab.Containers[i].Command = append([]string(nil), update.Command.Value...)
+			s.CurrentLab().Containers[i].Command = append([]string(nil), update.Command.Value...)
 		}
 		if update.Shell.Set {
-			s.Lab.Containers[i].Shell = strings.TrimSpace(update.Shell.Value)
+			s.CurrentLab().Containers[i].Shell = strings.TrimSpace(update.Shell.Value)
 		}
 		if update.Env.Set {
-			s.Lab.Containers[i].Env = maps.Clone(update.Env.Value)
+			s.CurrentLab().Containers[i].Env = maps.Clone(update.Env.Value)
 		}
 		if switchRef != "" {
 			s.removeNetworkLinksForNode("container", id)
-			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{Switch: switchRef, MAC: update.Network.MAC}}
+			s.CurrentLab().Containers[i].Networks = []lab.ContainerNetwork{{Switch: switchRef, MAC: update.Network.MAC}}
 		}
 		if externalRef != "" {
 			s.removeNetworkLinksForNode("container", id)
-			s.Lab.Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: externalRef, MAC: update.Network.MAC}}
-		} else if value := update.Network.MAC; value != "" && len(s.Lab.Containers[i].Networks) > 0 {
-			s.Lab.Containers[i].Networks[0].MAC = value
+			s.CurrentLab().Containers[i].Networks = []lab.ContainerNetwork{{ExternalLink: externalRef, MAC: update.Network.MAC}}
+		} else if value := update.Network.MAC; value != "" && len(s.CurrentLab().Containers[i].Networks) > 0 {
+			s.CurrentLab().Containers[i].Networks[0].MAC = value
 		}
 		if err := mutation.Commit(); err != nil {
 			return FailureWithCause("container config failed: "+err.Error(), err)
@@ -364,7 +364,7 @@ func containerUpdateRequested(update ContainerUpdate) bool {
 }
 
 func (s *Service) ContainerDelete(ref string) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("container delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveContainerID(ref)
@@ -375,17 +375,17 @@ func (s *Service) ContainerDelete(ref string) Result {
 		return FailureWithCause("container delete failed: "+err.Error(), err)
 	}
 	mutation := s.beginLabMutation()
-	containers := s.Lab.Containers[:0]
-	for _, ct := range s.Lab.Containers {
+	containers := s.CurrentLab().Containers[:0]
+	for _, ct := range s.CurrentLab().Containers {
 		if ct.ID == id {
 			continue
 		}
 		containers = append(containers, ct)
 	}
-	s.Lab.Containers = containers
+	s.CurrentLab().Containers = containers
 	s.removeNetworkLinksForNode("container", id)
 	s.detachDisksForNode("container", id)
-	delete(s.Lab.Layout.Nodes, id)
+	delete(s.CurrentLab().Layout.Nodes, id)
 	s.removeLayoutLinksForNode("container", id)
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("container delete failed: "+err.Error(), err)

@@ -2,22 +2,19 @@ package topology
 
 import "foxlab-cli/internal/lab"
 
-func (s *Service) SwitchCreate(name string, args map[string]string) Result {
-	if s.Lab == nil {
+func (s *Service) CreateSwitch(request SwitchCreateRequest) Result {
+	if s.CurrentLab() == nil {
 		return Failure("switch create needs a loaded .lab file")
 	}
-	name = firstNonEmpty(args["name"], name)
+	name := request.Name
 	if name == "" {
 		return Failure("usage: switch create <name> [mode=bridge|nat|macnat-bridge] [uplink=NAME]")
 	}
 	if err := s.validateNodeName(name, ""); err != "" {
 		return Failure(err)
 	}
-	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
-		return Failure("unsupported switch create argument: " + invalid[0])
-	}
-	mode := firstNonEmpty(args["mode"], "bridge")
-	externals, err := s.resolveExternalRefs(switchExternalArgs(args))
+	mode := firstNonEmpty(request.Mode, "bridge")
+	externals, err := s.resolveExternalRefs(nonEmptyStrings(request.Uplink))
 	if err != nil {
 		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
@@ -29,46 +26,48 @@ func (s *Service) SwitchCreate(name string, args map[string]string) Result {
 		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
 	mutation := s.beginLabMutation()
-	s.Lab.Switches = append(s.Lab.Switches, lab.Switch{
+	s.CurrentLab().Switches = append(s.CurrentLab().Switches, lab.Switch{
 		ID:            id,
 		Mode:          mode,
 		ExternalLinks: externals,
 	})
-	if s.Lab.Layout.Nodes == nil {
-		s.Lab.Layout.Nodes = map[string]lab.Position{}
+	if s.CurrentLab().Layout.Nodes == nil {
+		s.CurrentLab().Layout.Nodes = map[string]lab.Position{}
 	}
-	s.Lab.Layout.Nodes[id] = lab.Position{X: 448, Y: 80 + len(s.Lab.Switches)*96}
+	s.CurrentLab().Layout.Nodes[id] = lab.Position{X: 448, Y: 80 + len(s.CurrentLab().Switches)*96}
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("switch create failed: "+err.Error(), err)
 	}
 	return Success("created switch:" + name)
 }
 
-func (s *Service) SwitchSet(ref string, args map[string]string) Result {
-	if s.Lab == nil {
+func (s *Service) UpdateSwitch(ref string, update SwitchUpdate) Result {
+	if s.CurrentLab() == nil {
 		return Failure("switch set needs a loaded .lab file")
-	}
-	if invalid := unexpectedSwitchArgs(args); len(invalid) > 0 {
-		return Failure("unsupported switch set argument: " + invalid[0])
 	}
 	id, ok := s.resolveSwitchID(ref)
 	if !ok {
 		return Failure("switch not found: " + ref)
 	}
-	for i := range s.Lab.Switches {
-		if s.Lab.Switches[i].ID != id {
+	for i := range s.CurrentLab().Switches {
+		if s.CurrentLab().Switches[i].ID != id {
 			continue
 		}
-		if len(args) == 0 {
+		if !switchUpdateRequested(update) {
 			return Info("configured switch:" + s.nodeDisplayName("switch", id))
 		}
-		mode := firstNonEmpty(args["mode"], s.Lab.Switches[i].Mode)
-		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
-		nextExternalRefs, err := s.resolveExternalRefs(switchExternalArgs(args))
-		if err != nil {
-			return FailureWithCause("switch config failed: "+err.Error(), err)
+		mode := s.CurrentLab().Switches[i].Mode
+		if update.Mode.Set && update.Mode.Value != "" {
+			mode = update.Mode.Value
 		}
-		externals = appendSwitchExternalLinks(externals, nextExternalRefs...)
+		externals := lab.SwitchExternalLinks(s.CurrentLab().Switches[i])
+		if update.AttachUplink.Set && update.AttachUplink.Value != "" {
+			nextExternalRefs, err := s.resolveExternalRefs(nonEmptyStrings(update.AttachUplink.Value))
+			if err != nil {
+				return FailureWithCause("switch config failed: "+err.Error(), err)
+			}
+			externals = appendSwitchExternalLinks(externals, nextExternalRefs...)
+		}
 		if err := s.validateSwitchConfig(s.nodeDisplayName("switch", id), mode, externals); err != nil {
 			return FailureWithCause("switch config failed: "+err.Error(), err)
 		}
@@ -77,19 +76,19 @@ func (s *Service) SwitchSet(ref string, args map[string]string) Result {
 		}
 		mutation := s.beginLabMutation()
 		renamed := false
-		if value := args["name"]; value != "" {
+		if value := update.Name.Value; update.Name.Set && value != "" {
 			if err := s.renameNodeID("switch", id, value); err != nil {
 				return FailureWithCause("switch rename failed: "+err.Error(), err)
 			}
 			renamed = id != value
 			id = value
 		}
-		if value := args["mode"]; value != "" {
-			s.Lab.Switches[i].Mode = value
+		if value := update.Mode.Value; update.Mode.Set && value != "" {
+			s.CurrentLab().Switches[i].Mode = value
 		}
-		if value := firstNonEmpty(args["uplink"], args["external"], args["externallink"]); value != "" {
-			s.Lab.Switches[i].ExternalLinks = externals
-			s.Lab.Switches[i].ExternalLink = ""
+		if value := update.AttachUplink.Value; update.AttachUplink.Set && value != "" {
+			s.CurrentLab().Switches[i].ExternalLinks = externals
+			s.CurrentLab().Switches[i].ExternalLink = ""
 		}
 		if err := mutation.Commit(); err != nil {
 			return FailureWithCause("switch config failed: "+err.Error(), err)
@@ -104,18 +103,18 @@ func (s *Service) SwitchSet(ref string, args map[string]string) Result {
 }
 
 func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("switch set needs a loaded .lab file")
 	}
 	id, ok := s.resolveSwitchID(ref)
 	if !ok {
 		return Failure("switch not found: " + ref)
 	}
-	for i := range s.Lab.Switches {
-		if s.Lab.Switches[i].ID != id {
+	for i := range s.CurrentLab().Switches {
+		if s.CurrentLab().Switches[i].ID != id {
 			continue
 		}
-		externals := lab.SwitchExternalLinks(s.Lab.Switches[i])
+		externals := lab.SwitchExternalLinks(s.CurrentLab().Switches[i])
 		if len(externals) == 0 {
 			return Info("switch uplink already empty:" + id)
 		}
@@ -145,10 +144,10 @@ func (s *Service) SwitchDisconnectExternal(ref string, externalIDs ...string) Re
 			}
 			externals = next
 		}
-		s.Lab.Switches[i].ExternalLinks = append([]string(nil), externals...)
-		s.Lab.Switches[i].ExternalLink = ""
-		if len(externals) == 0 && s.Lab.Switches[i].Mode == "macnat-bridge" {
-			s.Lab.Switches[i].Mode = "bridge"
+		s.CurrentLab().Switches[i].ExternalLinks = append([]string(nil), externals...)
+		s.CurrentLab().Switches[i].ExternalLink = ""
+		if len(externals) == 0 && s.CurrentLab().Switches[i].Mode == "macnat-bridge" {
+			s.CurrentLab().Switches[i].Mode = "bridge"
 		}
 		if err := mutation.Commit(); err != nil {
 			return FailureWithCause("switch config failed: "+err.Error(), err)
@@ -167,12 +166,18 @@ func containsString(values []string, value string) bool {
 	return false
 }
 
-func switchExternalArgs(args map[string]string) []string {
-	id := firstNonEmpty(args["uplink"], args["external"], args["externallink"])
-	if id == "" {
-		return nil
+func nonEmptyStrings(values ...string) []string {
+	var out []string
+	for _, value := range values {
+		if value = firstNonEmpty(value); value != "" {
+			out = append(out, value)
+		}
 	}
-	return []string{id}
+	return out
+}
+
+func switchUpdateRequested(update SwitchUpdate) bool {
+	return update.Name.Set || update.Mode.Set || update.AttachUplink.Set
 }
 
 func appendSwitchExternalLinks(existing []string, ids ...string) []string {
@@ -195,7 +200,7 @@ func appendSwitchExternalLinks(existing []string, ids ...string) []string {
 }
 
 func (s *Service) SwitchDelete(ref string) Result {
-	if s.Lab == nil {
+	if s.CurrentLab() == nil {
 		return Failure("switch delete needs a loaded .lab file")
 	}
 	id, ok := s.resolveSwitchID(ref)
@@ -207,29 +212,29 @@ func (s *Service) SwitchDelete(ref string) Result {
 		return FailureWithCause("switch delete failed: "+err.Error(), err)
 	}
 	mutation := s.beginLabMutation()
-	switches := s.Lab.Switches[:0]
-	for _, sw := range s.Lab.Switches {
+	switches := s.CurrentLab().Switches[:0]
+	for _, sw := range s.CurrentLab().Switches {
 		if sw.ID == id {
 			continue
 		}
 		switches = append(switches, sw)
 	}
-	s.Lab.Switches = switches
-	for i := range s.Lab.VMs {
-		for j := range s.Lab.VMs[i].Networks {
-			if s.Lab.VMs[i].Networks[j].Switch == id {
-				s.Lab.VMs[i].Networks[j].Switch = ""
+	s.CurrentLab().Switches = switches
+	for i := range s.CurrentLab().VMs {
+		for j := range s.CurrentLab().VMs[i].Networks {
+			if s.CurrentLab().VMs[i].Networks[j].Switch == id {
+				s.CurrentLab().VMs[i].Networks[j].Switch = ""
 			}
 		}
 	}
-	for i := range s.Lab.Containers {
-		for j := range s.Lab.Containers[i].Networks {
-			if s.Lab.Containers[i].Networks[j].Switch == id {
-				s.Lab.Containers[i].Networks[j].Switch = ""
+	for i := range s.CurrentLab().Containers {
+		for j := range s.CurrentLab().Containers[i].Networks {
+			if s.CurrentLab().Containers[i].Networks[j].Switch == id {
+				s.CurrentLab().Containers[i].Networks[j].Switch = ""
 			}
 		}
 	}
-	delete(s.Lab.Layout.Nodes, id)
+	delete(s.CurrentLab().Layout.Nodes, id)
 	s.removeLayoutLinksForNode("switch", id)
 	if err := mutation.Commit(); err != nil {
 		return FailureWithCause("switch delete failed: "+err.Error(), err)

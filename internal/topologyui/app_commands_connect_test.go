@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 	"foxlab-cli/internal/workload"
 )
 
@@ -53,10 +54,8 @@ func TestCommandVMCreateSavesLab(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("add vm vm1 cpus=4 memory=4096 switch=lan")
@@ -93,10 +92,8 @@ func TestCommandContainerCreateSavesLabAndGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand(`add cont web image=docker.io/library/nginx:latest command="nginx -g daemon" switch=lan`)
@@ -138,10 +135,8 @@ func TestCommandContainerSetClearsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("container set web command=")
@@ -185,10 +180,8 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 	runtime := &fakeVMRuntime{}
 	daemon := &fakeDaemonController{}
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		runtimeAccess:    testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -197,26 +190,26 @@ func TestCommandStartStopSetsDesiredState(t *testing.T) {
 	if runtime.starts != 0 {
 		t.Fatalf("vm start called runtime Start %d times", runtime.starts)
 	}
-	if app.Lab.VMs[0].DesiredState != lab.DesiredStateRunning {
-		t.Fatalf("vm desired after start = %q", app.Lab.VMs[0].DesiredState)
+	if app.currentLab().VMs[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("vm desired after start = %q", app.currentLab().VMs[0].DesiredState)
 	}
 	app.executeCommand("container start web")
 	if runtime.starts != 0 {
 		t.Fatalf("container start called runtime Start %d times", runtime.starts)
 	}
-	if app.Lab.Containers[0].DesiredState != lab.DesiredStateRunning {
-		t.Fatalf("container desired after start = %q", app.Lab.Containers[0].DesiredState)
+	if app.currentLab().Containers[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("container desired after start = %q", app.currentLab().Containers[0].DesiredState)
 	}
 	app.executeCommand("vm stop vm1")
 	app.executeCommand("container stop web")
 	if runtime.stops != 0 {
 		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
 	}
-	if app.Lab.VMs[0].DesiredState != lab.DesiredStateStopped {
-		t.Fatalf("vm desired after stop = %q", app.Lab.VMs[0].DesiredState)
+	if app.currentLab().VMs[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("vm desired after stop = %q", app.currentLab().VMs[0].DesiredState)
 	}
-	if app.Lab.Containers[0].DesiredState != lab.DesiredStateStopped {
-		t.Fatalf("container desired after stop = %q", app.Lab.Containers[0].DesiredState)
+	if app.currentLab().Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("container desired after stop = %q", app.currentLab().Containers[0].DesiredState)
 	}
 	if daemon.applyCalls != 4 {
 		t.Fatalf("start/stop commands applied lab %d times, want 4", daemon.applyCalls)
@@ -237,10 +230,8 @@ func TestShellVMUsesDirectConsole(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
 	}
 	app := App{
-		Model:         MockModel(),
-		Lab:           &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		runtimeAccess: testRuntimeAccess(runtime),
-		State:         ViewState{Focus: FocusGraph},
+		Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}}, ""), runtimeAccess: testRuntimeAccess(runtime),
+		State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1")
@@ -273,10 +264,8 @@ func TestCommandShellRejectsExtraArgs(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: "/dev/pts/7"}, nil
 	}
 	app := App{
-		Model:         MockModel(),
-		Lab:           &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}},
-		runtimeAccess: testRuntimeAccess(runtime),
-		State:         ViewState{Focus: FocusGraph},
+		Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2}}}, ""), runtimeAccess: testRuntimeAccess(runtime),
+		State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("shell vm vm1 extra")
@@ -376,10 +365,8 @@ func TestCommandAddCreatesGraphNodesWithMinimalData(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("add vm vm1")
@@ -414,10 +401,8 @@ func TestCommandVMCreateUsesDiskPathOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("add vm vm1 disk=explicit/path/test.qcow2")
@@ -444,7 +429,7 @@ func TestCommandVMSetUpdatesDiskPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("vm set vm1 disk=labs/demo/disks/vm1.img iso=images/debian.iso")
 
@@ -470,7 +455,7 @@ func TestCommandVMSetClearsDiskAndISO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("vm set vm1 disk= iso=")
 
@@ -496,7 +481,7 @@ func TestCommandVMSetAcceptsQuotedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand(`vm set vm1 name="web-server" iso="images/debian 12.iso"`)
 
@@ -524,7 +509,7 @@ func TestCommandVMNICAddAndConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("vm nic add vm1 mac=02:00:00:00:00:22")
 	app.executeCommand("vm nic add vm1")
@@ -562,7 +547,7 @@ func TestCommandContainerNICAddAndConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("container nic add web mac=02:00:00:00:00:33")
 	app.executeCommand("container nic connect web 1 to=wan")
@@ -606,14 +591,15 @@ func TestContainerNICConnectDoesNotReconcileRunningContainer(t *testing.T) {
 	}
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "running"}}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		LabPath:       path,
-		runtimeAccess: testRuntimeAccess(runtime),
-		State:         ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(runtime),
+		State: ViewState{Focus: FocusGraph},
 	}
 
-	app.containerNICConnect("web", "0", map[string]string{"to": "wan"})
+	app.containerNICConnect("web", topology.NICConnectRequest{
+		NIC:      0,
+		Endpoint: topology.NetworkEndpointRef{Type: topology.NetworkEndpointAuto, ID: "wan"},
+	})
 
 	if runtime.started != "" {
 		t.Fatalf("started = %q, want no direct TUI reconcile", runtime.started)
@@ -640,7 +626,7 @@ func TestCommandLinkAddAndDeleteExplicitNICs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("link add vm:vm1:nic0 to=vm:vm2:nic1")
 
@@ -684,7 +670,7 @@ func TestCommandLinkAddUsesFirstAvailableTargetNIC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("link add vm:vm1:0 to=ct:web")
 
@@ -721,7 +707,7 @@ func TestCommandVMNICDeleteRemovesDirectLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("vm nic delete vm1 1")
 
@@ -762,7 +748,7 @@ func TestCommandContainerNICDeleteRemovesDirectLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("container nic rm web 1")
 
@@ -840,7 +826,7 @@ func TestCommandMissingRequiredIDReportsUsage(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+		app := App{Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph}}
 		app.executeCommand(tt.command)
 		if app.State.Message != tt.want {
 			t.Fatalf("%q message = %q, want %q", tt.command, app.State.Message, tt.want)
@@ -883,7 +869,7 @@ func TestCommandExtraArgsForFixedArityCommandsDoNotMutate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 	tests := []struct {
 		command string
 		want    string
@@ -939,7 +925,7 @@ func TestCommandVMDeleteRemovesVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("vm delete vm1")
 
@@ -961,7 +947,7 @@ func TestCommandSwitchAndExternalCreateSetDeleteSaveLab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.executeCommand("external create uplink1 interface=br0 mode=macnat")
 	app.executeCommand("add sw lan mode=bridge external=uplink1")
@@ -1009,9 +995,9 @@ func TestUplinkRenamePersistsNewIDAndDisplaysIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
-	app.externalSet("old-uplink", map[string]string{"name": "new-uplink"})
+	app.externalSet("old-uplink", topology.ExternalUpdate{Name: topology.SetField("new-uplink")})
 
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -1049,30 +1035,28 @@ func TestContextMenuGlobalCreateCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.runGlobalMenuAction("add vm")
-	if len(app.Lab.VMs) != 1 || app.Lab.VMs[0].ID != "vm-1" || app.Lab.VMs[0].Name != "" {
-		t.Fatalf("vms after global add = %#v", app.Lab.VMs)
+	if len(app.currentLab().VMs) != 1 || app.currentLab().VMs[0].ID != "vm-1" || app.currentLab().VMs[0].Name != "" {
+		t.Fatalf("vms after global add = %#v", app.currentLab().VMs)
 	}
 
 	app.runGlobalMenuAction("add sw")
-	if len(app.Lab.Switches) != 1 || app.Lab.Switches[0].ID == "" {
-		t.Fatalf("switches after global add = %#v", app.Lab.Switches)
+	if len(app.currentLab().Switches) != 1 || app.currentLab().Switches[0].ID == "" {
+		t.Fatalf("switches after global add = %#v", app.currentLab().Switches)
 	}
 
 	app.runGlobalMenuAction("add cont")
-	if len(app.Lab.Containers) != 1 || app.Lab.Containers[0].ID == "" {
-		t.Fatalf("containers after global add = %#v", app.Lab.Containers)
+	if len(app.currentLab().Containers) != 1 || app.currentLab().Containers[0].ID == "" {
+		t.Fatalf("containers after global add = %#v", app.currentLab().Containers)
 	}
 
 	app.runGlobalMenuAction("create external")
-	if len(app.Lab.ExternalLinks) != 1 || app.Lab.ExternalLinks[0].ID == "" {
-		t.Fatalf("external links after global add = %#v", app.Lab.ExternalLinks)
+	if len(app.currentLab().ExternalLinks) != 1 || app.currentLab().ExternalLinks[0].ID == "" {
+		t.Fatalf("external links after global add = %#v", app.currentLab().ExternalLinks)
 	}
 }
 
@@ -1115,11 +1099,11 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 		return workload.OpenedTerminalSession{Session: &fakeConsole{}, Endpoint: endpoint}, nil
 	}
 	app := App{
-		Model:         MockModel(),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
-		LabPath:       path,
-		State:         ViewState{Focus: FocusGraph},
+		Model: MockModel(), Session: lab.NewSession(loaded,
+
+			path), runtimeAccess: testRuntimeAccess(runtime),
+
+		State: ViewState{Focus: FocusGraph},
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "edit")
@@ -1149,19 +1133,19 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 
 	app.runMenuAction(Node{ID: loaded.Switches[0].ID, Type: NodeSwitch}, "add vm")
 	foundSwitchVM := false
-	for _, vm := range app.Lab.VMs {
+	for _, vm := range app.currentLab().VMs {
 		if vm.Name != "web-server" && len(vm.Networks) > 0 && vm.Networks[0].Switch == loaded.Switches[0].ID {
 			foundSwitchVM = true
 		}
 	}
 	if !foundSwitchVM {
-		t.Fatalf("vms after switch add vm = %#v", app.Lab.VMs)
+		t.Fatalf("vms after switch add vm = %#v", app.currentLab().VMs)
 	}
 
-	vmNICsBefore := len(app.Lab.VMs[0].Networks)
+	vmNICsBefore := len(app.currentLab().VMs[0].Networks)
 	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "add-nic")
-	if len(app.Lab.VMs[0].Networks) != vmNICsBefore+1 {
-		t.Fatalf("vm nics after add-nic = %#v", app.Lab.VMs[0].Networks)
+	if len(app.currentLab().VMs[0].Networks) != vmNICsBefore+1 {
+		t.Fatalf("vm nics after add-nic = %#v", app.currentLab().VMs[0].Networks)
 	}
 
 	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
@@ -1182,10 +1166,10 @@ func TestContextMenuActionsOpenPrefilledCommands(t *testing.T) {
 	}
 	app.PendingShell = nil
 
-	containerNICsBefore := len(app.Lab.Containers[0].Networks)
+	containerNICsBefore := len(app.currentLab().Containers[0].Networks)
 	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "add-nic")
-	if len(app.Lab.Containers[0].Networks) != containerNICsBefore+1 {
-		t.Fatalf("container nics after add-nic = %#v", app.Lab.Containers[0].Networks)
+	if len(app.currentLab().Containers[0].Networks) != containerNICsBefore+1 {
+		t.Fatalf("container nics after add-nic = %#v", app.currentLab().Containers[0].Networks)
 	}
 
 	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "connect-nic:0")
@@ -1212,9 +1196,7 @@ func TestContextMenuVNCActionUsesExistingRuntimePort(t *testing.T) {
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
 	}
 	app := App{
-		Model:     ModelFromLab(loaded),
-		Lab:       loaded,
-		VNCPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5905},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), VNCPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5905},
 		VNCViewer: "/bin/true",
 	}
 
@@ -1236,9 +1218,7 @@ func TestRunVNCDirectUsesExistingRuntimePort(t *testing.T) {
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}},
 	}
 	app := App{
-		Model:     ModelFromLab(loaded),
-		Lab:       loaded,
-		VNCPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5905},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), VNCPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5905},
 		VNCViewer: "/bin/true",
 	}
 
@@ -1264,8 +1244,7 @@ func TestVNCViewerRunsInBackgroundAndSameActionStopsIt(t *testing.T) {
 	}
 	defer outputReader.Close()
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded,
-		VNCPorts: map[string]int{key: 5905}, VNCViewer: viewerPath, Out: outputWriter,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), VNCPorts: map[string]int{key: 5905}, VNCViewer: viewerPath, Out: outputWriter,
 	}
 	command, err := app.vncCommand(Node{ID: "vm1", Type: NodeVM})
 	if err != nil {
@@ -1314,10 +1293,8 @@ func TestContextMenuVNCActionRefreshesPortWithoutStartingVM(t *testing.T) {
 		vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5906},
 	}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
-		VNCViewer:     "/bin/true",
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
+		VNCViewer: "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1339,10 +1316,8 @@ func TestContextMenuVNCActionUsesPortWhenStateRefreshFails(t *testing.T) {
 		vncPorts:  map[string]int{NodeKey(NodeVM, "vm1"): 5907},
 	}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
-		VNCViewer:     "/bin/true",
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
+		VNCViewer: "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1361,9 +1336,7 @@ func TestRefreshVNCWorkloadStatusUsesTimeoutContext(t *testing.T) {
 	}
 	runtime := &deadlineRuntime{}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		runtimeAccess: testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(runtime),
 	}
 
 	if err := app.refreshVNCWorkloadStatus(Node{ID: "vm1", Type: NodeVM}); err != nil {
@@ -1386,9 +1359,7 @@ func TestContextMenuVNCActionRejectsDisabledVNC(t *testing.T) {
 		VMs: []lab.VM{{ID: "vm1", Name: "vm1", MemoryMB: 2048, CPUs: 2, VNC: false}},
 	}
 	app := App{
-		Model:     ModelFromLab(loaded),
-		Lab:       loaded,
-		VNCViewer: "/bin/true",
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), VNCViewer: "/bin/true",
 	}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "vnc")
@@ -1411,9 +1382,7 @@ func TestContextMenuVNCActionReportsRestartNeededWithoutPort(t *testing.T) {
 			Type:    NodeVM,
 			State:   "running",
 			Details: []string{"vnc=true"},
-		}}},
-		Lab: loaded,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
+		}}}, Session: lab.NewSession(loaded, ""), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states: map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 		}),
 		VNCViewer: "/bin/true",
@@ -1442,7 +1411,7 @@ func TestConnectNICModeSelectsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
 	if !app.State.ConnectMode {
@@ -1480,7 +1449,7 @@ func TestConnectContainerNICModeSelectsExternalEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.Containers[0].ID, Type: NodeContainer}, "connect-nic:0")
 	if !app.State.ConnectMode {
@@ -1521,7 +1490,7 @@ func TestConnectSwitchModeSelectsExternalEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.Switches[0].ID, Type: NodeSwitch}, "connect")
 	if !app.State.ConnectMode {
@@ -1563,10 +1532,8 @@ func TestSwitchUplinkSubmenuConnectsExistingExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:            FocusGraph,
 			ContextMenu:      true,
 			ContextSelected:  1,
@@ -1610,10 +1577,8 @@ func TestSwitchUplinkSubmenuAppendsSecondExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:            FocusGraph,
 			ContextMenu:      true,
 			ContextSelected:  1,
@@ -1659,10 +1624,8 @@ func TestSwitchUplinkSubmenuMultipleExternalsStartsConnectMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:            FocusGraph,
 			ContextMenu:      true,
 			ContextSelected:  1,
@@ -1727,10 +1690,8 @@ func TestSwitchUplinkSubmenuDoesNotListDisconnectedExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:            FocusGraph,
 			ContextMenu:      true,
 			ContextSelected:  1,
@@ -1759,10 +1720,8 @@ func TestSwitchUplinkSubmenuAttachDisabledWithoutExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		ViewWidth:  100,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), ViewWidth: 100,
 		ViewHeight: 30,
 		State: ViewState{
 			Focus:            FocusGraph,
@@ -1815,10 +1774,8 @@ func TestSwitchUplinkSubmenuXDisconnectsExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:               FocusGraph,
 			ContextMenu:         true,
 			ContextGroup:        "uplink-menu",
@@ -1920,10 +1877,8 @@ func TestConnectedExternalConnectActionDoesNotStartConnectMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:           FocusGraph,
 			Selected:        1,
 			ContextMenu:     true,
@@ -1958,7 +1913,7 @@ func TestConnectExternalModeSelectsSwitchEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.ExternalLinks[0].ID, Type: NodeExternal}, "connect")
 	if !app.State.ConnectMode {
@@ -2000,10 +1955,8 @@ func TestNICSubmenuNICDetailStartsConnectMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:              FocusGraph,
 			ContextMenu:        true,
 			ContextGroup:       "nic-menu",
@@ -2041,10 +1994,8 @@ func TestNICSubmenuDeleteXRemovesNIC(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:              FocusGraph,
 			ContextMenu:        true,
 			ContextGroup:       "nic-menu",
@@ -2084,7 +2035,7 @@ func TestConnectNICDetachThenEscapeLeavesNICEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
 	reloaded, err := lab.LoadFile(path)
@@ -2125,7 +2076,7 @@ func TestConnectNICModeCreatesDirectWorkloadLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: "vm1", Type: NodeVM}, "connect-nic:0")
 	if !app.State.ConnectMode {
@@ -2178,7 +2129,7 @@ func TestConnectNICModeCanCreateTargetNIC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Model: ModelFromLab(loaded), Lab: loaded, LabPath: path, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{Focus: FocusGraph}}
 
 	app.runMenuAction(Node{ID: loaded.VMs[0].ID, Type: NodeVM}, "connect-nic:0")
 	app.State.Selected = nodeIndexByLabel(t, app.Model, NodeVM, "vm2")
@@ -2213,9 +2164,7 @@ func TestConnectNICModePreservesTargetNICCreateFailure(t *testing.T) {
 		},
 	}
 	app := App{
-		Model: ModelFromLab(loaded),
-		Lab:   loaded,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, ""), State: ViewState{
 			Focus:             FocusGraph,
 			ConnectMode:       true,
 			ConnectTargetMenu: true,
@@ -2235,8 +2184,8 @@ func TestConnectNICModePreservesTargetNICCreateFailure(t *testing.T) {
 	if !app.State.ConnectMode || !app.State.ConnectTargetMenu {
 		t.Fatalf("connect mode should stay active after target nic create failure: %#v", app.State)
 	}
-	if len(app.Lab.VMs[1].Networks) != 0 {
-		t.Fatalf("failed target nic create mutated target networks: %#v", app.Lab.VMs[1].Networks)
+	if len(app.currentLab().VMs[1].Networks) != 0 {
+		t.Fatalf("failed target nic create mutated target networks: %#v", app.currentLab().VMs[1].Networks)
 	}
 }
 

@@ -1,6 +1,10 @@
 package topologyui
 
-import "strings"
+import (
+	"strings"
+
+	"foxlab-cli/internal/topology"
+)
 
 func (a *App) selectExternalInterface(node Node, item string) {
 	if node.Type != NodeExternal || isContextInfoItem(item) {
@@ -10,7 +14,7 @@ func (a *App) selectExternalInterface(node Node, item string) {
 	if iface == "" {
 		return
 	}
-	a.externalSet(node.ID, map[string]string{"interface": iface})
+	a.externalSet(node.ID, topology.ExternalUpdate{Interface: topology.SetField(iface)})
 	a.State.closeContextMenu()
 }
 
@@ -22,7 +26,7 @@ func (a *App) selectExternalMode(node Node, item string) {
 	if mode == "" {
 		return
 	}
-	a.externalSet(node.ID, map[string]string{"mode": mode})
+	a.externalSet(node.ID, topology.ExternalUpdate{Mode: topology.SetField(mode)})
 	a.State.closeContextMenu()
 }
 
@@ -36,9 +40,9 @@ func (a *App) selectNodeMode(node Node, item string) {
 	}
 	switch node.Type {
 	case NodeSwitch:
-		a.switchSet(node.ID, map[string]string{"mode": mode})
+		a.switchSet(node.ID, topology.SwitchUpdate{Mode: topology.SetField(mode)})
 	case NodeExternal:
-		a.externalSet(node.ID, map[string]string{"mode": mode})
+		a.externalSet(node.ID, topology.ExternalUpdate{Mode: topology.SetField(mode)})
 	default:
 		return
 	}

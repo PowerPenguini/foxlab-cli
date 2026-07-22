@@ -151,7 +151,7 @@ func (s *Service) nextLayerID(baseID string) string {
 }
 
 func (s *Service) diskHasLayers(baseID string) bool {
-	for _, disk := range s.Lab.Disks {
+	for _, disk := range s.CurrentLab().Disks {
 		if disk.Base == baseID && diskKind(disk) == "layer" {
 			return true
 		}
@@ -160,7 +160,7 @@ func (s *Service) diskHasLayers(baseID string) bool {
 }
 
 func (s *Service) layerStoragePath(layerID string) (string, error) {
-	root, err := s.Lab.StorageRoot()
+	root, err := s.CurrentLab().StorageRoot()
 	if err != nil {
 		return "", err
 	}

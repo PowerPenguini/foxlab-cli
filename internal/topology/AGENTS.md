@@ -7,7 +7,7 @@
 
 ## Ownership
 
-- `service.go` owns the mutable `Service`, save-and-refresh flow, lookups, ID helpers, and desired-state setters.
+- `service.go` owns the session-backed `Service`, save-and-refresh flow, lookups, ID helpers, and desired-state setters.
 - `mutations.go` owns workload/network creation, configuration, deletion, NIC edits, and link cleanup.
 - `disks.go` owns disk create/attach/detach/merge/delete behavior and qemu-img integration.
 - `*_test.go` files should cover mutation results, saved lab effects, cleanup of related links/disks, and error text.
@@ -19,7 +19,7 @@
 - Removing workloads or NICs must also remove stale direct network links and detach managed disk layers where applicable.
 - Disk attachment activates the selected disk only: a base disk is attached directly, an existing layer is attached directly, and new qcow2 layers are created only by explicit layer actions.
 - Command result strings are user-visible; keep names and wording stable once introduced.
-- VM and container create/update entrypoints accept the typed requests from `workload_requests.go`; do not reintroduce `map[string]string` command arguments at this boundary.
+- VM, container, switch, uplink, NIC, direct-link, and disk mutation entrypoints accept typed requests from `*_requests.go`; do not reintroduce command strings or `map[string]string` arguments at this boundary.
 
 ## Work Guidance
 

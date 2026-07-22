@@ -79,10 +79,10 @@ func (a *App) ensureTabs() {
 		return
 	}
 	name := "untitled"
-	if a.Lab != nil && strings.TrimSpace(a.Lab.ID) != "" {
-		name = a.Lab.ID
-	} else if a.LabPath != "" {
-		name = strings.TrimSuffix(filepath.Base(a.LabPath), filepath.Ext(a.LabPath))
+	if a.currentLab() != nil && strings.TrimSpace(a.currentLab().ID) != "" {
+		name = a.currentLab().ID
+	} else if a.labPath() != "" {
+		name = strings.TrimSuffix(filepath.Base(a.labPath()), filepath.Ext(a.labPath()))
 	}
 	a.tabs = &tabManager{
 		tabs:        []*appTab{{key: "lab", kind: tabKindLab, label: "Lab: " + name, status: tabStatusRunning}},

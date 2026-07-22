@@ -168,8 +168,18 @@ func (a *App) applyContextEdit(node Node, item, value string) {
 		}
 		a.containerSet(node.ID, update)
 	case NodeSwitch:
-		a.switchSet(node.ID, args)
+		update, err := switchUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.switchSet(node.ID, update)
 	case NodeExternal:
-		a.externalSet(node.ID, args)
+		update, err := externalUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.externalSet(node.ID, update)
 	}
 }

@@ -1,6 +1,10 @@
 package topologyui
 
-import "strings"
+import (
+	"strings"
+
+	"foxlab-cli/internal/topology"
+)
 
 func (a *App) handleInspectorKey(key string) bool {
 	if a.State.InspectorCapOpen {
@@ -124,7 +128,10 @@ func (a *App) activateInspectorField(field inspectorField) {
 		a.State.InspectorEditAction = "add-disk"
 	case inspectorFieldDisk:
 		if field.diskAction == diskMenuActionAttach && field.diskID != "" {
-			a.diskAttach(field.diskID, map[string]string{"to": diskTargetForNode(Node{Type: field.nodeType, ID: field.nodeID})})
+			a.diskAttach(topology.DiskAttachRequest{
+				DiskID: field.diskID,
+				Target: workloadRef(field.nodeType, field.nodeID),
+			})
 		} else if field.diskAction == diskMenuActionNone {
 			a.detachInspectorDisk(field)
 		}
@@ -220,9 +227,19 @@ func (a *App) applyInspectorField(field inspectorField, value string) {
 		}
 		a.containerSet(field.nodeID, update)
 	case NodeSwitch:
-		a.switchSet(field.nodeID, args)
+		update, err := switchUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.switchSet(field.nodeID, update)
 	case NodeExternal:
-		a.externalSet(field.nodeID, args)
+		update, err := externalUpdateRequest(args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.externalSet(field.nodeID, update)
 	}
 }
 

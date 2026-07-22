@@ -64,12 +64,12 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 	if node.Type != NodeVM && node.Type != NodeContainer {
 		return fmt.Errorf("shell is available for vm and container nodes")
 	}
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return fmt.Errorf("shell needs a loaded .lab file")
 	}
 	stateCtx, stateCancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer stateCancel()
-	snapshot := a.runtimeClient().readLiveStatus(stateCtx, a.Lab, liveStatusOptions{})
+	snapshot := a.runtimeClient().readLiveStatus(stateCtx, a.currentLab(), liveStatusOptions{})
 	if snapshot.runtimeErr != nil {
 		return snapshot.runtimeErr
 	}
@@ -79,7 +79,7 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 	key := NodeKey(node.Type, node.ID)
 	if normalizeRuntimeState(snapshot.states[key]) == "running" {
 		a.ensureService()
-		a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{})
+		a.applyRuntimeSnapshot(a.currentLab(), snapshot, runtimeSnapshotApplyOptions{})
 		return nil
 	}
 	state := firstNonEmpty(snapshot.states[key], "missing")
@@ -87,7 +87,7 @@ func (a *App) ensureShellWorkloadRunning(node Node) error {
 }
 
 func (a *App) shellCommand(node Node) (shellCommand, bool) {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		a.State.Message = "shell needs a loaded .lab file"
 		return shellCommand{}, false
 	}
@@ -108,7 +108,7 @@ func (a *App) shellCommand(node Node) (shellCommand, bool) {
 			a.State.Message = "container not found: " + a.displayNodeName(node.Type, node.ID)
 			return shellCommand{}, false
 		}
-		display := "container shell " + a.Lab.ManagedContainerName(ct)
+		display := "container shell " + a.currentLab().ManagedContainerName(ct)
 		return shellCommand{
 			Display:      display,
 			WorkloadType: workload.TypeContainer,

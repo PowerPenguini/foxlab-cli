@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 )
 
 func (a *App) runGlobalMenuAction(action string) {
@@ -126,17 +127,16 @@ func (a *App) openCreateContainerCommand(node Node) {
 }
 
 func (a *App) openCreateSwitchCommand(node Node) {
-	id := a.nextSwitchID()
-	args := map[string]string{}
+	request := topology.SwitchCreateRequest{Name: a.nextSwitchID()}
 	if node.Type == NodeExternal {
-		args["external"] = node.ID
+		request.Uplink = node.ID
 	}
-	a.switchCreate(id, args)
+	a.switchCreate(request)
 }
 
 func (a *App) openCreateExternalCommand() {
 	id := a.nextExternalID()
-	a.externalCreate(id, map[string]string{"interface": defaultExternalInterfaceName(), "name": id, "mode": lab.ExternalModeNAT})
+	a.externalCreate(topology.ExternalCreateRequest{Name: id, Interface: defaultExternalInterfaceName(), Mode: lab.ExternalModeNAT})
 }
 
 func (a *App) attachFirstAvailableUplink(switchID string) bool {
@@ -146,7 +146,7 @@ func (a *App) attachFirstAvailableUplink(switchID string) bool {
 		a.State.Message = "no uplink available"
 		return false
 	case 1:
-		a.switchSet(switchID, map[string]string{"external": ids[0]})
+		a.switchSet(switchID, topology.SwitchUpdate{AttachUplink: topology.SetField(ids[0])})
 	default:
 		node, ok := nodeByKey(a.Model, NodeKey(NodeSwitch, switchID))
 		if !ok {
@@ -167,7 +167,7 @@ func (a *App) selectSwitchUplinkMenuItem(node Node, item string) bool {
 		a.State.Message = "select uplink"
 		return false
 	}
-	a.switchSet(node.ID, map[string]string{"external": externalID})
+	a.switchSet(node.ID, topology.SwitchUpdate{AttachUplink: topology.SetField(externalID)})
 	return true
 }
 
@@ -200,15 +200,18 @@ func (a *App) openExternalSwitchCommand(id string) {
 		a.openCreateSwitchCommand(Node{ID: id, Type: NodeExternal})
 		return
 	}
-	a.switchSet(switchID, map[string]string{"mode": "macnat-bridge", "external": id})
+	a.switchSet(switchID, topology.SwitchUpdate{
+		Mode:         topology.SetField("macnat-bridge"),
+		AttachUplink: topology.SetField(id),
+	})
 }
 
 func (a *App) openAddNICCommand(node Node) {
 	switch node.Type {
 	case NodeVM:
-		a.vmNICAdd(node.ID, nil)
+		a.vmNICAdd(node.ID, topology.NICAddRequest{})
 	case NodeContainer:
-		a.containerNICAdd(node.ID, nil)
+		a.containerNICAdd(node.ID, topology.NICAddRequest{})
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"foxlab-cli/internal/daemonstatus"
 	"foxlab-cli/internal/lab"
+	"foxlab-cli/internal/topology"
 )
 
 func TestContextMenuInlineEditInsertsAtCursor(t *testing.T) {
@@ -63,10 +64,8 @@ func TestContextMenuCheckboxTogglesBool(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{
 			states:   map[string]string{NodeKey(NodeVM, "vm1"): "running"},
 			vncPorts: map[string]int{NodeKey(NodeVM, "vm1"): 5904},
 		}),
@@ -106,10 +105,8 @@ func TestContainerPermissionsMenuTogglesCapabilitiesAndPersistsThem(t *testing.T
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State: ViewState{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{
 			Focus:            FocusGraph,
 			ContextMenu:      true,
 			ContextGroup:     "permissions-menu",
@@ -125,8 +122,8 @@ func TestContainerPermissionsMenuTogglesCapabilitiesAndPersistsThem(t *testing.T
 	if !app.State.ContextMenu || !app.State.ContextInSubmenu {
 		t.Fatalf("capability toggle closed menu: %#v", app.State)
 	}
-	if !lab.ContainerCapabilityEnabled(app.Lab.Containers[0], "NET_ADMIN") {
-		t.Fatalf("NET_ADMIN was not enabled: %#v", app.Lab.Containers[0].Capabilities)
+	if !lab.ContainerCapabilityEnabled(app.currentLab().Containers[0], "NET_ADMIN") {
+		t.Fatalf("NET_ADMIN was not enabled: %#v", app.currentLab().Containers[0].Capabilities)
 	}
 	reloaded, err := lab.LoadFile(path)
 	if err != nil {
@@ -138,10 +135,10 @@ func TestContainerPermissionsMenuTogglesCapabilitiesAndPersistsThem(t *testing.T
 
 	app.State.ContextSubSelected = 1
 	app.handleKey("enter")
-	if lab.ContainerCapabilityEnabled(app.Lab.Containers[0], "NET_RAW") {
-		t.Fatalf("NET_RAW was not disabled: %#v", app.Lab.Containers[0].Capabilities)
+	if lab.ContainerCapabilityEnabled(app.currentLab().Containers[0], "NET_RAW") {
+		t.Fatalf("NET_RAW was not disabled: %#v", app.currentLab().Containers[0].Capabilities)
 	}
-	if got := app.Lab.Containers[0].Capabilities; got == nil || len(got.Drop) != 1 || got.Drop[0] != "NET_RAW" {
+	if got := app.currentLab().Containers[0].Capabilities; got == nil || len(got.Drop) != 1 || got.Drop[0] != "NET_RAW" {
 		t.Fatalf("NET_RAW drop = %#v", got)
 	}
 }
@@ -167,10 +164,8 @@ func TestContextMenuDiskRootOpensDiskSubmenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	node, ok := selectedNode(app.Model, app.State.Selected)
@@ -232,10 +227,8 @@ func TestDiskMenuEnterAttachesContainerBaseThroughLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: loaded.Containers[0].ID, Type: NodeContainer}
 
@@ -310,10 +303,8 @@ func TestDiskMenuAttachAndDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: loaded.VMs[0].ID, Type: NodeVM}
 
@@ -383,10 +374,8 @@ func TestDiskMenuDeleteActiveLayerWithX(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: loaded.VMs[0].ID, Type: NodeVM}
 
@@ -438,10 +427,8 @@ func TestDiskMenuAddDiskCreatesBaseDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: "vm1", Type: NodeVM}
 
@@ -519,10 +506,8 @@ func TestDiskMenuCreatesSwitchesAndDeletesLayerVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: "vm1", Type: NodeVM}
 
@@ -624,10 +609,8 @@ func TestDiskMenuAddLayerPromptsForLayerName(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 	node := Node{ID: "vm1", Type: NodeVM}
 
@@ -697,10 +680,8 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 	daemon := &fakeDaemonController{}
 	stateKey := NodeKey(NodeVM, "vm1")
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		runtimeAccess:    testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
@@ -710,8 +691,8 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 	if runtime.starts != 0 {
 		t.Fatalf("run called runtime Start %d times", runtime.starts)
 	}
-	if app.Lab.VMs[0].DesiredState != lab.DesiredStateRunning {
-		t.Fatalf("desired state after run = %q, want running", app.Lab.VMs[0].DesiredState)
+	if app.currentLab().VMs[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("desired state after run = %q, want running", app.currentLab().VMs[0].DesiredState)
 	}
 	if daemon.applyCalls != 1 {
 		t.Fatalf("run applied lab %d times, want 1", daemon.applyCalls)
@@ -727,8 +708,8 @@ func TestRunStopActionsSetVMDesiredState(t *testing.T) {
 	if runtime.stops != 0 {
 		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
 	}
-	if app.Lab.VMs[0].DesiredState != lab.DesiredStateStopped {
-		t.Fatalf("desired state after stop = %q, want stopped", app.Lab.VMs[0].DesiredState)
+	if app.currentLab().VMs[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("desired state after stop = %q, want stopped", app.currentLab().VMs[0].DesiredState)
 	}
 	if daemon.applyCalls != 2 {
 		t.Fatalf("run+stop applied lab %d times, want 2", daemon.applyCalls)
@@ -762,10 +743,8 @@ func TestStopActionShowsStoppingWhenAppliedLabIsReconciling(t *testing.T) {
 	runtime := &fakeVMRuntime{states: map[string]string{stateKey: "running"}}
 	daemon := &fakeDaemonController{status: DaemonStatus{Active: true, LabPath: path}}
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		runtimeAccess:    testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(runtime),
 		WorkloadStates:   map[string]string{stateKey: "running"},
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph, ApplyLabDisabled: true},
@@ -802,10 +781,8 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 	runtime := &fakeVMRuntime{states: map[string]string{NodeKey(NodeContainer, "web"): "stopped"}}
 	daemon := &fakeDaemonController{}
 	app := App{
-		Model:            ModelFromLab(loaded),
-		Lab:              loaded,
-		LabPath:          path,
-		runtimeAccess:    testRuntimeAccess(runtime),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(runtime),
 		DaemonController: daemon,
 		State:            ViewState{Focus: FocusGraph},
 	}
@@ -814,8 +791,8 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 	if runtime.starts != 0 {
 		t.Fatalf("run called runtime Start %d times", runtime.starts)
 	}
-	if app.Lab.Containers[0].DesiredState != lab.DesiredStateRunning {
-		t.Fatalf("desired state after run = %q, want running", app.Lab.Containers[0].DesiredState)
+	if app.currentLab().Containers[0].DesiredState != lab.DesiredStateRunning {
+		t.Fatalf("desired state after run = %q, want running", app.currentLab().Containers[0].DesiredState)
 	}
 	if daemon.applyCalls != 1 {
 		t.Fatalf("container run applied lab %d times, want 1", daemon.applyCalls)
@@ -828,8 +805,8 @@ func TestRunStopActionsSetContainerDesiredState(t *testing.T) {
 	if runtime.stops != 0 {
 		t.Fatalf("stop called runtime Stop %d times", runtime.stops)
 	}
-	if app.Lab.Containers[0].DesiredState != lab.DesiredStateStopped {
-		t.Fatalf("desired state after stop = %q, want stopped", app.Lab.Containers[0].DesiredState)
+	if app.currentLab().Containers[0].DesiredState != lab.DesiredStateStopped {
+		t.Fatalf("desired state after stop = %q, want stopped", app.currentLab().Containers[0].DesiredState)
 	}
 	if daemon.applyCalls != 2 {
 		t.Fatalf("container run+stop applied lab %d times, want 2", daemon.applyCalls)
@@ -855,10 +832,8 @@ func TestRunActionShowsStartingForPendingMissingContainer(t *testing.T) {
 	}
 	stateKey := NodeKey(NodeContainer, loaded.Containers[0].ID)
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: testRuntimeAccessWithStatus(
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccessWithStatus(
 			&fakeVMRuntime{states: map[string]string{stateKey: "missing"}},
 			func(context.Context, string) (daemonstatus.Snapshot, error) {
 				return daemonstatus.Snapshot{}, errors.New("no daemon snapshot")
@@ -900,10 +875,8 @@ func TestDaemonErrorClearsPendingMissingStart(t *testing.T) {
 	}
 	stateKey := NodeKey(NodeContainer, "web")
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		LabPath:       path,
-		PendingStarts: map[string]bool{stateKey: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), PendingStarts: map[string]bool{stateKey: true},
 		runtimeAccess: newRuntimeAccess(nil, "", func(context.Context, string) (daemonstatus.Snapshot, error) {
 			return daemonstatus.Snapshot{
 				LabPath: path,
@@ -1096,7 +1069,7 @@ func TestCommandBarIsRemoved(t *testing.T) {
 }
 
 func TestCommandQClosesOnlyActiveCard(t *testing.T) {
-	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+	app := App{Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph}}
 	app.openDiskExplorer()
 
 	if app.executeCommand("q") {
@@ -1109,7 +1082,7 @@ func TestCommandQClosesOnlyActiveCard(t *testing.T) {
 		t.Fatal(":q on the final Lab card did not quit the application")
 	}
 
-	other := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph}}
+	other := App{Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph}}
 	other.openDiskExplorer()
 	if other.executeCommand("quit") {
 		t.Fatal(":quit quit the application")
@@ -1120,7 +1093,7 @@ func TestCommandQClosesOnlyActiveCard(t *testing.T) {
 }
 
 func TestCommandQAIsSilentQuitAllAlias(t *testing.T) {
-	app := App{Model: MockModel(), Lab: &lab.Lab{ID: "demo"}, State: ViewState{Focus: FocusGraph, Message: "unchanged"}}
+	app := App{Model: MockModel(), Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph, Message: "unchanged"}}
 	app.openDiskExplorer()
 
 	if !app.executeCommand("quit all") {
@@ -1170,9 +1143,7 @@ func TestCommandInputAcceptsSpaces(t *testing.T) {
 
 func TestGlobalCreateContextMenuIsRemoved(t *testing.T) {
 	app := App{
-		Model:      Model{ID: "empty"},
-		Lab:        &lab.Lab{ID: "empty"},
-		State:      ViewState{Focus: FocusGraph, ContextMenu: true},
+		Model: Model{ID: "empty"}, Session: lab.NewSession(&lab.Lab{ID: "empty"}, ""), State: ViewState{Focus: FocusGraph, ContextMenu: true},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -1184,8 +1155,8 @@ func TestGlobalCreateContextMenuIsRemoved(t *testing.T) {
 	if app.State.ContextMenu {
 		t.Fatalf("space opened global context menu: %#v", app.State)
 	}
-	if len(app.Lab.VMs) != 0 {
-		t.Fatalf("global context path created vms: %#v", app.Lab.VMs)
+	if len(app.currentLab().VMs) != 0 {
+		t.Fatalf("global context path created vms: %#v", app.currentLab().VMs)
 	}
 }
 
@@ -1229,10 +1200,8 @@ func TestMouseClickPaletteCreatesVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -1244,8 +1213,8 @@ func TestMouseClickPaletteCreatesVM(t *testing.T) {
 		t.Fatal("palette layout unavailable")
 	}
 	app.handleKey("mouse:" + strconv.Itoa(layout.X+2) + ":" + strconv.Itoa(paletteRowsY(layout)) + ":0")
-	if len(app.Lab.VMs) != 1 {
-		t.Fatalf("vms after palette add = %#v", app.Lab.VMs)
+	if len(app.currentLab().VMs) != 1 {
+		t.Fatalf("vms after palette add = %#v", app.currentLab().VMs)
 	}
 	if app.State.PaletteOpen {
 		t.Fatal("palette stayed open after create")
@@ -1254,9 +1223,7 @@ func TestMouseClickPaletteCreatesVM(t *testing.T) {
 
 func TestPaletteQClosesOnlyActiveCard(t *testing.T) {
 	app := App{
-		Model:      Model{ID: "empty"},
-		Lab:        &lab.Lab{ID: "empty"},
-		State:      ViewState{Focus: FocusGraph},
+		Model: Model{ID: "empty"}, Session: lab.NewSession(&lab.Lab{ID: "empty"}, ""), State: ViewState{Focus: FocusGraph},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -1276,9 +1243,7 @@ func TestPaletteQClosesOnlyActiveCard(t *testing.T) {
 
 func TestPaletteDisksOpensDiskExplorer(t *testing.T) {
 	app := App{
-		Model:      Model{ID: "demo"},
-		Lab:        &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", Name: "router", MemoryMB: 512, CPUs: 1}}, Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm1"}}},
-		State:      ViewState{Focus: FocusGraph},
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", Name: "router", MemoryMB: 512, CPUs: 1}}, Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base", AttachedType: "vm", AttachedTo: "vm1"}}}, ""), State: ViewState{Focus: FocusGraph},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1314,8 +1279,7 @@ func TestPaletteDisksOpensDiskExplorer(t *testing.T) {
 
 func TestDiskExplorerRenderUsesStructuredColumns(t *testing.T) {
 	app := App{
-		Model: Model{ID: "demo"},
-		Lab: &lab.Lab{
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{
 			ID:         "demo",
 			Containers: []lab.Container{{ID: "ct1", Name: "Kali", Image: "kali"}},
 			Disks: []lab.Disk{{
@@ -1327,8 +1291,7 @@ func TestDiskExplorerRenderUsesStructuredColumns(t *testing.T) {
 				AttachedType: "container",
 				AttachedTo:   "ct1",
 			}},
-		},
-		State:      ViewState{DiskExplorerOpen: true},
+		}, ""), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1347,12 +1310,10 @@ func TestDiskExplorerRenderUsesStructuredColumns(t *testing.T) {
 
 func TestDiskExplorerRenderMarksSelectedRow(t *testing.T) {
 	app := App{
-		Model: Model{ID: "demo"},
-		Lab: &lab.Lab{
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{
 			ID:    "demo",
 			Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}},
-		},
-		State:      ViewState{DiskExplorerOpen: true},
+		}, ""), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1386,10 +1347,8 @@ func TestDiskExplorerKeyboardResize(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{states: map[string]string{
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{states: map[string]string{
 			NodeKey(NodeVM, loaded.VMs[0].ID): "shutoff",
 		}}),
 		State:      ViewState{DiskExplorerOpen: true},
@@ -1436,8 +1395,7 @@ func TestDiskExplorerImportsExistingImageIntoLab(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: path,
-		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 100, ViewHeight: 30,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, path), State: ViewState{DiskExplorerOpen: true}, ViewWidth: 100, ViewHeight: 30,
 	}
 
 	app.handleKey("char:i")
@@ -1466,8 +1424,8 @@ func TestDiskExplorerImportsExistingImageIntoLab(t *testing.T) {
 	if _, err := os.Stat(source); !os.IsNotExist(err) {
 		t.Fatalf("source still exists after import: %v", err)
 	}
-	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "victim" || app.Lab.Disks[0].SizeGB != 3 {
-		t.Fatalf("imported disk = %#v", app.Lab.Disks)
+	if len(app.currentLab().Disks) != 1 || app.currentLab().Disks[0].ID != "victim" || app.currentLab().Disks[0].SizeGB != 3 {
+		t.Fatalf("imported disk = %#v", app.currentLab().Disks)
 	}
 	if app.State.DiskExplorerEdit != "" || app.State.DiskImportPath != "" {
 		t.Fatalf("file browser stayed open after import: %#v", app.State)
@@ -1513,8 +1471,7 @@ func TestDiskImportBrowserImportsTypedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model: ModelFromLab(loaded), Lab: loaded, LabPath: labPath,
-		State: ViewState{DiskExplorerOpen: true}, ViewWidth: 80, ViewHeight: 20,
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded, labPath), State: ViewState{DiskExplorerOpen: true}, ViewWidth: 80, ViewHeight: 20,
 	}
 	app.openDiskImportBrowserAt(home)
 	app.handleKey("char:p")
@@ -1537,8 +1494,8 @@ func TestDiskImportBrowserImportsTypedPath(t *testing.T) {
 	if app.State.Message != "imported disk:typed-image" {
 		t.Fatalf("typed path import message = %q", app.State.Message)
 	}
-	if len(app.Lab.Disks) != 1 || app.Lab.Disks[0].ID != "typed-image" || app.Lab.Disks[0].Format != "raw" {
-		t.Fatalf("typed path imported disk = %#v", app.Lab.Disks)
+	if len(app.currentLab().Disks) != 1 || app.currentLab().Disks[0].ID != "typed-image" || app.currentLab().Disks[0].Format != "raw" {
+		t.Fatalf("typed path imported disk = %#v", app.currentLab().Disks)
 	}
 	if _, err := os.Stat(source); !os.IsNotExist(err) {
 		t.Fatalf("typed source still exists after import: %v", err)
@@ -1595,12 +1552,10 @@ func TestAttachedDiskResizePreservesConcreteRuntimeStatusError(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:         ModelFromLab(loaded),
-		Lab:           loaded,
-		LabPath:       path,
-		runtimeAccess: testRuntimeAccess(&fakeVMRuntime{statesErr: errors.New("libvirt unavailable")}),
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), runtimeAccess: testRuntimeAccess(&fakeVMRuntime{statesErr: errors.New("libvirt unavailable")}),
 	}
-	app.diskResize("data", map[string]string{"size": "12"})
+	app.diskResize(topology.DiskResizeRequest{DiskID: "data", SizeGB: 12})
 	if app.State.Message != "runtime status failed: libvirt unavailable" {
 		t.Fatalf("message = %q", app.State.Message)
 	}
@@ -1621,10 +1576,8 @@ func TestDiskInfoKeepsQemuFailureOutOfMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1659,10 +1612,8 @@ func TestDiskExplorerCreatesLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1705,10 +1656,8 @@ func TestDiskExplorerRenamesBaseDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1756,10 +1705,8 @@ func TestDiskExplorerCreateCancelsActiveRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1805,10 +1752,8 @@ func TestDiskExplorerDeleteCancelsActiveRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1854,10 +1799,8 @@ func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1884,9 +1827,7 @@ func TestDiskExplorerMouseLayerActionCreatesLayer(t *testing.T) {
 
 func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 	app := App{
-		Model:      Model{ID: "demo"},
-		Lab:        &lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}}},
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{ID: "demo", Disks: []lab.Disk{{ID: "data", Path: "disks/data.qcow2", SizeGB: 10, Format: "qcow2", Kind: "base"}}}, ""), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1911,9 +1852,7 @@ func TestDiskExplorerMouseActionFeedbackOnlyCoversButton(t *testing.T) {
 
 func TestDiskExplorerClickOutsidePanelKeepsCardOpen(t *testing.T) {
 	app := App{
-		Model:      Model{ID: "demo"},
-		Lab:        &lab.Lab{ID: "demo"},
-		State:      ViewState{DiskExplorerOpen: true},
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{DiskExplorerOpen: true},
 		ViewWidth:  100,
 		ViewHeight: 30,
 	}
@@ -1956,10 +1895,7 @@ func TestApplyOpenLabDoesNotReloadSameActiveLab(t *testing.T) {
 	controller := &fakeDaemonController{
 		status: DaemonStatus{Active: true, LabPath: absPath},
 	}
-	app := App{
-		LabPath:          path,
-		DaemonController: controller,
-	}
+	app := App{Session: lab.NewSession(nil, path), DaemonController: controller}
 
 	app.applyOpenLab()
 
@@ -2088,10 +2024,8 @@ func TestPaletteKeyboardAddAndExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char::")
@@ -2099,8 +2033,8 @@ func TestPaletteKeyboardAddAndExit(t *testing.T) {
 		app.handleKey(key)
 	}
 	app.handleKey("enter")
-	if len(app.Lab.VMs) != 1 {
-		t.Fatalf("vms after keyboard palette add = %#v", app.Lab.VMs)
+	if len(app.currentLab().VMs) != 1 {
+		t.Fatalf("vms after keyboard palette add = %#v", app.currentLab().VMs)
 	}
 
 	app.handleKey("char::")
@@ -2119,10 +2053,8 @@ func TestPaletteEnterAcceptsFirstAddSuggestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:   ModelFromLab(loaded),
-		Lab:     loaded,
-		LabPath: path,
-		State:   ViewState{Focus: FocusGraph},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char::")
@@ -2134,16 +2066,14 @@ func TestPaletteEnterAcceptsFirstAddSuggestion(t *testing.T) {
 	if app.State.PaletteOpen {
 		t.Fatal("accepted add suggestion kept palette open")
 	}
-	if len(app.Lab.VMs) != 1 {
-		t.Fatalf("accepted first add suggestion mutated lab to %#v, want one VM", app.Lab)
+	if len(app.currentLab().VMs) != 1 {
+		t.Fatalf("accepted first add suggestion mutated lab to %#v, want one VM", app.currentLab())
 	}
 }
 
 func TestPaletteTabCompletesSelectedSuggestion(t *testing.T) {
 	app := App{
-		Model: Model{ID: "demo"},
-		Lab:   &lab.Lab{ID: "demo"},
-		State: ViewState{Focus: FocusGraph},
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char::")
@@ -2162,9 +2092,7 @@ func TestPaletteTabCompletesSelectedSuggestion(t *testing.T) {
 
 func TestPaletteEnterAcceptsFirstExecutableSuggestion(t *testing.T) {
 	app := App{
-		Model: Model{ID: "demo"},
-		Lab:   &lab.Lab{ID: "demo"},
-		State: ViewState{Focus: FocusGraph},
+		Model: Model{ID: "demo"}, Session: lab.NewSession(&lab.Lab{ID: "demo"}, ""), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.handleKey("char::")
@@ -2256,10 +2184,8 @@ func TestPaletteAddUplinkCreatesExternalLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusGraph, Selected: 0},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph, Selected: 0},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -2272,17 +2198,17 @@ func TestPaletteAddUplinkCreatesExternalLink(t *testing.T) {
 	if app.State.ConnectMode {
 		t.Fatalf("link started connect mode: %#v", app.State)
 	}
-	if len(app.Lab.ExternalLinks) != 1 {
-		t.Fatalf("external links after top link add = %#v", app.Lab.ExternalLinks)
+	if len(app.currentLab().ExternalLinks) != 1 {
+		t.Fatalf("external links after top link add = %#v", app.currentLab().ExternalLinks)
 	}
-	if app.Lab.ExternalLinks[0].Interface != "eth0" {
-		t.Fatalf("external interface = %q, want eth0", app.Lab.ExternalLinks[0].Interface)
+	if app.currentLab().ExternalLinks[0].Interface != "eth0" {
+		t.Fatalf("external interface = %q, want eth0", app.currentLab().ExternalLinks[0].Interface)
 	}
-	if app.Lab.ExternalLinks[0].Mode != lab.ExternalModeNAT {
-		t.Fatalf("external mode = %q, want nat", app.Lab.ExternalLinks[0].Mode)
+	if app.currentLab().ExternalLinks[0].Mode != lab.ExternalModeNAT {
+		t.Fatalf("external mode = %q, want nat", app.currentLab().ExternalLinks[0].Mode)
 	}
-	if len(app.Lab.VMs[0].Networks) != 1 {
-		t.Fatalf("source nics changed: %#v", app.Lab.VMs[0].Networks)
+	if len(app.currentLab().VMs[0].Networks) != 1 {
+		t.Fatalf("source nics changed: %#v", app.currentLab().VMs[0].Networks)
 	}
 }
 
@@ -2302,10 +2228,8 @@ func TestTopAddLinkDoesNotCreateMissingSourceNIC(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{
-		Model:      ModelFromLab(loaded),
-		Lab:        loaded,
-		LabPath:    path,
-		State:      ViewState{Focus: FocusGraph, Selected: 0},
+		Model: ModelFromLab(loaded), Session: lab.NewSession(loaded,
+			path), State: ViewState{Focus: FocusGraph, Selected: 0},
 		ViewWidth:  80,
 		ViewHeight: 20,
 	}
@@ -2314,32 +2238,30 @@ func TestTopAddLinkDoesNotCreateMissingSourceNIC(t *testing.T) {
 	if app.State.ConnectMode {
 		t.Fatalf("link started connect mode: %#v", app.State)
 	}
-	if len(app.Lab.ExternalLinks) != 1 {
-		t.Fatalf("external links after global link add = %#v", app.Lab.ExternalLinks)
+	if len(app.currentLab().ExternalLinks) != 1 {
+		t.Fatalf("external links after global link add = %#v", app.currentLab().ExternalLinks)
 	}
-	if app.Lab.ExternalLinks[0].Interface != "eth0" {
-		t.Fatalf("external interface = %q, want eth0", app.Lab.ExternalLinks[0].Interface)
+	if app.currentLab().ExternalLinks[0].Interface != "eth0" {
+		t.Fatalf("external interface = %q, want eth0", app.currentLab().ExternalLinks[0].Interface)
 	}
-	if app.Lab.ExternalLinks[0].Mode != lab.ExternalModeNAT {
-		t.Fatalf("external mode = %q, want nat", app.Lab.ExternalLinks[0].Mode)
+	if app.currentLab().ExternalLinks[0].Mode != lab.ExternalModeNAT {
+		t.Fatalf("external mode = %q, want nat", app.currentLab().ExternalLinks[0].Mode)
 	}
-	if len(app.Lab.VMs[0].Networks) != 0 {
-		t.Fatalf("source nics = %#v, want none", app.Lab.VMs[0].Networks)
+	if len(app.currentLab().VMs[0].Networks) != 0 {
+		t.Fatalf("source nics = %#v, want none", app.currentLab().VMs[0].Networks)
 	}
 }
 
 func TestCommandRejectsIncrementSuffixVMArgs(t *testing.T) {
 	app := App{
-		Model: MockModel(),
-		Lab: &lab.Lab{
+		Model: MockModel(), Session: lab.NewSession(&lab.Lab{
 			ID: "demo",
 			VMs: []lab.VM{{
 				ID:       "vm1",
 				MemoryMB: 1024,
 				CPUs:     2,
 			}},
-		},
-		State: ViewState{Focus: FocusGraph},
+		}, ""), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("vm set vm1 cpus+=1")
@@ -2355,8 +2277,7 @@ func TestCommandRejectsIncrementSuffixVMArgs(t *testing.T) {
 
 func TestCommandRejectsDuplicateArgsBeforeMutating(t *testing.T) {
 	app := App{
-		Model: MockModel(),
-		Lab: &lab.Lab{
+		Model: MockModel(), Session: lab.NewSession(&lab.Lab{
 			ID: "demo",
 			VMs: []lab.VM{{
 				ID:       "vm1",
@@ -2364,16 +2285,15 @@ func TestCommandRejectsDuplicateArgsBeforeMutating(t *testing.T) {
 				MemoryMB: 1024,
 				CPUs:     2,
 			}},
-		},
-		State: ViewState{Focus: FocusGraph},
+		}, ""), State: ViewState{Focus: FocusGraph},
 	}
 
 	app.executeCommand("vm set vm1 name=first name=second")
 	if app.State.Message != "duplicate argument: name" {
 		t.Fatalf("duplicate arg message = %q", app.State.Message)
 	}
-	if app.Lab.VMs[0].Name != "original" {
-		t.Fatalf("duplicate arg mutated vm name to %q", app.Lab.VMs[0].Name)
+	if app.currentLab().VMs[0].Name != "original" {
+		t.Fatalf("duplicate arg mutated vm name to %q", app.currentLab().VMs[0].Name)
 	}
 }
 

@@ -17,7 +17,8 @@ func (a *App) startConnectNICIndex(node Node, index string) {
 		a.State.Message = "nic not found: " + a.displayNodeName(node.Type, node.ID) + ":" + index
 		return
 	}
-	if !a.nicDisconnect(node.Type, node.ID, index) {
+	source, ok := directNetworkEndpoint(node.Type, node.ID, index)
+	if !ok || !a.nicDisconnect(source) {
 		return
 	}
 	a.State.ConnectNodeID = node.ID
@@ -60,22 +61,22 @@ func (a *App) startConnectEndpoint(node Node) {
 }
 
 func (a *App) externalConnected(id string) bool {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return externalConnectedInModel(a.Model, id)
 	}
-	for _, sw := range a.Lab.Switches {
+	for _, sw := range a.currentLab().Switches {
 		if lab.SwitchHasExternalLink(sw, id) {
 			return true
 		}
 	}
-	for _, vm := range a.Lab.VMs {
+	for _, vm := range a.currentLab().VMs {
 		for _, nic := range vm.Networks {
 			if nic.ExternalLink == id {
 				return true
 			}
 		}
 	}
-	for _, ct := range a.Lab.Containers {
+	for _, ct := range a.currentLab().Containers {
 		for _, nic := range ct.Networks {
 			if nic.ExternalLink == id {
 				return true
@@ -94,11 +95,11 @@ func (a *App) firstAttachableUplinkID() string {
 }
 
 func (a *App) attachableUplinkIDs() []string {
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return attachableUplinkIDsInModel(a.Model)
 	}
 	ids := []string{}
-	for _, link := range a.Lab.ExternalLinks {
+	for _, link := range a.currentLab().ExternalLinks {
 		if link.ID != "" && !a.externalConnected(link.ID) {
 			ids = append(ids, link.ID)
 		}
@@ -159,11 +160,25 @@ func (a *App) connectSelectedEndpoint() {
 	switch endpoint.Type {
 	case NodeSwitch, NodeExternal:
 		switch {
-		case sourceType == NodeVM:
-			a.vmNICConnect(sourceID, index, map[string]string{"to": endpoint.ID})
-			a.clearConnectMode()
-		case sourceType == NodeContainer:
-			a.containerNICConnect(sourceID, index, map[string]string{"to": endpoint.ID})
+		case sourceType == NodeVM || sourceType == NodeContainer:
+			nicIndex, ok := parseNICIndex(index)
+			if !ok {
+				a.State.Message = "nic not found: " + a.displayNodeName(sourceType, sourceID) + ":" + index
+				return
+			}
+			endpointType := topology.NetworkEndpointSwitch
+			if endpoint.Type == NodeExternal {
+				endpointType = topology.NetworkEndpointUplink
+			}
+			request := topology.NICConnectRequest{
+				NIC:      nicIndex,
+				Endpoint: topology.NetworkEndpointRef{Type: endpointType, ID: endpoint.ID},
+			}
+			if sourceType == NodeVM {
+				a.vmNICConnect(sourceID, request)
+			} else {
+				a.containerNICConnect(sourceID, request)
+			}
 			a.clearConnectMode()
 		case sourceType == NodeSwitch || sourceType == NodeExternal:
 			a.connectSwitchExternal(sourceType, sourceID, endpoint.Type, endpoint.ID)
@@ -188,7 +203,7 @@ func (a *App) connectSwitchExternal(sourceType, sourceID, targetType, targetID s
 		a.State.Message = "select " + a.connectEndpointLabel()
 		return
 	}
-	a.switchSet(switchID, map[string]string{"external": externalID})
+	a.switchSet(switchID, topology.SwitchUpdate{AttachUplink: topology.SetField(externalID)})
 }
 
 func (a *App) openConnectTargetMenu(endpoint Node) {
@@ -206,9 +221,9 @@ func (a *App) connectSelectedTargetNIC(target Node, item string) {
 		result := topology.Failure("target must be vm or container")
 		switch target.Type {
 		case NodeVM:
-			result = a.vmNICAdd(target.ID, nil)
+			result = a.vmNICAdd(target.ID, topology.NICAddRequest{})
 		case NodeContainer:
-			result = a.containerNICAdd(target.ID, nil)
+			result = a.containerNICAdd(target.ID, topology.NICAddRequest{})
 		default:
 			a.State.Message = "target must be vm or container"
 			return
@@ -229,7 +244,13 @@ func (a *App) connectSelectedTargetNIC(target Node, item string) {
 	sourceID := a.State.ConnectNodeID
 	sourceType := a.State.ConnectNodeType
 	sourceIndex := a.State.ConnectNICIndex
-	a.nicConnectDirectTo(sourceType, sourceID, sourceIndex, target.Type, target.ID, targetIndex)
+	source, sourceOK := directNetworkEndpoint(sourceType, sourceID, sourceIndex)
+	targetRef, targetOK := directNetworkEndpoint(target.Type, target.ID, targetIndex)
+	if !sourceOK || !targetOK {
+		a.State.Message = "select target nic"
+		return
+	}
+	a.nicConnectDirect(source, targetRef)
 	a.clearConnectMode()
 }
 

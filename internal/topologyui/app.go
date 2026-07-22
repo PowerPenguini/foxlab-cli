@@ -52,8 +52,7 @@ type appNotificationState struct {
 type App struct {
 	Model                 Model
 	State                 ViewState
-	Lab                   *lab.Lab
-	LabPath               string
+	Session               *lab.Session
 	Service               *topology.Service
 	LibvirtURI            string
 	ContainerdAddress     string
@@ -102,11 +101,7 @@ func (a *App) Run() error {
 
 func (a *App) ensureService() *topology.Service {
 	if a.Service == nil {
-		a.Service = topology.NewService(a.Lab, a.LabPath)
-	}
-	a.Service.Lab = a.Lab
-	if a.LabPath != "" {
-		a.Service.Path = a.LabPath
+		a.Service = topology.NewServiceWithSession(a.ensureSession())
 	}
 	if a.WorkloadStates != nil {
 		a.Service.States = a.WorkloadStates
@@ -114,15 +109,31 @@ func (a *App) ensureService() *topology.Service {
 	return a.Service
 }
 
-func (a *App) syncFromService() {
-	if a.Service == nil {
-		return
+func (a *App) ensureSession() *lab.Session {
+	if a.Session == nil {
+		a.Session = lab.NewSession(nil, "")
 	}
-	a.Lab = a.Service.Lab
-	a.LabPath = a.Service.Path
-	if a.Lab != nil {
+	return a.Session
+}
+
+func (a *App) currentLab() *lab.Lab {
+	if a == nil || a.Session == nil {
+		return nil
+	}
+	return a.Session.Current()
+}
+
+func (a *App) labPath() string {
+	if a == nil || a.Session == nil {
+		return ""
+	}
+	return a.Session.Path()
+}
+
+func (a *App) refreshModelFromSession() {
+	if a.currentLab() != nil {
 		a.resetRouteCache()
-		a.Model = ModelFromLab(a.Lab)
+		a.Model = ModelFromLab(a.currentLab())
 		a.applyWorkloadStates()
 	}
 }
@@ -174,7 +185,7 @@ func (a *App) runInteractive(start terminalStartFunc, read keyReadFunc, size ter
 		if a.updateMessageLifetime(now) {
 			dirty = true
 		}
-		if !statusRefreshActive && a.Lab != nil && now.After(nextStatusRefresh) {
+		if !statusRefreshActive && a.currentLab() != nil && now.After(nextStatusRefresh) {
 			nextStatusRefresh = now.Add(statusRefreshInterval)
 			statusRefreshActive = true
 			a.State.StatusRefreshing = true
@@ -328,14 +339,15 @@ func (a *App) statusRefreshInterval() time.Duration {
 }
 
 type statusUpdate struct {
-	lab      *lab.Lab
+	revision uint64
 	snapshot runtimeSnapshot
 }
 
 func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdate) {
-	l := a.Lab
-	snapshot := lab.Clone(l)
-	labPath := a.LabPath
+	session := a.ensureSession()
+	revision := session.Revision()
+	snapshot := lab.Clone(session.Current())
+	labPath := a.labPath()
 	access := a.runtimeClient()
 	go func() {
 		statusCtx, cancel := context.WithTimeout(ctx, runtimeStatusTimeout)
@@ -346,7 +358,7 @@ func (a *App) startStatusRefresh(ctx context.Context, updates chan<- statusUpdat
 				result.applyStatus = &status
 			}
 		}
-		sendStatusUpdate(ctx, updates, statusUpdate{lab: l, snapshot: result})
+		sendStatusUpdate(ctx, updates, statusUpdate{revision: revision, snapshot: result})
 	}()
 }
 
@@ -363,10 +375,10 @@ func (a *App) drainStatusUpdates(updates <-chan statusUpdate, active *bool) bool
 		select {
 		case update := <-updates:
 			*active = false
-			if update.lab != nil && update.lab != a.Lab {
+			if a.Session == nil || update.revision != a.Session.Revision() {
 				continue
 			}
-			changed = a.applyRuntimeSnapshot(update.lab, update.snapshot, runtimeSnapshotApplyOptions{
+			changed = a.applyRuntimeSnapshot(a.currentLab(), update.snapshot, runtimeSnapshotApplyOptions{
 				updateMessage:      true,
 				clearPending:       true,
 				updateConfirmation: true,
@@ -442,10 +454,10 @@ func (a *App) daemonStatus(ctx context.Context) (DaemonStatus, error) {
 }
 
 func (a *App) currentLabAbsPath() (string, error) {
-	if strings.TrimSpace(a.LabPath) == "" {
+	if strings.TrimSpace(a.labPath()) == "" {
 		return "", os.ErrNotExist
 	}
-	return filepath.Abs(a.LabPath)
+	return filepath.Abs(a.labPath())
 }
 
 func (a *App) refreshApplyLabState() bool {
@@ -535,13 +547,13 @@ func (a *App) ensureAppliedAfterDesiredState(message string) {
 func (a *App) refreshWorkloadStates() bool {
 	service := a.ensureService()
 	service.StatesConfirmed = false
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	snapshot := a.runtimeClient().readStatus(ctx, a.Lab, a.LabPath)
-	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{
+	snapshot := a.runtimeClient().readStatus(ctx, a.currentLab(), a.labPath())
+	a.applyRuntimeSnapshot(a.currentLab(), snapshot, runtimeSnapshotApplyOptions{
 		updateMessage:      true,
 		clearPending:       snapshot.source == runtimeSnapshotDaemon,
 		updateConfirmation: true,
@@ -552,12 +564,12 @@ func (a *App) refreshWorkloadStates() bool {
 func (a *App) refreshDiskOperationStates() bool {
 	service := a.ensureService()
 	service.StatesConfirmed = false
-	if a.Lab == nil {
+	if a.currentLab() == nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeStatusTimeout)
 	defer cancel()
-	snapshot := a.runtimeClient().readLiveStatus(ctx, a.Lab, liveStatusOptions{})
+	snapshot := a.runtimeClient().readLiveStatus(ctx, a.currentLab(), liveStatusOptions{})
 	if snapshot.runtimeErr != nil {
 		a.State.Message = "runtime connection failed: " + snapshot.runtimeErr.Error()
 		return false
@@ -566,7 +578,7 @@ func (a *App) refreshDiskOperationStates() bool {
 		a.State.Message = "runtime status failed: " + snapshot.statesErr.Error()
 		return false
 	}
-	a.applyRuntimeSnapshot(a.Lab, snapshot, runtimeSnapshotApplyOptions{updateConfirmation: true})
+	a.applyRuntimeSnapshot(a.currentLab(), snapshot, runtimeSnapshotApplyOptions{updateConfirmation: true})
 	return true
 }
 
@@ -790,7 +802,7 @@ func OneFrame(w io.Writer, m Model, width, height int) error {
 func OneFrameForLab(w io.Writer, m Model, loadedLab *lab.Lab, width, height int) error {
 	app := App{
 		Model:      m,
-		Lab:        loadedLab,
+		Session:    lab.NewSession(loadedLab, ""),
 		State:      ViewState{Focus: FocusGraph},
 		ViewWidth:  width,
 		ViewHeight: height,

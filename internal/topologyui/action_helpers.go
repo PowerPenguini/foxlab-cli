@@ -72,8 +72,8 @@ func (a *App) createVMHint(node Node) string {
 	case NodeExternal:
 		return " uplink=" + commandValue(a.displayNodeName(node.Type, node.ID))
 	default:
-		if a.Lab != nil && len(a.Lab.Switches) > 0 {
-			return " switch=" + commandValue(displayNodeNameFromLab(a.Lab, NodeSwitch, a.Lab.Switches[0].ID))
+		if a.currentLab() != nil && len(a.currentLab().Switches) > 0 {
+			return " switch=" + commandValue(displayNodeNameFromLab(a.currentLab(), NodeSwitch, a.currentLab().Switches[0].ID))
 		}
 		return ""
 	}
@@ -84,8 +84,8 @@ func (a *App) createContainerHint(node Node) string {
 	case NodeSwitch:
 		return " switch=" + commandValue(a.displayNodeName(node.Type, node.ID))
 	default:
-		if a.Lab != nil && len(a.Lab.Switches) > 0 {
-			return " switch=" + commandValue(displayNodeNameFromLab(a.Lab, NodeSwitch, a.Lab.Switches[0].ID))
+		if a.currentLab() != nil && len(a.currentLab().Switches) > 0 {
+			return " switch=" + commandValue(displayNodeNameFromLab(a.currentLab(), NodeSwitch, a.currentLab().Switches[0].ID))
 		}
 		return ""
 	}

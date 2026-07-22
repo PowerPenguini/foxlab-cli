@@ -7,11 +7,12 @@
 
 ## Ownership
 
-- `app.go` owns app lifecycle, terminal loop, runtime refresh scheduling/application, service synchronization, and pending external shell/VNC execution. Desired-state reconciliation belongs to `foxlabd`/`internal/workload`.
+- `app.go` owns app lifecycle, the shared lab session, terminal loop, runtime refresh scheduling/application, model rebuilding, and pending external shell/VNC execution. Desired-state reconciliation belongs to `foxlabd`/`internal/workload`.
 - `runtime_access.go` owns daemon-first runtime snapshots, direct live-status fallback, serialized runtime reads, terminal-session opening, and runtime connection cleanup.
 - `model.go` maps `.lab` topology into graph nodes, edges, details, desired state, and layout positions.
 - `render.go` and `inventory*.go` style files own visible terminal output and route rendering.
 - `input.go`, `commands.go`, `actions.go`, `menu.go`, `connect.go`, and `move.go` own interaction behavior.
+- `mutation_actions.go` owns revision-aware model refresh after durable topology mutations.
 - `shell.go` and `vnc.go` own user-facing shell/VNC command preparation and status text.
 
 ## Local Contracts
@@ -22,7 +23,7 @@
 - Connect and NIC flows must preserve explicit NIC indexes, including direct workload-to-workload links.
 - Route rendering and move mode should remain smooth; route caches must be reset when topology/layout/runtime display inputs change.
 - User-visible command names, menu labels, and help text are stable UI contracts.
-- Parse VM/container `key=value` syntax into typed topology requests immediately; maps remain a command-parser detail and must not cross the workload service boundary.
+- Parse VM/container/switch/uplink/NIC/disk `key=value` syntax and direct-link endpoint text into typed topology requests immediately; strings and maps remain UI parser details and must not cross the topology service boundary.
 
 ## Work Guidance
 
