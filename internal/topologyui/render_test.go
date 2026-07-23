@@ -803,6 +803,38 @@ func TestRenderWideInspectorShowsSelectedNodeDetails(t *testing.T) {
 	}
 }
 
+func TestInspectorCompactsFieldsWhenNodeHasNoTopActions(t *testing.T) {
+	m := Model{
+		ID: "demo",
+		Nodes: []Node{{
+			ID:      "internet",
+			Type:    NodeExternal,
+			Badge:   "UP",
+			Label:   "Internet",
+			State:   "nat",
+			Details: []string{"interface=eth0", "mode=nat"},
+		}},
+	}
+	state := ViewState{Selected: 0, Focus: FocusGraph}
+	panel := inspectorBounds(120, 18)
+	fields := inspectorFieldsForState(m.Nodes[0], state)
+	g := renderGrid(m, state, 120, 18)
+
+	if got := inspectorFieldListY(fields); got != 4 {
+		t.Fatalf("uplink field list y = %d, want compact row 4", got)
+	}
+	sectionCell := g.Cells[(panel.Y+4)*g.Width+panel.X+4]
+	if sectionCell.Ch != '▾' {
+		t.Fatalf("uplink section starts with %q at row %d, want directly below header:\n%s", sectionCell.Ch, panel.Y+4, g.String(false))
+	}
+	if index, ok := inspectorFieldAt(panel, state, fields, panel.Y+5); !ok || index != 0 {
+		t.Fatalf("compact Name row hit = index %d, ok=%t; want field 0", index, ok)
+	}
+	if got := inspectorFieldListY(inspectorFieldsForState(MockModel().Nodes[0], state)); got != 11 {
+		t.Fatalf("VM field list y = %d, want row 11 below action buttons", got)
+	}
+}
+
 func TestInspectorUsesWiderBlenderStyleDock(t *testing.T) {
 	if got := inspectorBounds(120, 30).W; got != 40 {
 		t.Fatalf("120-column inspector width = %d, want 40", got)

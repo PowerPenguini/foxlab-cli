@@ -123,8 +123,8 @@ func TestDiskExplorerOpensAsReusableApplicationTab(t *testing.T) {
 
 	app.activateTab(1)
 	app.handleKey("escape")
-	if len(app.tabs.tabs) != 1 {
-		t.Fatalf("Escape closing disk card left %d tabs", len(app.tabs.tabs))
+	if len(app.tabs.tabs) != 2 || app.tabs.active != 1 || !app.State.DiskExplorerOpen {
+		t.Fatalf("Escape closed or deactivated disk card: tabs=%d active=%d open=%t", len(app.tabs.tabs), app.tabs.active, app.State.DiskExplorerOpen)
 	}
 }
 

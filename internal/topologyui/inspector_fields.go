@@ -26,8 +26,9 @@ const (
 )
 
 const (
-	inspectorFieldListY = 11
-	inspectorFooterRows = 1
+	inspectorFieldListYWithActions = 11
+	inspectorFieldListYCompact     = 4
+	inspectorFooterRows            = 1
 )
 
 type inspectorField struct {
@@ -195,8 +196,18 @@ func containerEnvValue(node Node) string {
 	return strings.Join(values, ",")
 }
 
-func inspectorVisibleFieldRows(panel rect) int {
-	return max(0, panel.H-inspectorFieldListY-inspectorFooterRows)
+func inspectorFieldListY(fields []inspectorField) int {
+	for _, field := range fields {
+		switch field.kind {
+		case inspectorFieldPower, inspectorFieldShellAction, inspectorFieldVNCAction:
+			return inspectorFieldListYWithActions
+		}
+	}
+	return inspectorFieldListYCompact
+}
+
+func inspectorVisibleFieldRows(panel rect, fields []inspectorField) int {
+	return max(0, panel.H-inspectorFieldListY(fields)-inspectorFooterRows)
 }
 
 func inspectorPanelRowsFor(fields []inspectorField) []inspectorPanelRow {
@@ -269,7 +280,7 @@ func containerCapabilityEnabledMap(node Node) map[string]bool {
 
 func inspectorFieldWindow(panel rect, state ViewState, fields []inspectorField) ([]inspectorPanelRow, int, int) {
 	rows := inspectorPanelRowsFor(fields)
-	visible := inspectorVisibleFieldRows(panel)
+	visible := inspectorVisibleFieldRows(panel, fields)
 	selectedField := normalizedMenuSelection(state.InspectorSelected, len(fields))
 	selectedRow := 0
 	for index, row := range rows {
@@ -282,7 +293,7 @@ func inspectorFieldWindow(panel rect, state ViewState, fields []inspectorField) 
 
 func inspectorFieldAt(panel rect, state ViewState, fields []inspectorField, y int) (int, bool) {
 	rows, start, visible := inspectorFieldWindow(panel, state, fields)
-	firstY := panel.Y + inspectorFieldListY
+	firstY := panel.Y + inspectorFieldListY(fields)
 	if y < firstY || y >= firstY+visible {
 		return 0, false
 	}
@@ -299,7 +310,7 @@ func inspectorFieldY(panel rect, state ViewState, fields []inspectorField, field
 		if row.fieldIndex != fieldIndex || rowIndex < start || rowIndex >= start+visible {
 			continue
 		}
-		return panel.Y + inspectorFieldListY + rowIndex - start, true
+		return panel.Y + inspectorFieldListY(fields) + rowIndex - start, true
 	}
 	return 0, false
 }

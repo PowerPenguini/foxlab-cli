@@ -189,10 +189,11 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		return
 	}
 	rows, start, visible := inspectorFieldWindow(panel, state, fields)
+	listY := inspectorFieldListY(fields)
 	selected := normalizedMenuSelection(state.InspectorSelected, len(fields))
 	for visibleRow := 0; visibleRow < visible && start+visibleRow < len(rows); visibleRow++ {
 		row := rows[start+visibleRow]
-		y := panel.Y + inspectorFieldListY + visibleRow
+		y := panel.Y + listY + visibleRow
 		if row.fieldIndex < 0 {
 			if !row.spacer {
 				drawInspectorSectionBar(g, panel, y, row.section)
@@ -271,10 +272,10 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		}
 	}
 	if start > 0 {
-		g.Set(panel.X+panel.W-3, panel.Y+inspectorFieldListY, '↑', themePanelInspectorSection)
+		g.Set(panel.X+panel.W-3, panel.Y+listY, '↑', themePanelInspectorSection)
 	}
 	if start+visible < len(rows) {
-		g.Set(panel.X+panel.W-3, panel.Y+inspectorFieldListY+visible-1, '↓', themePanelInspectorMuted+ansiBold)
+		g.Set(panel.X+panel.W-3, panel.Y+listY+visible-1, '↓', themePanelInspectorMuted+ansiBold)
 	}
 	if state.InspectorCapOpen {
 		selected := normalizedMenuSelection(state.InspectorSelected, len(fields))

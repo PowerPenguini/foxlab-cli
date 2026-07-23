@@ -168,7 +168,7 @@ func (a *App) handleDiskExplorerKey(key string) bool {
 	switch key {
 	case "quit":
 		return true
-	case "escape", "space":
+	case "space":
 		a.closeDiskExplorer()
 	case "tab":
 		a.closeDiskExplorer()
