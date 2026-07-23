@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -218,16 +219,25 @@ func (a *App) stopAllVNCViewers() {
 }
 
 func vncViewerCommand(viewer, target string) *exec.Cmd {
+	args := vncViewerArgs(viewer, target)
 	if os.Geteuid() == 0 {
 		if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" && sudoUser != "root" {
 			if u, err := user.Lookup(sudoUser); err == nil {
 				args := append([]string{"-u", sudoUser, "env"}, vncViewerUserEnv(u)...)
-				args = append(args, viewer, target)
+				args = append(args, viewer)
+				args = append(args, vncViewerArgs(viewer, target)...)
 				return exec.Command("sudo", args...)
 			}
 		}
 	}
-	return exec.Command(viewer, target)
+	return exec.Command(viewer, args...)
+}
+
+func vncViewerArgs(viewer, target string) []string {
+	if filepath.Base(viewer) == "vncviewer" {
+		return []string{"-AcceptClipboard=1", "-SendClipboard=1", target}
+	}
+	return []string{target}
 }
 
 func vncViewerUserEnv(u *user.User) []string {

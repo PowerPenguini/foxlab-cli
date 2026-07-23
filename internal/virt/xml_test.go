@@ -3,6 +3,7 @@ package virt
 import (
 	"encoding/xml"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,6 +43,10 @@ func TestDomainXMLUsesManagedNetworkAndDomainNames(t *testing.T) {
 		`<source bridge="` + l.ManagedSwitchBridgeName(l.Switches[0]) + `"/>`,
 		`<graphics type="vnc"`,
 		`<model type="virtio" heads="1" primary="yes"/>`,
+		`<channel type="qemu-vdagent">`,
+		`<clipboard copypaste="yes"/>`,
+		`<mouse mode="server"/>`,
+		`<target type="virtio" name="com.redhat.spice.0"/>`,
 		`<input type="tablet" bus="usb"/>`,
 		`<serial type="pty">`,
 		`<target type="isa-serial" port="0"/>`,
@@ -78,6 +83,26 @@ func TestDomainXMLAddsAbsoluteTabletOnlyWithVNC(t *testing.T) {
 	if strings.Contains(plainXML, `<input type="tablet"`) {
 		t.Fatalf("non-VNC domain XML unexpectedly contains a tablet:\n%s", plainXML)
 	}
+	if strings.Contains(plainXML, `<channel type="qemu-vdagent">`) {
+		t.Fatalf("non-VNC domain XML unexpectedly contains a clipboard channel:\n%s", plainXML)
+	}
+}
+
+func TestDomainXMLWithVNCClipboardValidatesAgainstLibvirtSchema(t *testing.T) {
+	validator, err := exec.LookPath("virt-xml-validate")
+	if err != nil {
+		t.Skip("virt-xml-validate is not installed")
+	}
+	l := &lab.Lab{ID: "demo"}
+	xmlText, err := domainXML(l, lab.VM{ID: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(validator, "-", "domain")
+	cmd.Stdin = strings.NewReader(xmlText)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated domain XML failed libvirt schema validation: %v\n%s\n%s", err, output, xmlText)
+	}
 }
 
 func TestDomainConfigRejectsVNCXMLWithoutAbsoluteTablet(t *testing.T) {
@@ -96,6 +121,31 @@ func TestDomainConfigRejectsVNCXMLWithoutAbsoluteTablet(t *testing.T) {
 	}
 	if matches {
 		t.Fatal("VNC domain without absolute tablet matched desired configuration")
+	}
+}
+
+func TestDomainConfigRejectsVNCXMLWithoutClipboardChannel(t *testing.T) {
+	l := &lab.Lab{ID: "demo", VMs: []lab.VM{{ID: "vm1", MemoryMB: 2048, CPUs: 2, VNC: true}}}
+	xmlText, err := domainXML(l, l.VMs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(xmlText, `    <channel type="qemu-vdagent">`)
+	if start < 0 {
+		t.Fatal("test XML did not contain a VNC clipboard channel")
+	}
+	end := strings.Index(xmlText[start:], "    </channel>")
+	if end < 0 {
+		t.Fatal("test XML did not contain the end of a VNC clipboard channel")
+	}
+	end += start + len("    </channel>")
+	withoutClipboard := xmlText[:start] + xmlText[end:]
+	matches, err := domainConfigMatches(l, l.VMs[0], withoutClipboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches {
+		t.Fatal("VNC domain without clipboard channel matched desired configuration")
 	}
 }
 

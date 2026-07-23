@@ -11,13 +11,14 @@ import (
 )
 
 type comparableDomain struct {
-	MemoryKiB int64
-	CPUs      int
-	Disk      comparableDisk
-	ISO       comparableDisk
-	VNC       bool
-	Tablet    bool
-	Networks  []comparableNetwork
+	MemoryKiB    int64
+	CPUs         int
+	Disk         comparableDisk
+	ISO          comparableDisk
+	VNC          bool
+	VNCClipboard bool
+	Tablet       bool
+	Networks     []comparableNetwork
 }
 
 type comparableDisk struct {
@@ -75,6 +76,18 @@ type parsedDomainXML struct {
 		Inputs []struct {
 			Type string `xml:"type,attr"`
 		} `xml:"input"`
+		Channels []struct {
+			Type   string `xml:"type,attr"`
+			Source struct {
+				Clipboard struct {
+					CopyPaste string `xml:"copypaste,attr"`
+				} `xml:"clipboard"`
+			} `xml:"source"`
+			Target struct {
+				Type string `xml:"type,attr"`
+				Name string `xml:"name,attr"`
+			} `xml:"target"`
+		} `xml:"channel"`
 	} `xml:"devices"`
 }
 
@@ -118,7 +131,13 @@ func parseDomainXML(value string) (parsedDomainXML, error) {
 }
 
 func comparableDomainFromDesired(data domainXMLData) comparableDomain {
-	out := comparableDomain{MemoryKiB: int64(data.MemoryMB) * 1024, CPUs: data.CPUs, VNC: data.HasVNC, Tablet: data.HasTablet}
+	out := comparableDomain{
+		MemoryKiB:    int64(data.MemoryMB) * 1024,
+		CPUs:         data.CPUs,
+		VNC:          data.HasVNC,
+		VNCClipboard: data.HasVNCClipboard,
+		Tablet:       data.HasTablet,
+	}
 	if data.HasDisk {
 		out.Disk = comparableDisk{Present: true, Path: filepath.Clean(data.DiskPath), Format: data.DiskType}
 	}
@@ -142,6 +161,15 @@ func comparableDomainFromLive(parsed parsedDomainXML, desired domainXMLData) com
 	for _, input := range parsed.Devices.Inputs {
 		if input.Type == "tablet" {
 			out.Tablet = true
+			break
+		}
+	}
+	for _, channel := range parsed.Devices.Channels {
+		if channel.Type == "qemu-vdagent" &&
+			channel.Target.Type == "virtio" &&
+			channel.Target.Name == "com.redhat.spice.0" &&
+			strings.EqualFold(channel.Source.Clipboard.CopyPaste, "yes") {
+			out.VNCClipboard = true
 			break
 		}
 	}

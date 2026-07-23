@@ -100,6 +100,15 @@ var domainTemplate = template.Must(template.New("domain").Funcs(xmlTemplateFuncs
     <video>
       <model type="virtio" heads="1" primary="yes"/>
     </video>
+    {{- if .HasVNCClipboard }}
+    <channel type="qemu-vdagent">
+      <source>
+        <clipboard copypaste="yes"/>
+        <mouse mode="server"/>
+      </source>
+      <target type="virtio" name="com.redhat.spice.0"/>
+    </channel>
+    {{- end }}
     {{- end }}
     {{- if .HasTablet }}
     <input type="tablet" bus="usb"/>
