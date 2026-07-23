@@ -36,6 +36,13 @@ Run one non-interactive frame for smoke checks:
 foxlab --no-raw --width 140 --height 36
 ```
 
+## VNC clipboard
+
+VMs with `vnc: true` expose a bidirectional text clipboard to TigerVNC through
+QEMU's vdagent channel. The guest must have `spice-vdagent` installed and
+running in its graphical session (or SPICE Guest Tools on Windows). Restart the
+VM after enabling VNC so libvirt can add the channel.
+
 ## Lab identifiers
 
 Node identifiers in `.lab` files are mnemonic names used by references throughout

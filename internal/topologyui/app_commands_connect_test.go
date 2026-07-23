@@ -1230,6 +1230,23 @@ func TestRunVNCDirectUsesExistingRuntimePort(t *testing.T) {
 	}
 }
 
+func TestTigerVNCViewerEnablesClipboardInBothDirections(t *testing.T) {
+	got := vncViewerArgs("/usr/bin/vncviewer", "127.0.0.1::5905")
+	want := []string{
+		"-AcceptClipboard=1",
+		"-SendClipboard=1",
+		"127.0.0.1::5905",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TigerVNC args = %#v, want %#v", got, want)
+	}
+
+	got = vncViewerArgs("/usr/bin/custom-viewer", "127.0.0.1::5905")
+	if want := []string{"127.0.0.1::5905"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("custom VNC args = %#v, want %#v", got, want)
+	}
+}
+
 func TestVNCViewerRunsInBackgroundAndSameActionStopsIt(t *testing.T) {
 	dir := t.TempDir()
 	viewerPath := filepath.Join(dir, "viewer")
