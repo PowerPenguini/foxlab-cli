@@ -247,6 +247,7 @@ func filteredAddPaletteActions(query string) []paletteAction {
 		{Label: "vm", Hint: "add", Query: "add vm", Action: "add vm", Enabled: true},
 		{Label: "sw", Hint: "add", Query: "add sw", Action: "add sw", Enabled: true},
 		{Label: "ct", Hint: "add", Query: "add ct", Action: "add cont", Enabled: true},
+		{Label: "dhcp", Hint: "add", Query: "add dhcp", Action: "add dhcp", Enabled: true},
 		{Label: "disk", Hint: "add", Query: "add disk", Action: "add disk", Enabled: true},
 		{Label: "uplink", Hint: "add", Query: "add uplink", Action: "add uplink", Enabled: true},
 	}
@@ -278,6 +279,8 @@ func executablePaletteCommand(query string, state ViewState) (paletteAction, boo
 		return paletteAction{Label: "sw", Query: query, Action: "add sw", Enabled: true}, true
 	case "add ct", "add cont", "add container":
 		return paletteAction{Label: "ct", Query: query, Action: "add cont", Enabled: true}, true
+	case "add dhcp":
+		return paletteAction{Label: "dhcp", Query: query, Action: "add dhcp", Enabled: true}, true
 	case "add disk":
 		return paletteAction{Label: "disk", Query: query, Action: "add disk", Enabled: true}, true
 	case "add uplink", "add up":

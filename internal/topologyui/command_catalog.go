@@ -10,7 +10,7 @@ type commandSpec struct {
 var commandCatalog = []commandSpec{
 	{Name: "quit", Aliases: []string{"q"}, Usage: "quit [all]"},
 	{Name: "help", Aliases: []string{"h"}, Usage: "help [topic]"},
-	{Name: "add", Usage: "add <vm|container|switch|disk|uplink>", HelpTopic: "add"},
+	{Name: "add", Usage: "add <vm|container|dhcp|switch|disk|uplink>", HelpTopic: "add"},
 	{Name: "vm", Usage: "vm <create|set|start|stop|nic|delete> ...", HelpTopic: "vm"},
 	{Name: "container", Aliases: []string{"ct"}, Usage: "container <create|set|start|stop|nic|delete> ...", HelpTopic: "container"},
 	{Name: "disk", Usage: "disk <create|attach|detach|merge|resize|info|delete|layer> ...", HelpTopic: "disk"},

@@ -156,6 +156,7 @@ func (l *Lab) Validate() error {
 			}
 		}
 	}
+	problems = append(problems, validateDHCPContainers(l)...)
 
 	nodeIDs := map[string]string{}
 	for _, node := range []struct {

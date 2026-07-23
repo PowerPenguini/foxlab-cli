@@ -43,3 +43,9 @@ type ContainerUpdate struct {
 	Env     Field[map[string]string]
 	Network WorkloadNetworkInput
 }
+
+type DHCPCreateRequest struct {
+	Name   string
+	Image  string
+	Switch string
+}

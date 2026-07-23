@@ -39,8 +39,17 @@ func (l *Lab) Normalize() {
 		if l.Containers[i].Name == l.Containers[i].ID {
 			l.Containers[i].Name = ""
 		}
+		l.Containers[i].Service = strings.ToLower(strings.TrimSpace(l.Containers[i].Service))
 		l.Containers[i].DesiredState = normalizeDesiredState(l.Containers[i].DesiredState)
 		l.Containers[i].Image = strings.TrimSpace(l.Containers[i].Image)
+		if IsDHCPContainer(l.Containers[i]) {
+			if l.Containers[i].DesiredState == "" {
+				l.Containers[i].DesiredState = DesiredStateRunning
+			}
+			if l.Containers[i].Image == "" {
+				l.Containers[i].Image = DefaultDHCPImage
+			}
+		}
 		l.Containers[i].Disk = strings.TrimSpace(l.Containers[i].Disk)
 		for j := range l.Containers[i].Command {
 			l.Containers[i].Command[j] = strings.TrimSpace(l.Containers[i].Command[j])

@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"foxlab-cli/internal/lab"
@@ -129,6 +130,49 @@ func TestReconcilerStartsDesiredRunningWorkloads(t *testing.T) {
 		if result.Actions[i] != want {
 			t.Fatalf("actions[%d] = %q, want %q", i, result.Actions[i], want)
 		}
+	}
+}
+
+func TestReconcilerStartsDHCPContainerBeforeVMsAndRegularContainers(t *testing.T) {
+	l := &lab.Lab{
+		ID:  "demo",
+		VMs: []lab.VM{{ID: "client", DesiredState: lab.DesiredStateRunning, MemoryMB: 512, CPUs: 1}},
+		Containers: []lab.Container{
+			{ID: "web", DesiredState: lab.DesiredStateRunning, Image: "nginx"},
+			{ID: "dhcp", DesiredState: lab.DesiredStateRunning, Service: lab.ContainerServiceDHCP, Image: lab.DefaultDHCPImage},
+		},
+	}
+	runtime := &fakeRuntime{states: map[string]string{}}
+	result := (&Reconciler{Runtime: runtime}).Step(context.Background(), l)
+	if len(result.Errors) != 0 {
+		t.Fatalf("errors = %v", result.Errors)
+	}
+	want := []string{"container:dhcp", "vm:client", "container:web"}
+	if len(runtime.started) != len(want) {
+		t.Fatalf("started = %#v, want %#v", runtime.started, want)
+	}
+	for i := range want {
+		if runtime.started[i] != want[i] {
+			t.Fatalf("started = %#v, want %#v", runtime.started, want)
+		}
+	}
+}
+
+func TestReconcilerRejectsManagedDHCPOverridesBeforeStart(t *testing.T) {
+	l := &lab.Lab{
+		ID: "demo",
+		Containers: []lab.Container{{
+			ID: "dhcp", DesiredState: lab.DesiredStateRunning, Service: lab.ContainerServiceDHCP,
+			Image: "alpine", Capabilities: &lab.ContainerCapabilities{Add: []string{"NET_ADMIN"}},
+		}},
+	}
+	runtime := &fakeRuntime{states: map[string]string{}}
+	result := (&Reconciler{Runtime: runtime}).Step(context.Background(), l)
+	if len(result.Errors) != 1 || len(runtime.started) != 0 {
+		t.Fatalf("reconcile result = errors %v, started %#v", result.Errors, runtime.started)
+	}
+	if got := result.Errors[0].Error(); !strings.Contains(got, "image is managed") || !strings.Contains(got, "capabilities are managed") {
+		t.Fatalf("reconcile error = %q", got)
 	}
 }
 

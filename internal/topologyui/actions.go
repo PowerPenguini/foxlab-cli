@@ -13,6 +13,8 @@ func (a *App) runGlobalMenuAction(action string) {
 		a.openCreateVMCommand(Node{})
 	case "add cont", "create-container":
 		a.openCreateContainerCommand(Node{})
+	case "add dhcp", "create-dhcp":
+		a.openCreateDHCPCommand(Node{})
 	case "add sw", "create-switch":
 		a.openCreateSwitchCommand(Node{})
 	case "add disk", "create-disk":
@@ -86,6 +88,8 @@ func (a *App) runMenuAction(node Node, action string) {
 		a.openCreateVMCommand(node)
 	case "add cont", "create-container":
 		a.openCreateContainerCommand(node)
+	case "add dhcp", "create-dhcp":
+		a.openCreateDHCPCommand(node)
 	case "add sw", "create-switch":
 		a.openCreateSwitchCommand(node)
 	case "add disk", "create-disk":
@@ -124,6 +128,10 @@ func (a *App) openCreateVMCommand(node Node) {
 
 func (a *App) openCreateContainerCommand(node Node) {
 	a.containerCreate(a.createContainerRequest(node))
+}
+
+func (a *App) openCreateDHCPCommand(node Node) {
+	a.dhcpCreate(a.createDHCPRequest(node))
 }
 
 func (a *App) openCreateSwitchCommand(node Node) {

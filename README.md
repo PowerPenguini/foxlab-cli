@@ -43,6 +43,32 @@ QEMU's vdagent channel. The guest must have `spice-vdagent` installed and
 running in its graphical session (or SPICE Guest Tools on Windows). Restart the
 VM after enabling VNC so libvirt can add the channel.
 
+## DHCP container
+
+Add a managed DHCP node from the palette with `add dhcp`, or run:
+
+```text
+add dhcp dhcp-1 switch=lan
+```
+
+Build and import FoxLab's local DHCP image once:
+
+```sh
+make dhcp-image
+```
+
+The final `foxlab.local/dhcp:2.93` image is built `FROM scratch` and contains
+only a statically linked `/dnsmasq` binary. It has no shell, package manager,
+CA bundle, passwd database, or base distribution filesystem.
+
+The node is a containerd-backed dnsmasq service attached to one NAT switch.
+FoxLab reserves `.2` for the server, keeps `.20` through `.99` for statically
+addressed containers, and leases `.100` through `.254` to DHCP clients. The
+switch gateway remains `.1`. Only one DHCP container is allowed per NAT switch,
+and FoxLab starts it before VMs during reconciliation. Its image, command,
+shell, environment, capabilities, MAC, disks, and NIC count are runtime-managed;
+the TUI exposes only power, name, NAT-switch selection, move, and delete.
+
 ## Lab identifiers
 
 Node identifiers in `.lab` files are mnemonic names used by references throughout

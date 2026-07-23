@@ -17,9 +17,12 @@ func (a *App) startConnectNICIndex(node Node, index string) {
 		a.State.Message = "nic not found: " + a.displayNodeName(node.Type, node.ID) + ":" + index
 		return
 	}
-	source, ok := directNetworkEndpoint(node.Type, node.ID, index)
-	if !ok || !a.nicDisconnect(source) {
-		return
+	managedDHCP := a.isManagedDHCPNode(node)
+	if !managedDHCP {
+		source, ok := directNetworkEndpoint(node.Type, node.ID, index)
+		if !ok || !a.nicDisconnect(source) {
+			return
+		}
 	}
 	a.State.ConnectNodeID = node.ID
 	a.State.ConnectNodeType = node.Type
@@ -262,6 +265,13 @@ func (a *App) canConnectToEndpoint(node Node) bool {
 	if node.Type == a.State.ConnectNodeType && node.ID == a.State.ConnectNodeID {
 		return false
 	}
+	source := Node{Type: a.State.ConnectNodeType, ID: a.State.ConnectNodeID}
+	if a.isManagedDHCPNode(source) {
+		return node.Type == NodeSwitch && a.isDHCPCompatibleSwitch(node.ID, source.ID)
+	}
+	if a.isManagedDHCPNode(node) {
+		return false
+	}
 	switch a.State.ConnectNodeType {
 	case NodeVM:
 		if node.Type == NodeExternal {
@@ -289,10 +299,43 @@ func (a *App) connectEndpointLabel() string {
 	case NodeExternal:
 		return "switch endpoint"
 	case NodeContainer:
+		if a.isManagedDHCPNode(Node{Type: a.State.ConnectNodeType, ID: a.State.ConnectNodeID}) {
+			return "NAT switch endpoint"
+		}
 		return "switch, uplink or workload endpoint"
 	default:
 		return "switch, uplink or workload endpoint"
 	}
+}
+
+func (a *App) isManagedDHCPNode(node Node) bool {
+	if node.Type != NodeContainer {
+		return false
+	}
+	ct, ok := a.labContainer(node.ID)
+	return ok && lab.IsDHCPContainer(ct)
+}
+
+func (a *App) isDHCPCompatibleSwitch(switchID, containerID string) bool {
+	sw, ok := a.labSwitch(switchID)
+	if !ok || sw.Mode != "nat" || a.currentLab() == nil {
+		return false
+	}
+	for _, externalID := range lab.SwitchExternalLinks(sw) {
+		link, ok := lab.FindExternalLink(a.currentLab(), externalID)
+		if ok && link.Mode == lab.ExternalModeMacNAT {
+			return false
+		}
+	}
+	for _, ct := range a.currentLab().Containers {
+		if ct.ID == containerID {
+			continue
+		}
+		if attached, ok := lab.DHCPContainerSwitch(ct); ok && attached == switchID {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) firstConnectEndpointIndex(sourceType string) (int, bool) {

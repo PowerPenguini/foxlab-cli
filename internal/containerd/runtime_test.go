@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 
 func TestWaitTaskExitTimesOut(t *testing.T) {
 	err := waitTaskExit(context.Background(), make(<-chan containerdapi.ExitStatus), time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "timed out waiting for container task to exit") {
+	if !errors.Is(err, errTaskExitTimeout) {
 		t.Fatalf("waitTaskExit error = %v, want timeout", err)
 	}
 
@@ -31,6 +32,99 @@ func TestWaitTaskExitTimesOut(t *testing.T) {
 	err = waitTaskExit(ctx, make(<-chan containerdapi.ExitStatus), time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitTaskExit canceled error = %v, want context canceled", err)
+	}
+}
+
+type lifecycleTask struct {
+	containerdapi.Task
+	calls       []string
+	status      containerdapi.ProcessStatus
+	waitC       chan containerdapi.ExitStatus
+	killErr     map[syscall.Signal]error
+	exitOn      map[syscall.Signal]bool
+	deleteErr   error
+	deleteCalls int
+}
+
+func newLifecycleTask() *lifecycleTask {
+	return &lifecycleTask{
+		status:  containerdapi.Running,
+		waitC:   make(chan containerdapi.ExitStatus, 1),
+		killErr: map[syscall.Signal]error{},
+		exitOn:  map[syscall.Signal]bool{},
+	}
+}
+
+func (t *lifecycleTask) Status(context.Context) (containerdapi.Status, error) {
+	t.calls = append(t.calls, "status")
+	return containerdapi.Status{Status: t.status}, nil
+}
+
+func (t *lifecycleTask) Wait(context.Context) (<-chan containerdapi.ExitStatus, error) {
+	t.calls = append(t.calls, "wait")
+	return t.waitC, nil
+}
+
+func (t *lifecycleTask) Kill(_ context.Context, signal syscall.Signal, _ ...containerdapi.KillOpts) error {
+	t.calls = append(t.calls, "signal:"+taskSignalName(signal))
+	if err := t.killErr[signal]; err != nil {
+		return err
+	}
+	if t.exitOn[signal] {
+		t.waitC <- *containerdapi.NewExitStatus(0, time.Now(), nil)
+	}
+	return nil
+}
+
+func (t *lifecycleTask) Delete(context.Context, ...containerdapi.ProcessDeleteOpts) (*containerdapi.ExitStatus, error) {
+	t.calls = append(t.calls, "delete")
+	t.deleteCalls++
+	return containerdapi.NewExitStatus(0, time.Now(), nil), t.deleteErr
+}
+
+func TestDeleteTaskTerminatesGracefullyBeforeDelete(t *testing.T) {
+	task := newLifecycleTask()
+	task.exitOn[syscall.SIGTERM] = true
+
+	if err := deleteTaskWithTimeout(context.Background(), task, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"status", "wait", "signal:SIGTERM", "delete"}
+	if !reflect.DeepEqual(task.calls, want) {
+		t.Fatalf("lifecycle calls = %#v, want %#v", task.calls, want)
+	}
+}
+
+func TestDeleteTaskForceKillsOnlyAfterGracefulTimeout(t *testing.T) {
+	task := newLifecycleTask()
+	task.exitOn[syscall.SIGKILL] = true
+
+	if err := deleteTaskWithTimeout(context.Background(), task, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"status", "wait", "signal:SIGTERM", "signal:SIGKILL", "delete"}
+	if !reflect.DeepEqual(task.calls, want) {
+		t.Fatalf("lifecycle calls = %#v, want %#v", task.calls, want)
+	}
+}
+
+func TestDeleteTaskExplainsSignalPermissionDenied(t *testing.T) {
+	task := newLifecycleTask()
+	task.killErr[syscall.SIGTERM] = errors.New("unable to signal init: permission denied")
+
+	err := deleteTaskWithTimeout(context.Background(), task, time.Millisecond)
+	if err == nil {
+		t.Fatal("deleteTaskWithTimeout error = nil, want permission diagnostic")
+	}
+	for _, want := range []string{"SIGTERM", "AppArmor", "runc", "kernel audit log", "permission denied"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("permission diagnostic %q does not contain %q", err, want)
+		}
+	}
+	if task.deleteCalls != 0 {
+		t.Fatalf("delete calls = %d, want no delete after denied signal", task.deleteCalls)
 	}
 }
 

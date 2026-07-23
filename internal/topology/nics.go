@@ -126,6 +126,9 @@ func (s *Service) AddContainerNIC(ref string, request NICAddRequest) Result {
 		if s.CurrentLab().Containers[i].ID != id {
 			continue
 		}
+		if lab.IsDHCPContainer(s.CurrentLab().Containers[i]) {
+			return Failure("DHCP service has exactly one managed NIC")
+		}
 		if err := s.requireSavePath(); err != nil {
 			return FailureWithCause("container nic add failed: "+err.Error(), err)
 		}
@@ -162,6 +165,20 @@ func (s *Service) ConnectContainerNIC(ref string, request NICConnectRequest) Res
 		if s.CurrentLab().Containers[i].ID != id {
 			continue
 		}
+		if lab.IsDHCPContainer(s.CurrentLab().Containers[i]) {
+			if index != 0 || len(s.CurrentLab().Containers[i].Networks) != 1 {
+				return Failure("DHCP service has exactly one managed NIC")
+			}
+			if externalRef != "" {
+				return Failure("DHCP service can connect only to a NAT switch")
+			}
+			if request.MAC != "" {
+				return Failure("DHCP network MAC is managed by FoxLab")
+			}
+			if err := s.validateDHCPNetworkTarget(id, switchRef); err != nil {
+				return FailureWithCause("DHCP nic connect failed: "+err.Error(), err)
+			}
+		}
 		if index >= len(s.CurrentLab().Containers[i].Networks) {
 			return Failure("container nic not found: " + id + ":" + strconv.Itoa(index))
 		}
@@ -197,6 +214,9 @@ func (s *Service) DeleteContainerNIC(ref string, index int) Result {
 	for i := range s.CurrentLab().Containers {
 		if s.CurrentLab().Containers[i].ID != id {
 			continue
+		}
+		if lab.IsDHCPContainer(s.CurrentLab().Containers[i]) {
+			return Failure("DHCP service has exactly one managed NIC; select another NAT switch instead")
 		}
 		if index >= len(s.CurrentLab().Containers[i].Networks) {
 			return Failure("container nic not found: " + id + ":" + strconv.Itoa(index))

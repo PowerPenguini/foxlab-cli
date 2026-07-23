@@ -44,6 +44,21 @@ func (r *Reconciler) Step(ctx context.Context, l *lab.Lab) ReconcileResult {
 			result.Errors = append(result.Errors, fmt.Errorf("cleanup orphans: %w", err))
 		}
 	}
+	for _, ct := range l.Containers {
+		if !lab.IsDHCPContainer(ct) {
+			continue
+		}
+		if err := lab.ValidateManagedDHCPContainer(ct); err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("invalid managed DHCP configuration: %w", err))
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			result.Errors = append(result.Errors, err)
+			return result
+		}
+		ref := Ref{Type: TypeContainer, ID: ct.ID}
+		r.reconcileRef(ctx, l, ref, lab.DesiredState(ct.DesiredState), states[Key(ref)], &result)
+	}
 	for _, vm := range l.VMs {
 		if err := ctx.Err(); err != nil {
 			result.Errors = append(result.Errors, err)
@@ -53,6 +68,9 @@ func (r *Reconciler) Step(ctx context.Context, l *lab.Lab) ReconcileResult {
 		r.reconcileRef(ctx, l, ref, lab.DesiredState(vm.DesiredState), states[Key(ref)], &result)
 	}
 	for _, ct := range l.Containers {
+		if lab.IsDHCPContainer(ct) {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			result.Errors = append(result.Errors, err)
 			return result

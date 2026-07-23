@@ -3,6 +3,8 @@ package topologyui
 import (
 	"strconv"
 	"strings"
+
+	"foxlab-cli/internal/lab"
 )
 
 const (
@@ -266,7 +268,7 @@ func drawInspectorFields(g *grid, node Node, state ViewState, panel rect) {
 		if hasDiskButton {
 			drawInspectorInlineButton(g, diskButton, diskButtonLabel, diskButtonStyle, active)
 		}
-		if field.kind == inspectorFieldNIC {
+		if field.kind == inspectorFieldNIC && !field.managed {
 			valueStyle := inspectorFieldValueStyle(field, active)
 			g.Set(panel.X+panel.W-4, y, '×', valueStyle)
 		}
@@ -535,6 +537,9 @@ func inspectorLines(node Node) []string {
 	case NodeVM:
 		return compactDetailLines(node, []string{"cpu", "mem", "vnc", "disk", "iso"}, 7)
 	case NodeContainer:
+		if nodeDetailRawValue(node, "service") == lab.ContainerServiceDHCP {
+			return compactDetailLines(node, []string{"service", "address", "range", "router", "image"}, 7)
+		}
 		return compactDetailLines(node, []string{"image", "command", "disk"}, 7)
 	case NodeSwitch:
 		links := len(nicDetails(node.Details))

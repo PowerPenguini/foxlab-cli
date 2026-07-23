@@ -17,8 +17,9 @@ func helpLines(topic string) []string {
 		}
 	case "add":
 		return []string{
-			"add: open the global add menu, then click VM, container, switch, disk, or uplink",
+			"add: open the global add menu, then click VM, container, DHCP, switch, disk, or uplink",
 			"defaults: new nodes get generated ids and can be edited in the right inspector",
+			"DHCP: managed dnsmasq service; configure only power, name, and one NAT switch",
 			"node add: click add actions from a switch/uplink to preconnect where supported",
 		}
 	case "vm", "vms":

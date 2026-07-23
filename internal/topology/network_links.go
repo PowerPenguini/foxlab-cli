@@ -24,6 +24,12 @@ func (s *Service) ConnectDirectNIC(sourceRef, targetRef NetworkEndpointRef) Resu
 	if !ok {
 		return Failure(targetType + " not found: " + targetRef.ID)
 	}
+	if _, managed := s.managedDHCPContainer(sourceID); sourceType == "container" && managed {
+		return Failure("DHCP service can connect only to a NAT switch")
+	}
+	if _, managed := s.managedDHCPContainer(targetID); targetType == "container" && managed {
+		return Failure("DHCP service can connect only to a NAT switch")
+	}
 	usage := "usage: nic connect <source> <index> <target>"
 	if targetRef.NIC.Set {
 		usage = "usage: nic connect <source> <index> <target> <target-index>"
@@ -91,6 +97,9 @@ func (s *Service) DisconnectNIC(sourceRef NetworkEndpointRef) Result {
 	sourceID, ok := s.resolveWorkloadID(sourceType, sourceRef.ID)
 	if !ok {
 		return Failure(sourceType + " not found: " + sourceRef.ID)
+	}
+	if _, managed := s.managedDHCPContainer(sourceID); sourceType == "container" && managed {
+		return Failure("DHCP service NIC cannot be disconnected; select another NAT switch instead")
 	}
 	if !sourceRef.NIC.Set || sourceRef.NIC.Value < 0 {
 		return Failure("usage: nic disconnect <source> <index>")

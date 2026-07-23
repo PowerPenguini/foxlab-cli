@@ -87,6 +87,16 @@ func (s *Service) resolveDiskTarget(targetType, targetID string) (string, string
 	return targetType, resolvedID, nil
 }
 
+func (s *Service) rejectManagedDHCPDiskTarget(targetType, targetID string) error {
+	if targetType != "container" {
+		return nil
+	}
+	if _, managed := s.managedDHCPContainer(targetID); managed {
+		return fmt.Errorf("DHCP service does not support disks")
+	}
+	return nil
+}
+
 func validDiskTargetRef(ref workload.Ref) bool {
 	return (ref.Type == workload.TypeVM || ref.Type == workload.TypeContainer) && strings.TrimSpace(ref.ID) != ""
 }

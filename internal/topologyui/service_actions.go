@@ -89,6 +89,12 @@ func (a *App) containerCreate(request topology.ContainerCreateRequest) {
 	})
 }
 
+func (a *App) dhcpCreate(request topology.DHCPCreateRequest) {
+	a.runTopologyMutation(func(service *topology.Service) topology.Result {
+		return service.CreateDHCP(request)
+	})
+}
+
 func (a *App) containerSet(id string, update topology.ContainerUpdate) {
 	a.runTopologyMutation(func(service *topology.Service) topology.Result {
 		return service.UpdateContainer(id, update)

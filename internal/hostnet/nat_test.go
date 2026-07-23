@@ -60,3 +60,29 @@ func TestNATContainerAddressRejectsExhaustedPool(t *testing.T) {
 		t.Fatal("expected exhausted NAT address pool error")
 	}
 }
+
+func TestDHCPContainerUsesReservedNATAddressWithoutConsumingStaticPool(t *testing.T) {
+	l := &lab.Lab{
+		ID:       "demo",
+		Switches: []lab.Switch{{ID: "lan", Mode: "nat"}},
+		Containers: []lab.Container{
+			{ID: "dhcp", Service: lab.ContainerServiceDHCP, Image: lab.DefaultDHCPImage, Networks: []lab.ContainerNetwork{{Switch: "lan"}}},
+			{ID: "web", Image: "alpine", Networks: []lab.ContainerNetwork{{Switch: "lan"}}},
+		},
+	}
+	config := NATSwitchConfiguration(l, l.Switches[0])
+	dhcpAddress, err := switchNATContainerAddress(l, l.Switches[0], l.Containers[0], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dhcpAddress != config.DHCPServerAddress {
+		t.Fatalf("DHCP address = %q, want %q", dhcpAddress, config.DHCPServerAddress)
+	}
+	webAddress, err := switchNATContainerAddress(l, l.Switches[0], l.Containers[1], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if webAddress == dhcpAddress || webAddress == config.Gateway+"/24" {
+		t.Fatalf("regular container received reserved address %q", webAddress)
+	}
+}

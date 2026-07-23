@@ -179,7 +179,7 @@ func (a *App) executeDiskCommand(fields []string) {
 
 func (a *App) executeAddCommand(fields []string) {
 	if len(fields) < 3 {
-		a.State.Message = "usage: add <vm|sw|cont> <id> ..."
+		a.State.Message = "usage: add <vm|sw|cont|dhcp> <id> ..."
 		return
 	}
 	args, err := parseArgs(fields[3:])
@@ -209,8 +209,15 @@ func (a *App) executeAddCommand(fields []string) {
 			return
 		}
 		a.containerCreate(request)
+	case "dhcp":
+		request, err := dhcpCreateRequest(fields[2], args)
+		if err != nil {
+			a.State.Message = err.Error()
+			return
+		}
+		a.dhcpCreate(request)
 	default:
-		a.State.Message = "usage: add <vm|sw|cont> <id> ..."
+		a.State.Message = "usage: add <vm|sw|cont|dhcp> <id> ..."
 	}
 }
 

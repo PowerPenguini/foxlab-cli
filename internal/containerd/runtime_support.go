@@ -63,7 +63,9 @@ func containerSpecOpts(image containerd.Image, ct lab.Container, diskMount conta
 	if len(env) > 0 {
 		opts = append(opts, oci.WithEnv(env))
 	}
-	opts = append(opts, oci.WithMounts([]specs.Mount{{Type: "bind", Source: resolvconfPath, Destination: "/etc/resolv.conf", Options: []string{"rbind", "ro"}}}))
+	if resolvconfPath != "" {
+		opts = append(opts, oci.WithMounts([]specs.Mount{{Type: "bind", Source: resolvconfPath, Destination: "/etc/resolv.conf", Options: []string{"rbind", "ro"}}}))
+	}
 	if diskMount.Source != "" && diskMount.Destination != "/" {
 		opts = append(opts, oci.WithMounts([]specs.Mount{{Type: "bind", Source: diskMount.Source, Destination: diskMount.Destination, Options: []string{"rbind", "rw"}}}))
 	}
@@ -94,6 +96,9 @@ func containerImage(ctx context.Context, client *containerd.Client, imageRef str
 	}
 	if !errdefs.IsNotFound(err) {
 		return nil, fmt.Errorf("load local image %q: %w", imageRef, err)
+	}
+	if imageRef == lab.DefaultDHCPImage {
+		return nil, fmt.Errorf("local DHCP image %q is missing; build and import it with make dhcp-image", imageRef)
 	}
 	image, err = client.Pull(ctx, imageRef, containerd.WithPullUnpack, containerd.WithPullSnapshotter(containerd.DefaultSnapshotter))
 	if err != nil {
@@ -160,7 +165,11 @@ func deleteContainer(ctx context.Context, container containerd.Container) error 
 }
 
 func containerConfigHash(ct lab.Container, diskMount containerDiskMount) string {
-	parts := []string{"id=" + ct.ID, "image=" + ct.Image, "shell=" + ct.Shell, "disk=" + ct.Disk, "diskSource=" + diskMount.Source, "diskDestination=" + diskMount.Destination, "dns=" + containerDNSMode, "command=" + strings.Join(containerProcessArgs(ct), "\x00")}
+	dnsMode := containerDNSMode
+	if lab.IsDHCPContainer(ct) {
+		dnsMode = "none"
+	}
+	parts := []string{"id=" + ct.ID, "service=" + ct.Service, "image=" + ct.Image, "shell=" + ct.Shell, "disk=" + ct.Disk, "diskSource=" + diskMount.Source, "diskDestination=" + diskMount.Destination, "dns=" + dnsMode, "command=" + strings.Join(containerProcessArgs(ct), "\x00")}
 	if ct.Capabilities != nil {
 		parts = append(parts, "capabilities:add="+strings.Join(sortedCapabilityNames(ct.Capabilities.Add), ","))
 		parts = append(parts, "capabilities:drop="+strings.Join(sortedCapabilityNames(ct.Capabilities.Drop), ","))

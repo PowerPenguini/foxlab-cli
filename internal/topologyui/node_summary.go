@@ -57,6 +57,9 @@ func externalNodeCardLines(node Node, frame, width int) []string {
 func nodeCardExtra(node Node) string {
 	switch node.Type {
 	case NodeContainer:
+		if nodeDetailRawValue(node, "service") == "dhcp" {
+			return "DHCP"
+		}
 		return shortImage(nodeDetailRawValue(node, "image"))
 	default:
 		return ""

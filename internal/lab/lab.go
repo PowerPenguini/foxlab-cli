@@ -10,6 +10,9 @@ const (
 	ExternalModeNAT    = "nat"
 	ExternalModeDirect = "direct"
 	ExternalModeMacNAT = "macnat"
+
+	ContainerServiceDHCP = "dhcp"
+	DefaultDHCPImage     = "foxlab.local/dhcp:2.93"
 )
 
 type Lab struct {
@@ -62,6 +65,7 @@ type Container struct {
 	ID           string                 `json:"id" yaml:"id"`
 	Name         string                 `json:"name,omitempty" yaml:"name,omitempty"`
 	DesiredState string                 `json:"desiredState,omitempty" yaml:"desiredState,omitempty"`
+	Service      string                 `json:"service,omitempty" yaml:"service,omitempty"`
 	Image        string                 `json:"image" yaml:"image"`
 	Disk         string                 `json:"disk,omitempty" yaml:"disk,omitempty"`
 	Command      []string               `json:"command,omitempty" yaml:"command,omitempty"`

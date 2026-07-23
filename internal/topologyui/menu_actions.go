@@ -20,6 +20,8 @@ func contextMenuAction(label string) string {
 		return "disk-explorer"
 	case "Add SW":
 		return "add sw"
+	case "Add DHCP":
+		return "add dhcp"
 	case "Attach Uplink":
 		return "attach-uplink"
 	case "Run":

@@ -19,6 +19,9 @@ func (s *Service) ContainerCapabilitySet(ref, capability string, enabled bool) R
 		if ct.ID != id {
 			continue
 		}
+		if lab.IsDHCPContainer(*ct) {
+			return Failure("DHCP capabilities are managed by FoxLab")
+		}
 		if lab.ContainerCapabilityEnabled(*ct, capability) == enabled {
 			return Info(containerCapabilityMessage(s.workloadDisplayRef("container", id), capability, enabled))
 		}

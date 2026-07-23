@@ -282,6 +282,12 @@ func (s *Service) UpdateContainer(ref string, update ContainerUpdate) Result {
 		if !containerUpdateRequested(update) {
 			return Info("configured " + s.workloadDisplayRef("container", id))
 		}
+		_, managedDHCP := s.managedDHCPContainer(id)
+		if managedDHCP {
+			if err := managedDHCPUpdateError(update); err != nil {
+				return FailureWithCause("DHCP config failed: "+err.Error(), err)
+			}
+		}
 		if err := validateNICMACArg("container nic", update.Network.MAC); err != nil {
 			return FailureWithCause(err.Error(), err)
 		}
@@ -303,6 +309,11 @@ func (s *Service) UpdateContainer(ref string, update ContainerUpdate) Result {
 		}
 		if err := s.validateContainerNetworkRefs(s.nodeDisplayName("container", id), switchRef, externalRef); err != nil {
 			return FailureWithCause("container config failed: "+err.Error(), err)
+		}
+		if managedDHCP && switchRef != "" {
+			if err := s.validateDHCPNetworkTarget(id, switchRef); err != nil {
+				return FailureWithCause("DHCP config failed: "+err.Error(), err)
+			}
 		}
 		if err := s.requireSavePath(); err != nil {
 			return FailureWithCause("container config failed: "+err.Error(), err)

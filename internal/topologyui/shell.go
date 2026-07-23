@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/workload"
 	"golang.org/x/sys/unix"
 )
@@ -44,6 +45,12 @@ func (a *App) RunShell(typ, id string) error {
 }
 
 func (a *App) queueShell(node Node) {
+	if node.Type == NodeContainer {
+		if ct, ok := a.labContainer(node.ID); ok && lab.IsDHCPContainer(ct) {
+			a.State.Message = "DHCP service does not expose a shell"
+			return
+		}
+	}
 	if a.tabs != nil {
 		a.openShellTab(node)
 		return

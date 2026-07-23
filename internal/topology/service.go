@@ -188,6 +188,10 @@ func (s *Service) NextContainerID() string {
 	return s.nextNodeName("container")
 }
 
+func (s *Service) NextDHCPID() string {
+	return s.nextNodeName("dhcp")
+}
+
 func (s *Service) FirstExternalID() string {
 	if s.CurrentLab() == nil || len(s.CurrentLab().ExternalLinks) == 0 {
 		return ""

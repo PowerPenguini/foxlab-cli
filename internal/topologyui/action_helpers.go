@@ -53,6 +53,10 @@ func (a *App) nextContainerID() string {
 	return a.ensureService().NextContainerID()
 }
 
+func (a *App) nextDHCPID() string {
+	return a.ensureService().NextDHCPID()
+}
+
 func (a *App) firstExternalID() string {
 	return a.ensureService().FirstExternalID()
 }
@@ -106,6 +110,14 @@ func (a *App) createContainerRequest(node Node) topology.ContainerCreateRequest 
 	request := topology.ContainerCreateRequest{Name: a.nextContainerID()}
 	if node.Type == NodeSwitch {
 		request.Network.Switch = node.ID
+	}
+	return request
+}
+
+func (a *App) createDHCPRequest(node Node) topology.DHCPCreateRequest {
+	request := topology.DHCPCreateRequest{Name: a.nextDHCPID()}
+	if node.Type == NodeSwitch {
+		request.Switch = node.ID
 	}
 	return request
 }

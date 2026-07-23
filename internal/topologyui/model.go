@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"foxlab-cli/internal/hostnet"
 	"foxlab-cli/internal/lab"
 	"foxlab-cli/internal/tui/graph"
 )
@@ -108,6 +109,21 @@ func ModelFromLab(l *lab.Lab) Model {
 			"image=" + ct.Image,
 			"capabilities=" + strings.Join(lab.EffectiveContainerCapabilities(ct), ","),
 		}
+		badge := "CT"
+		if lab.IsDHCPContainer(ct) {
+			badge = "SRV"
+			details = append(details, "service="+lab.ContainerServiceDHCP)
+			if switchID, ok := lab.DHCPContainerSwitch(ct); ok {
+				if sw, found := lab.FindSwitch(l, switchID); found {
+					config := hostnet.NATSwitchConfiguration(l, sw)
+					details = append(details,
+						"address="+config.DHCPServerAddress,
+						"range="+config.DHCPRangeStart+"-"+config.DHCPRangeEnd,
+						"router="+config.Gateway,
+					)
+				}
+			}
+		}
 		if ct.Disk != "" {
 			details = append(details, "disk="+ct.Disk)
 		}
@@ -139,7 +155,7 @@ func ModelFromLab(l *lab.Lab) Model {
 		m.Nodes = append(m.Nodes, Node{
 			ID:           ct.ID,
 			Type:         NodeContainer,
-			Badge:        "CT",
+			Badge:        badge,
 			Label:        firstNonEmpty(ct.Name, ct.ID),
 			State:        displayNodeWorkloadState(NodeContainer, lab.DesiredState(ct.DesiredState), "missing", true, false),
 			DesiredState: lab.DesiredState(ct.DesiredState),

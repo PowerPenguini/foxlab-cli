@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd"
@@ -112,9 +111,16 @@ func (r *Runtime) Start(ctx context.Context, l *lab.Lab, ref workload.Ref) (err 
 	if !ok {
 		return fmt.Errorf("container not found: %s", ref.ID)
 	}
-	resolvconfPath, err := syncContainerResolvconf(l, ct)
+	ct, err = prepareContainerForStart(l, ct)
 	if err != nil {
 		return err
+	}
+	resolvconfPath := ""
+	if !lab.IsDHCPContainer(ct) {
+		resolvconfPath, err = syncContainerResolvconf(l, ct)
+		if err != nil {
+			return err
+		}
 	}
 	client, ctx, closeClient, err := r.client(ctx)
 	if err != nil {
@@ -386,7 +392,6 @@ func (r *Runtime) Stop(ctx context.Context, l *lab.Lab, ref workload.Ref) error 
 	if nilInterface(task) {
 		return r.diskManager().cleanupContainerDiskMount(ctx, l, ct, r.containerdAddress(), r.containerdNamespace())
 	}
-	_ = task.Kill(ctx, syscall.SIGTERM)
 	if err := deleteTask(ctx, task); err != nil {
 		return err
 	}

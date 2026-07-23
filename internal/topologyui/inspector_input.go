@@ -176,7 +176,7 @@ func (a *App) applyInspectorEdit() {
 
 func (a *App) deleteInspectorResource(field inspectorField) {
 	node := Node{Type: field.nodeType, ID: field.nodeID}
-	if field.kind == inspectorFieldNIC {
+	if field.kind == inspectorFieldNIC && !field.managed {
 		a.deleteNIC(node, field.nicIndex)
 	}
 }
@@ -323,7 +323,7 @@ func (a *App) handleInspectorMouse(event mouseEvent, panel rect) bool {
 			return false
 		}
 	}
-	if event.x >= panel.X+panel.W-5 && fields[index].kind == inspectorFieldNIC {
+	if event.x >= panel.X+panel.W-5 && fields[index].kind == inspectorFieldNIC && !fields[index].managed {
 		a.State.Focus = FocusInspector
 		a.State.InspectorSelected = index
 		a.deleteInspectorResource(fields[index])

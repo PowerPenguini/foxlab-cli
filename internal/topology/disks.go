@@ -171,6 +171,9 @@ func (s *Service) CreateDisk(request DiskCreateRequest) Result {
 		if err != nil {
 			return FailureWithCause(err.Error(), err)
 		}
+		if err := s.rejectManagedDHCPDiskTarget(targetType, targetID); err != nil {
+			return FailureWithCause("disk create failed: "+err.Error(), err)
+		}
 	}
 	format := strings.ToLower(firstNonEmpty(string(request.Format), string(DiskFormatQCOW2)))
 	if format != "qcow2" && format != "raw" {
@@ -246,6 +249,9 @@ func (s *Service) AttachDisk(request DiskAttachRequest) Result {
 	if err != nil {
 		return FailureWithCause(err.Error(), err)
 	}
+	if err := s.rejectManagedDHCPDiskTarget(targetType, targetID); err != nil {
+		return FailureWithCause("disk attach failed: "+err.Error(), err)
+	}
 	if targetType == "container" {
 		if diskKind(disk) == "layer" {
 			return s.activateDiskLayer(id, disk, targetType, targetID)
@@ -286,6 +292,9 @@ func (s *Service) DiskLayerCreateAndAttach(baseID, layerID, targetType, targetID
 	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 	if err != nil {
 		return FailureWithCause(err.Error(), err)
+	}
+	if err := s.rejectManagedDHCPDiskTarget(targetType, targetID); err != nil {
+		return FailureWithCause("disk layer create failed: "+err.Error(), err)
 	}
 	if err := s.requireSavePath(); err != nil {
 		return FailureWithCause("disk layer create failed: "+err.Error(), err)
@@ -407,6 +416,9 @@ func (s *Service) DetachDisk(request DiskDetachRequest) Result {
 	targetType, targetID, err = s.resolveDiskTarget(targetType, targetID)
 	if err != nil {
 		return FailureWithCause(err.Error(), err)
+	}
+	if err := s.rejectManagedDHCPDiskTarget(targetType, targetID); err != nil {
+		return FailureWithCause("disk detach failed: "+err.Error(), err)
 	}
 	diskIndex := s.attachedDiskIndex(targetType, targetID, request.DiskID)
 	if diskIndex < 0 {

@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"foxlab-cli/internal/lab"
 )
+
+var errTaskExitTimeout = errors.New("timed out waiting for container task to exit")
 
 func nilInterface(value any) bool {
 	if value == nil {
@@ -28,22 +31,31 @@ func nilInterface(value any) bool {
 }
 
 func deleteTask(ctx context.Context, task containerd.Task) error {
+	return deleteTaskWithTimeout(ctx, task, taskExitTimeout)
+}
+
+func deleteTaskWithTimeout(ctx context.Context, task containerd.Task, timeout time.Duration) error {
 	status, statusErr := task.Status(ctx)
 	if statusErr != nil && !errdefs.IsNotFound(statusErr) {
 		return statusErr
 	}
 	if statusErr == nil && status.Status == containerd.Running {
 		statusC, waitErr := task.Wait(ctx)
+		if waitErr != nil && !errdefs.IsNotFound(waitErr) {
+			return fmt.Errorf("wait for running container task: %w", waitErr)
+		}
+		if err := signalTask(ctx, task, syscall.SIGTERM); err != nil {
+			return err
+		}
 		if waitErr == nil {
-			select {
-			case <-statusC:
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(taskExitTimeout):
-				if err := task.Kill(ctx, syscall.SIGKILL); err != nil && !errdefs.IsNotFound(err) && !errdefs.IsFailedPrecondition(err) {
-					return fmt.Errorf("kill container task: %w", err)
+			if err := waitTaskExit(ctx, statusC, timeout); err != nil {
+				if !errors.Is(err, errTaskExitTimeout) {
+					return err
 				}
-				if err := waitTaskExit(ctx, statusC, taskExitTimeout); err != nil {
+				if err := signalTask(ctx, task, syscall.SIGKILL); err != nil {
+					return err
+				}
+				if err := waitTaskExit(ctx, statusC, timeout); err != nil {
 					return err
 				}
 			}
@@ -56,12 +68,15 @@ func deleteTask(ctx context.Context, task containerd.Task) error {
 	if !errdefs.IsFailedPrecondition(err) {
 		return err
 	}
-	if err := task.Kill(ctx, syscall.SIGKILL); err != nil && !errdefs.IsNotFound(err) && !errdefs.IsFailedPrecondition(err) {
-		return fmt.Errorf("kill container task: %w", err)
-	}
 	statusC, waitErr := task.Wait(ctx)
+	if waitErr != nil && !errdefs.IsNotFound(waitErr) {
+		return fmt.Errorf("wait before force-deleting container task: %w", waitErr)
+	}
+	if err := signalTask(ctx, task, syscall.SIGKILL); err != nil {
+		return err
+	}
 	if waitErr == nil {
-		if err := waitTaskExit(ctx, statusC, taskExitTimeout); err != nil {
+		if err := waitTaskExit(ctx, statusC, timeout); err != nil {
 			return err
 		}
 	}
@@ -70,6 +85,29 @@ func deleteTask(ctx context.Context, task containerd.Task) error {
 		return nil
 	}
 	return err
+}
+
+func signalTask(ctx context.Context, task containerd.Task, signal syscall.Signal) error {
+	err := task.Kill(ctx, signal)
+	if err == nil || errdefs.IsNotFound(err) || errdefs.IsFailedPrecondition(err) {
+		return nil
+	}
+	name := taskSignalName(signal)
+	if errdefs.IsPermissionDenied(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		return fmt.Errorf("send %s to container task: runtime cannot signal container init: permission denied; host AppArmor may be blocking runc (check the kernel audit log for apparmor DENIED): %w", name, err)
+	}
+	return fmt.Errorf("send %s to container task: %w", name, err)
+}
+
+func taskSignalName(signal syscall.Signal) string {
+	switch signal {
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	default:
+		return fmt.Sprintf("signal %d", signal)
+	}
 }
 
 func waitTaskExit(ctx context.Context, statusC <-chan containerd.ExitStatus, timeout time.Duration) error {
@@ -84,7 +122,7 @@ func waitTaskExit(ctx context.Context, statusC <-chan containerd.ExitStatus, tim
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return fmt.Errorf("timed out waiting for container task to exit")
+		return errTaskExitTimeout
 	}
 }
 

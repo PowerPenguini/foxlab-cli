@@ -142,6 +142,16 @@ func containerUpdateRequest(args map[string]string) (topology.ContainerUpdate, e
 	return update, nil
 }
 
+func dhcpCreateRequest(name string, args map[string]string) (topology.DHCPCreateRequest, error) {
+	if invalid := unexpectedArgs(args, dhcpArgumentNames); len(invalid) > 0 {
+		return topology.DHCPCreateRequest{}, fmt.Errorf("unsupported DHCP create argument: %s", invalid[0])
+	}
+	return topology.DHCPCreateRequest{
+		Name:   firstNonEmpty(args["name"], name),
+		Switch: args["switch"],
+	}, nil
+}
+
 func parsePositiveWorkloadInt(field, value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
@@ -195,4 +205,8 @@ var vmUpdateArgumentNames = map[string]struct{}{
 
 var containerArgumentNames = map[string]struct{}{
 	"name": {}, "image": {}, "disk": {}, "command": {}, "shell": {}, "env": {}, "switch": {}, "external": {}, "uplink": {}, "mac": {},
+}
+
+var dhcpArgumentNames = map[string]struct{}{
+	"name": {}, "switch": {},
 }

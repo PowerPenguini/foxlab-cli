@@ -10,7 +10,7 @@ func globalContextMenuItems(groups ...string) []string {
 	group := contextGroupArg(groups)
 	switch group {
 	case "create-menu":
-		return []string{"add vm", "add cont", "add sw", "add disk", "add uplink"}
+		return []string{"add vm", "add cont", "add dhcp", "add sw", "add disk", "add uplink"}
 	default:
 		return nil
 	}
@@ -42,6 +42,12 @@ func contextMenuItems(node Node, groups ...string) []string {
 func containerContextMenuItems(node Node, group string) []string {
 	switch group {
 	case "config-menu":
+		if nodeDetailRawValue(node, "service") == lab.ContainerServiceDHCP {
+			return []string{
+				contextPowerAction(node),
+				contextFieldItem("name", node.Label),
+			}
+		}
 		return configMenuItems([]string{
 			contextPowerAction(node),
 			contextFieldItem("name", node.Label),
@@ -49,12 +55,18 @@ func containerContextMenuItems(node Node, group string) []string {
 			contextFieldItem("command", nodeDetailValue(node, "command", "command=?")),
 		}, node.Details)
 	case "nic-menu":
+		if nodeDetailRawValue(node, "service") == lab.ContainerServiceDHCP {
+			return nicDetails(node.Details)
+		}
 		return nicMenuItems(node.Details)
 	case "disk-menu":
 		return nil
 	case "permissions-menu":
 		return containerPermissionMenuItems(node)
 	case "":
+		if nodeDetailRawValue(node, "service") == lab.ContainerServiceDHCP {
+			return []string{"Configuration >", "NIC >", "Move"}
+		}
 		return []string{"Configuration >", "Permissions >", "NIC >", "Disk >", "Move"}
 	default:
 		return nil
@@ -100,7 +112,7 @@ func switchContextMenuItems(node Node, group string) []string {
 	case "mode-menu":
 		return []string{"Bridge", "NAT", "MACNAT"}
 	case "":
-		return []string{"Configuration >", "Uplink >", "Move"}
+		return []string{"Configuration >", "Uplink >", "Add DHCP", "Move"}
 	default:
 		return nil
 	}

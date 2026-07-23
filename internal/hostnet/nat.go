@@ -9,6 +9,28 @@ import (
 	"foxlab-cli/internal/lab"
 )
 
+type NATSwitchConfig struct {
+	Gateway           string
+	CIDR              string
+	DHCPServerAddress string
+	DHCPRangeStart    string
+	DHCPRangeEnd      string
+	Netmask           string
+}
+
+func NATSwitchConfiguration(l *lab.Lab, sw lab.Switch) NATSwitchConfig {
+	octet := 16 + int(hash32(l.ID+"/"+sw.ID)%200)
+	prefix := fmt.Sprintf("172.31.%d", octet)
+	return NATSwitchConfig{
+		Gateway:           prefix + ".1",
+		CIDR:              prefix + ".0/24",
+		DHCPServerAddress: prefix + ".2/24",
+		DHCPRangeStart:    prefix + ".100",
+		DHCPRangeEnd:      prefix + ".254",
+		Netmask:           "255.255.255.0",
+	}
+}
+
 func externalNATGatewayCIDR(l *lab.Lab, link lab.ExternalLink) (string, string) {
 	octet := 1 + int(hash32(l.ID+"|"+link.ID)%250)
 	gateway := fmt.Sprintf("10.250.%d.1", octet)
@@ -27,12 +49,14 @@ func externalNATContainerAddress(l *lab.Lab, link lab.ExternalLink, ct lab.Conta
 }
 
 func switchNATGatewayCIDR(l *lab.Lab, sw lab.Switch) (string, string) {
-	octet := 16 + int(hash32(l.ID+"/"+sw.ID)%200)
-	gateway := fmt.Sprintf("172.31.%d.1", octet)
-	return gateway, fmt.Sprintf("172.31.%d.0/24", octet)
+	config := NATSwitchConfiguration(l, sw)
+	return config.Gateway, config.CIDR
 }
 
 func switchNATContainerAddress(l *lab.Lab, sw lab.Switch, ct lab.Container, index int) (string, error) {
+	if lab.IsDHCPContainer(ct) {
+		return NATSwitchConfiguration(l, sw).DHCPServerAddress, nil
+	}
 	octet := 16 + int(hash32(l.ID+"/"+sw.ID)%200)
 	host, err := natContainerHost(l, ct, index, 80, func(nic lab.ContainerNetwork) bool {
 		return nic.Switch == sw.ID
@@ -49,6 +73,9 @@ func natContainerHost(l *lab.Lab, target lab.Container, targetIndex, slots int, 
 	seen := map[string]struct{}{targetKey: {}}
 	if l != nil {
 		for _, ct := range l.Containers {
+			if lab.IsDHCPContainer(ct) {
+				continue
+			}
 			for index, nic := range ct.Networks {
 				if !matches(nic) {
 					continue

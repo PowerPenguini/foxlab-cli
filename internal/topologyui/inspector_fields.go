@@ -27,6 +27,7 @@ const (
 
 const (
 	inspectorFieldListYWithActions = 11
+	inspectorFieldListYPowerOnly   = 8
 	inspectorFieldListYCompact     = 4
 	inspectorFooterRows            = 1
 )
@@ -44,6 +45,7 @@ type inspectorField struct {
 	diskAction string
 	diskKind   string
 	choices    []string
+	managed    bool
 }
 
 type inspectorPanelRow struct {
@@ -66,11 +68,12 @@ func inspectorFieldsForState(node Node, state ViewState) []inspectorField {
 		power = "stop"
 	}
 	fields := []inspectorField{}
+	managedDHCP := node.Type == NodeContainer && nodeDetailRawValue(node, "service") == lab.ContainerServiceDHCP
 	if node.Type == NodeVM || node.Type == NodeContainer {
-		fields = append(fields,
-			field("desiredState", "Power", power, inspectorFieldPower),
-			field("shellAction", "Shell", node.State, inspectorFieldShellAction),
-		)
+		fields = append(fields, field("desiredState", "Power", power, inspectorFieldPower))
+		if !managedDHCP {
+			fields = append(fields, field("shellAction", "Shell", node.State, inspectorFieldShellAction))
+		}
 		if node.Type == NodeVM {
 			fields = append(fields, field("vncAction", "VNC", node.State, inspectorFieldVNCAction))
 		}
@@ -85,15 +88,17 @@ func inspectorFieldsForState(node Node, state ViewState) []inspectorField {
 			field("iso", "ISO", nodeDetailRawValue(node, "iso"), inspectorFieldText),
 		)
 	case NodeContainer:
-		fields = append(fields,
-			field("name", "Name", node.Label, inspectorFieldText),
-			field("image", "Image", nodeDetailRawValue(node, "image"), inspectorFieldText),
-			field("command", "Command", nodeDetailRawValue(node, "command"), inspectorFieldText),
-			field("shell", "Shell", nodeDetailRawValue(node, "shell"), inspectorFieldText),
-			field("env", "Env", containerEnvValue(node), inspectorFieldText),
-		)
-		enabled := containerCapabilityEnabledMap(node)
-		fields = append(fields, field("capabilities", "Capabilities", strconv.Itoa(len(enabled))+" selected", inspectorFieldCapabilityPicker))
+		fields = append(fields, field("name", "Name", node.Label, inspectorFieldText))
+		if !managedDHCP {
+			fields = append(fields,
+				field("image", "Image", nodeDetailRawValue(node, "image"), inspectorFieldText),
+				field("command", "Command", nodeDetailRawValue(node, "command"), inspectorFieldText),
+				field("shell", "Shell", nodeDetailRawValue(node, "shell"), inspectorFieldText),
+				field("env", "Env", containerEnvValue(node), inspectorFieldText),
+			)
+			enabled := containerCapabilityEnabledMap(node)
+			fields = append(fields, field("capabilities", "Capabilities", strconv.Itoa(len(enabled))+" selected", inspectorFieldCapabilityPicker))
+		}
 	case NodeSwitch:
 		fields = append(fields,
 			field("name", "Name", node.Label, inspectorFieldText),
@@ -107,7 +112,9 @@ func inspectorFieldsForState(node Node, state ViewState) []inspectorField {
 		)
 	}
 	if node.Type == NodeVM || node.Type == NodeContainer {
-		fields = append(fields, field("addNIC", "Add NIC", "+", inspectorFieldNICAdd))
+		if !managedDHCP {
+			fields = append(fields, field("addNIC", "Add NIC", "+", inspectorFieldNICAdd))
+		}
 		for _, detail := range nicDetails(node.Details) {
 			index, ok := nicDetailIndex(detail)
 			if !ok {
@@ -120,11 +127,13 @@ func inspectorFieldsForState(node Node, state ViewState) []inspectorField {
 			}
 			fields = append(fields, inspectorField{
 				id: "nic" + index, label: "NIC " + index, value: value, kind: inspectorFieldNIC,
-				nodeID: node.ID, nodeType: node.Type, nicIndex: index,
+				nodeID: node.ID, nodeType: node.Type, nicIndex: index, managed: managedDHCP,
 			})
 		}
-		fields = append(fields, field("addDisk", "Add Disk", "+", inspectorFieldDiskAdd))
-		fields = append(fields, inspectorDiskFields(node, state)...)
+		if !managedDHCP {
+			fields = append(fields, field("addDisk", "Add Disk", "+", inspectorFieldDiskAdd))
+			fields = append(fields, inspectorDiskFields(node, state)...)
+		}
 	}
 	if node.Type == NodeVM || node.Type == NodeContainer || node.Type == NodeSwitch || node.Type == NodeExternal {
 		fields = append(fields,
@@ -197,11 +206,17 @@ func containerEnvValue(node Node) string {
 }
 
 func inspectorFieldListY(fields []inspectorField) int {
+	hasPower := false
 	for _, field := range fields {
 		switch field.kind {
-		case inspectorFieldPower, inspectorFieldShellAction, inspectorFieldVNCAction:
+		case inspectorFieldShellAction, inspectorFieldVNCAction:
 			return inspectorFieldListYWithActions
+		case inspectorFieldPower:
+			hasPower = true
 		}
+	}
+	if hasPower {
+		return inspectorFieldListYPowerOnly
 	}
 	return inspectorFieldListYCompact
 }
